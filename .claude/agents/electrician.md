@@ -106,9 +106,24 @@ three, never executes.
 deliberately deferred rather than done blind: an edit to a file you cannot
 compile, run, or bake off against the C spelling is an untested claim of a fix,
 and it turns a known gap into an unknown one. When a toolchain exists, port the
-block, build both, run `tests/bakeoff.py`, and quote the output. Until then
-treat the Zig spelling's 2026-09-06 boot as evidence about the *old* wiring
-contract only.
+block, build both, run `tests/bakeoff.py`, and quote the output.
+
+**The two twins are not in the same position — do not treat them alike.**
+A container with `rustc` has since run `tests/bakeoff.py`: C and Rust agreed,
+kits 1,2,1,0, filled/open/inert 1 1 1. (Reported from another session, not
+observed in the container that wrote this note.) So:
+
+- `electrician.rs` is **verified against C on the old contract** and behind on
+  the new one by exactly one block — the `NW_WIRE_<fd>` export missing at
+  `electrician.rs:209`. Bounded, scoped, and known.
+- `electrician.zig` is **unverified in either direction.** It booted on
+  2026-09-06, but no bakeoff has ever compared it to C. Its missing block at
+  `electrician.zig:308` sits on top of an unestablished baseline, so porting it
+  proves nothing until a bakeoff covers it.
+
+The practical consequence: the bakeoff gap is environmental rather than
+permanent, and `tests/bakeoff.py` is the instrument that closes it. Run it
+wherever a toolchain exists before trusting either spelling.
 
 ## Definition of done
 

@@ -89,3 +89,37 @@ Port divergence — wire name binding (2026-09-09):
   is not a fix — it is an untested claim of one, and it would convert a known
   gap into an unknown one. Close this when rustc and zig are available: port
   the NW_WIRE_<fd> block to both spellings, build them, and run tests/bakeoff.py.
+
+Bakeoff result from another container (2026-09-09, reported — NOT observed here):
+  That container has rustc, and tests/bakeoff.py actually ran. The C and Rust
+  electricians agreed: kits 1,2,1,0; filled/open/inert 1 1 1.
+
+  This is the first real verification of any twin. Recorded as reported by the
+  operator from a different session; it was not run in this container and the
+  numbers above are relayed, not measured here. Provenance matters because the
+  standing rule is that nothing is working until it has been built and run —
+  this satisfies that rule somewhere, not in this environment.
+
+  What it changes:
+  - The bakeoff gap above is ENVIRONMENTAL, not permanent. tests/bakeoff.py is
+    runnable; this container simply lacks the toolchain.
+  - electrician.rs is verified against electrician.c on the OLD wiring contract
+    (the one predating NW_WIRE_<fd>).
+  - electrician.zig remains unverified in either direction. The 2026-09-06 boot
+    exercised it, but no bakeoff has compared it to C.
+
+  What it does NOT change: the twins are still uncompiled HERE, so nothing in
+  this container's make test covers them.
+
+Divergence, sharpened (supersedes the open-ended reading of the note above):
+  The Rust electrician agrees with C on everything the bakeoff compares, and
+  lacks exactly one block: the NW_WIRE_<fd>=<peer name> export. So it is
+  provably correct on the old contract and provably behind on the new one, by a
+  known and bounded amount — one block at electrician.rs:209 — rather than by an
+  unknown amount.
+
+  Port still deferred: it cannot be compiled or baked off in THIS container, and
+  a blind edit here would be an untested claim. The difference is that closing
+  it is now a scoped, verified-in-principle task rather than an open question.
+  Zig is not in the same position: electrician.zig:308 needs the same block, but
+  nothing has ever established that the Zig spelling agrees with C at all.
