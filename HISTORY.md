@@ -351,3 +351,109 @@ never from further design discussion.
 And the recurring fix, arrived at independently four times: **design the
 problem out rather than checking for it.** No ordering list to get wrong. No
 counter to overflow. No second limit to drift. No channel to impersonate.
+
+---
+
+## 15. Session note — 2026-09-09
+
+Two defects fixed. Both landed on clauses from section 14 almost verbatim,
+which is either evidence the pattern is real or evidence of looking for it;
+recorded here so the next reader can judge.
+
+### The two fixes
+
+**No second limit to drift — the seccomp allow-list.** `nwsup.c` carried its
+own inline 33-entry table and applied the filter through `prctl` directly. It
+never linked `lids.o`, and the Makefile built `lids.o` as a target nothing
+referenced. The two tables were found to agree exactly, as sets *and* in order
+— order matters because the jump offset is computed `NALLOW - i`, so a
+reordering changes the generated BPF even with identical membership. They were
+merged while they still agreed rather than after they diverged. The fix deleted
+a copy rather than adding a test that the copies match: `__NR_read` now appears
+in exactly one file. `lids.h` is included by both translation units, so a
+signature change cannot pass the compiler unnoticed.
+
+**No ordering list to get wrong — wire binding.** The electrician assigned each
+unit's wires in blob edge-declaration order and told the unit only a count, so
+`fd 3+k` meant "the k-th edge in file order that mentions me", pinned to
+nothing. Two plans with identical units, peers and edge multiset, differing only
+in the order two `wire` lines appeared, wired the same unit to different peers
+on the same descriptor. Silent: both blobs passed `nw-check` rc=0, both booted
+rc=0.
+
+Reproduced before fixing, at 2 wires and at 62:
+
+    hubmap wires=2 digest=0x92adcd67 map=fd3:IAM=north,fd4:IAM=south
+    hubmap wires=2 digest=0x9e722feb map=fd3:IAM=south,fd4:IAM=north
+
+At 62 wires the whole permutation reversed, asserted by an FNV-1a digest over
+the ordered tokens computed independently on both sides. Deterministic across
+ten alternating boots. `tests/wire_order.py` holds the reproduction.
+
+The fix exports `NW_WIRE_<fd>=<peer name>` per wire; a unit names the peer it
+wants and resolves a descriptor.
+
+**The rejected fix is the more instructive half.** Sorting edges canonically
+makes the mapping stable, which passes a test comparing two orderings — while
+the unit still cannot name its peers. *Stability is not knowability.* Ordering
+by peer name fails for a second reason: inserting a new peer silently renumbers
+every existing descriptor, with no plan-visible change to the edges that
+already existed. Both are ordering lists to get wrong. What shipped removes
+ordering from the semantics instead, so there is no rule left to get wrong.
+Consequently the test's criterion is the `hubbind` line, not `hubmap`: the hub
+resolves each peer through `NW_WIRE_*` *before* reading, then asserts that
+descriptor delivered that peer's identity. The map still flips with edge order,
+and that is correct — the fix does not reorder anything, it makes position
+irrelevant.
+
+### Method
+
+Section 14 held four more times, and in each case reading would not have done.
+
+- The wire defect was reproduced before anyone touched it, and at 62 wires as
+  well as 2 — five earlier bugs were correct at 4 units and wrong at 4,000.
+- The env ceiling was **measured, not estimated**: 2,702 bytes added at the
+  design ceiling (63 wires, longest names `name_ok` permits), 10,294 total,
+  real `execv`. Real ceiling 38,788 variables, bounded by `RLIMIT_STACK/4` —
+  established by halving and doubling the stack limit (19,452 / 38,788 /
+  77,694), not by reading `getconf ARG_MAX`, which coincides with it at the
+  default and would have looked like the answer. ~615x headroom; failure mode
+  is a clean `E2BIG`.
+- The two seccomp tables were diffed mechanically as sets and as sequences.
+  Eyeballing would have missed a reordering.
+- A bug introduced in `houses/hub.c` during this work was caught only by
+  running: a display-elision `break` exited the loop that also counted matches,
+  so a passing run reported `ok=20` of 62. The small case passed and the
+  resolution looked right.
+
+`spec` was asked to confirm rather than assume, and reported that `Wire` in
+`plan.als` is an unordered `sig` with no ordering relation — so the two blobs
+the reproduction compares are *the same instance* in the model. The
+implementation had invented an order the format never granted it. Not a spec
+violation; a place where code read meaning into something the format left free.
+Note also that both specs passed identically while the bug was live, which is
+the sharpest available demonstration of their scope.
+
+### Residue — three smaller instances of the same classes
+
+Honest accounting: each fix left something the pattern would want closed.
+
+- **`NW_WIRE_*` is a contract nothing validates.** The environment is inherited
+  wholesale, so a stray `NW_WIRE_9` can survive into a unit with no wire 9.
+  Cross-routing is structurally impossible (the electrician overwrites the whole
+  range with `overwrite=1`, and outside it the descriptor is closed), and the
+  failure is loud — except at fd 0, where `/dev/null` yields EOF rather than
+  `EBADF`, a false "peer gone" rather than a false peer. The version with
+  nothing to get wrong is a single `NW_WIRE_MAP="3=north,4=south"` string.
+- **The seccomp entry point has three declarations and the compiler checks
+  two.** `lids.c`, `lids.h`, and the `extern "C"` block at `nwsup.rs:19`. They
+  were verified to match by reading. That gap was closed with a comment, which
+  is checking for the problem rather than designing it out.
+- **The twins are behind by one block.** `electrician.rs:209` and
+  `electrician.zig:308` set only `NW_WIRES`/`NW_KIT`, so a name-binding house
+  sees every peer `UNRESOLVED`. Uncaught here because `tests/bakeoff.py` never
+  runs in this container.
+
+The shape worth keeping: two faithful fixes, each leaving a smaller instance of
+the class it removed. Consistent with section 13 — the architecture holds, and
+the next change is still likely to find something.
