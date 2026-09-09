@@ -16,6 +16,23 @@ One supervisor per unit. TCB.
 spellings call `nw_apply_house_seccomp()` — one table, not two. Keep it that
 way; a second copy is a drift bug waiting to happen.
 
+**This was aspirational when written, and is now true.** Until 2026-09-09 the
+C twin did not call into `lids.c` at all: `nwsup.c` defined its own
+`lid_seccomp()` with a verbatim second copy of the 33-entry table and applied
+the filter through `prctl` directly, while the Makefile built `lids.o` as a
+target nothing linked. The two copies were found to agree exactly, as sets and
+in order — order matters, because the jump offset is computed `NALLOW - i`, so
+a reordering changes the generated BPF even with identical membership. They
+were merged while they still agreed rather than after they diverged. `lids.h`
+now declares the entry point and is included by both translation units, so a
+signature change cannot pass the compiler unnoticed, and `nw-sup` links
+`lids.o`. If you find yourself adding a filter to a supervisor spelling
+instead of to `lids.c`, you are recreating the bug that was just removed.
+
+`lids.c` returns -1 rather than exiting; the caller decides what a failure
+means. `nwsup.c` dies on it. Preserve that split — the shim reports, the
+supervisor sets policy.
+
 Adding a syscall to the allow-list requires naming the unit that needs it and
 why. The suite has a test asserting seccomp kills a house that calls
 `socket()`; if your change makes that pass, you have widened the filter.
