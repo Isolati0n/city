@@ -9,7 +9,7 @@ CFLAGS = -Wall -Wextra -O2 -g -std=gnu11
 ZIG = /tmp/zig/zig
 STAGE = /tmp/nw-init-run
 
-all: nw-root nw-electrician nw-check nw-sup nw-rescue unit-probe unit-talk unit-listen unit-boom unit-badcall
+all: nw-root nw-electrician nw-check nw-sup nw-rescue unit-probe unit-talk unit-listen unit-boom unit-badcall unit-hub unit-ident
 
 nw-root: pid1.c nwcheck.c blob.h
 	$(CC) $(CFLAGS) -o $@ pid1.c nwcheck.c
@@ -44,10 +44,17 @@ unit-boom: houses/boom.c
 unit-badcall: houses/badcall.c
 	$(CC) $(CFLAGS) -o $@ houses/badcall.c
 
+unit-hub: houses/hub.c
+	$(CC) $(CFLAGS) -o $@ houses/hub.c
+
+unit-ident: houses/ident.c
+	$(CC) $(CFLAGS) -o $@ houses/ident.c
+
 stage: all
 	mkdir -p $(STAGE)/slots/A $(STAGE)/slots/B $(STAGE)/slots/rescue
 	cp -f nw-root nw-electrician nw-check nw-sup nw-rescue \
-	      unit-probe unit-talk unit-listen unit-boom unit-badcall $(STAGE)/
+	      unit-probe unit-talk unit-listen unit-boom unit-badcall \
+	      unit-hub unit-ident $(STAGE)/
 	chmod +x $(STAGE)/*
 	python3 bakery/nw-cc.py --probe $(STAGE)/unit-probe --out $(STAGE)/slots/A/plan.blob --lids seccomp
 	cp -f $(STAGE)/slots/A/plan.blob $(STAGE)/slots/B/plan.blob
@@ -63,5 +70,6 @@ test: stage
 
 clean:
 	rm -f lids.o nw-root nw-electrician nw-check nw-sup nw-rescue \
-	      unit-probe unit-talk unit-listen unit-boom unit-badcall
+	      unit-probe unit-talk unit-listen unit-boom unit-badcall \
+	      unit-hub unit-ident
 	rm -rf $(STAGE)
