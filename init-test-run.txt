@@ -18,3 +18,42 @@ ALL TESTS PASSED:
   talk↔listen PING on a real wire,
   critical house boom HALT 70,
   seccomp kills socket() house.
+
+---
+
+Container re-run — 2026-09-09
+
+Stack actually built and exercised here (differs from the 2026-09-06 run above):
+  PID 1          C          pid1.c
+  electrician    C          electrician.c        <- not the Zig spelling
+  nw-sup         C          nwsup.c              <- not the Rust spelling
+  nw-check       C          nwcheck_main.c
+  baker          bakery/nw-cc.py
+
+make test: ALL TESTS PASSED (same 12 tests as above), exit 0.
+Baker emitted units=4 edges=2 crc=0x95d4bd84 bytes=692.
+
+UNBUILT AND UNVERIFIED IN THIS CONTAINER:
+  electrician.rs    no rustc / cargo installed
+  nwsup.rs          no rustc / cargo installed
+  electrician.zig   Makefile ZIG=/tmp/zig/zig — path does not exist here
+
+  These three are committed but were never compiled, never run, and never
+  compared against the C spellings. tests/bakeoff.py is present but was NOT
+  executed: the Makefile test target invokes tests/run.py only. So the
+  cross-spelling agreement the bakeoff exists to prove is unestablished here.
+  Note this inverts the 2026-09-06 run, where Zig and Rust were the spellings
+  that booted and C was the reference — the twins that shipped are precisely
+  the ones unverified in this container.
+
+  Their contents were checked byte-identical to the heredocs in
+  restore-sources.sh before that script was removed. That is a text match
+  only. It is not evidence that they compile or behave correctly.
+
+seccomp note (checked against source, not assumed):
+  nwsup.c does not link or reference lids.o. It defines its own lid_seccomp()
+  at nwsup.c:112 with an inline allow[] table, called from nwsup.c:187 when
+  NW_LID_SECCOMP is set, applying PR_SET_NO_NEW_PRIVS then PR_SET_SECCOMP
+  directly. lids.c is the shim for the Rust spelling, exposing the same filter
+  as nw_apply_house_seccomp(); the Makefile builds lids.o as a target nothing
+  currently links. The seccomp-kill test therefore passes on a real filter.
