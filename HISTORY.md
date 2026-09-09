@@ -314,6 +314,61 @@ declared alongside them, and a unit receives only what it was granted.
 - Socket activation, privilege dropping, log rotation, service control tooling
 - Any run on real hardware
 
+**Numbers that are correct for a reason the code does not state.** Both of the
+following are unreachable today and neither is a live bug. They are recorded
+together because they are the same defect twice: a constant that holds by slack
+or by an unstated assumption rather than by arithmetic, so the thing that keeps
+it true is not written down and nothing warns when it stops being true. Fix
+them in one pass.
+
+- **The fd budget omits the `parked[]` term.** `8 + 2u + 2e` appears in four
+  places — the `_Static_assert` in `blob.h`, the constants in
+  `bakery/nw-cc.py`, `fdNeed` in `plan.als`, `FdNeed` in `Plan.tla` — and none
+  of them models the `nw` duplicated descriptors `pack_kit` creates at
+  `electrician.c:113`. The real peak is in the house child before
+  `close_others`: 3 stdio + 1 report + `u` log write-ends + `2e` socketpair ends
+  + 2 (`nullfd`, `logn`) + `nw` parked. It fits only because `nw <= u-1`, which
+  is a *consequence* of `nwcheck.c` rejecting self-edges and duplicate edges —
+  an invariant enforced somewhere else entirely, for unrelated reasons, and
+  written down in neither the formula nor a comment. So invariant 3 above
+  ("limits are derived") is only partly true here: this limit works by the slack
+  in `NW_FD_RESERVED`, not by its arithmetic, and `NW_FD_RESERVED` is silently
+  doing duty as both reserved descriptors and an unnamed margin that encodes the
+  no-parallel-edges assumption.
+
+  Consequence if parallel edges were ever admitted: `nw` rises toward `e`, the
+  peak gains a third `e` term, and it exceeds the declared budget once `e`
+  passes roughly `u`. The `_Static_assert` keeps passing throughout — it is
+  checking a formula that does not describe the code — so the safety property
+  stops holding with no diagnostic anywhere. Presentation is an `EMFILE` from
+  `F_DUPFD_CLOEXEC` and `die("pack kit")`, which is at least loud, but the
+  budget will have been wrong long before it fires.
+
+  Fix: put the term in the formula explicitly, in all four places, so
+  `NW_FD_RESERVED` means only actual reserved descriptors again and the
+  no-parallel-edges assumption is either stated or stops being load-bearing.
+
+  Caveat for whoever does it: two independent hand-counts of the peak
+  disagreed by one. Re-derive it from `pack_kit` and its caller rather than
+  trusting either the number above or the one in the review that raised this.
+
+- **`close_others` bounds at 512 while `NW_MAX_FDS` is 1024.**
+  `electrician.c:48`, `:58` and `:65` all restate 512 — the `/proc`-missing
+  fallback loop, `int doomed[512]`, and the `nd < 512` guard. The guard is the
+  dangerous one: it drops descriptors from the doom list with no error, so they
+  survive `exec`. The static assert admits `u=64, e=448`, at which point fd
+  numbers in the house child run past 512, the sweep leaves peers' socketpair
+  ends open, and a unit inherits descriptors it was never granted — a direct
+  violation of invariant 5, presenting as a unit able to read or write an edge
+  it does not appear in, with no error.
+
+  Fix: derive both bounds from `NW_MAX_FDS` rather than restating them, and
+  make the truncation `die()`. Better, delete the fallback entirely — it exists
+  only to cover a missing `/proc`, and it is the sole reason a second bound
+  exists at all. Without `/proc/self/fd` the electrician cannot honour
+  non-provision, so failing loudly is the correct behaviour and the constant
+  disappears with it.
+
 ---
 
 ## 13. Honest assessment
