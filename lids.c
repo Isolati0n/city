@@ -6,6 +6,8 @@
 #include <sys/syscall.h>
 #include <unistd.h>
 
+#include "lids.h"
+
 int nw_apply_house_seccomp(void)
 {
     static const int allow[] = {

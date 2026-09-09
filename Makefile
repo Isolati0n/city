@@ -20,11 +20,11 @@ nw-electrician: electrician.c nwcheck.c blob.h
 nw-check: nwcheck_main.c nwcheck.c blob.h
 	$(CC) $(CFLAGS) -o $@ nwcheck_main.c nwcheck.c
 
-lids.o: lids.c
+lids.o: lids.c lids.h
 	$(CC) $(CFLAGS) -c -o $@ lids.c
 
-nw-sup: nwsup.c blob.h
-	$(CC) $(CFLAGS) -o $@ nwsup.c
+nw-sup: nwsup.c lids.o blob.h lids.h
+	$(CC) $(CFLAGS) -o $@ nwsup.c lids.o
 
 nw-rescue: rescue.c
 	$(CC) $(CFLAGS) -o $@ rescue.c
@@ -62,6 +62,6 @@ test: stage
 	python3 tests/run.py
 
 clean:
-	rm -f nw-root nw-electrician nw-check nw-sup nw-rescue \
+	rm -f lids.o nw-root nw-electrician nw-check nw-sup nw-rescue \
 	      unit-probe unit-talk unit-listen unit-boom unit-badcall
 	rm -rf $(STAGE)
