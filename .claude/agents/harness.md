@@ -14,10 +14,32 @@ seccomp kills it).
 
 ## Current standing results — treat a change in these as a finding
 
-hash-pin; baker↔checker difftest; baker rejects self-wire; 200-byte fuzz with 0
-accepted; happy slot A with kits 1/2/1/0; slot B; rescue outside plan exits 3;
-electrician death HALT 70; bad CRC HALT 70; talk↔listen PING on a real wire;
-critical house boom HALT 70; seccomp kills a house that calls `socket()`.
+Thirteen. Twelve pass and are run by `make test`; the thirteenth is expected to
+fail and is run on its own.
+
+Passing, via `tests/run.py` (12): hash-pin; baker↔checker difftest; baker
+rejects self-wire; 200-byte fuzz with 0 accepted; happy slot A with kits
+1/2/1/0; slot B; rescue outside plan exits 3; electrician death HALT 70; bad
+CRC HALT 70; talk↔listen PING on a real wire; critical house boom HALT 70;
+seccomp kills a house that calls `socket()`.
+
+**Expected to fail (1): `tests/wire_order.py`, exit 1.** Not wired into
+`tests/run.py`, deliberately — `make test` must stay at 12/12. Run it directly.
+It demonstrates that `electrician.c:189-192` assigns a unit's wires in blob
+edge-declaration order while the unit is told only a count, so `fd 3+k` names
+the k-th edge in file order rather than a fixed peer. Reproduced at 2 wires and
+at 62, deterministic across ten alternating boots.
+
+**Its going green is itself a finding — report it, do not quietly re-baseline.**
+Exit 0 means the fd→peer mapping stopped depending on edge order, which is
+either the defect being fixed or the test no longer exercising it. Say which,
+and quote the mapping from both orderings. In particular, a fix that
+canonically sorts edges inside the electrician turns this test green while
+leaving the real defect in place: the unit still cannot name its peers, since
+no variable in the env set at `electrician.c:214-221` carries a peer name. Green
+plus a `map=` line the house could not have predicted in advance is not a fix.
+Retire this entry only when a unit can state which peer it expects on a
+descriptor before reading it.
 
 ## How to write a test here
 
