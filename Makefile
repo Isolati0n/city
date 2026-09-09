@@ -1,0 +1,67 @@
+# Linux city TCB:
+#   PID 1, electrician, nw-check, rescue = C
+#   nw-sup = Rust + lids.c (optional twin: nwsup.c)
+#   baker = Python, offline
+# artifacts/ is noexec. `make test` stages to /tmp/nw-init-run.
+
+CC = gcc
+CFLAGS = -Wall -Wextra -O2 -g -std=gnu11
+ZIG = /tmp/zig/zig
+STAGE = /tmp/nw-init-run
+
+all: nw-root nw-electrician nw-check nw-sup nw-rescue unit-probe unit-talk unit-listen unit-boom unit-badcall
+
+nw-root: pid1.c nwcheck.c blob.h
+	$(CC) $(CFLAGS) -o $@ pid1.c nwcheck.c
+
+nw-electrician: electrician.c nwcheck.c blob.h
+	$(CC) $(CFLAGS) -o $@ electrician.c nwcheck.c
+
+nw-check: nwcheck_main.c nwcheck.c blob.h
+	$(CC) $(CFLAGS) -o $@ nwcheck_main.c nwcheck.c
+
+lids.o: lids.c
+	$(CC) $(CFLAGS) -c -o $@ lids.c
+
+nw-sup: nwsup.c blob.h
+	$(CC) $(CFLAGS) -o $@ nwsup.c
+
+nw-rescue: rescue.c
+	$(CC) $(CFLAGS) -o $@ rescue.c
+
+unit-probe: unit_probe.c
+	$(CC) $(CFLAGS) -o $@ unit_probe.c
+
+unit-talk: houses/talk.c
+	$(CC) $(CFLAGS) -o $@ houses/talk.c
+
+unit-listen: houses/listen.c
+	$(CC) $(CFLAGS) -o $@ houses/listen.c
+
+unit-boom: houses/boom.c
+	$(CC) $(CFLAGS) -o $@ houses/boom.c
+
+unit-badcall: houses/badcall.c
+	$(CC) $(CFLAGS) -o $@ houses/badcall.c
+
+stage: all
+	mkdir -p $(STAGE)/slots/A $(STAGE)/slots/B $(STAGE)/slots/rescue
+	cp -f nw-root nw-electrician nw-check nw-sup nw-rescue \
+	      unit-probe unit-talk unit-listen unit-boom unit-badcall $(STAGE)/
+	chmod +x $(STAGE)/*
+	python3 bakery/nw-cc.py --probe $(STAGE)/unit-probe --out $(STAGE)/slots/A/plan.blob --lids seccomp
+	cp -f $(STAGE)/slots/A/plan.blob $(STAGE)/slots/B/plan.blob
+	cp -f $(STAGE)/slots/A/plan.blob.sha256 $(STAGE)/slots/B/plan.blob.sha256 2>/dev/null || true
+	cp -f $(STAGE)/nw-rescue $(STAGE)/slots/rescue/nw-rescue
+	echo A > $(STAGE)/slots/current
+	cp -f $(STAGE)/slots/A/plan.blob $(STAGE)/plan.blob
+	cp -f $(STAGE)/slots/A/plan.blob.sha256 $(STAGE)/plan.blob.sha256
+
+test: stage
+	$(STAGE)/nw-check $(STAGE)/plan.blob
+	python3 tests/run.py
+
+clean:
+	rm -f nw-root nw-electrician nw-check nw-sup nw-rescue \
+	      unit-probe unit-talk unit-listen unit-boom unit-badcall
+	rm -rf $(STAGE)
