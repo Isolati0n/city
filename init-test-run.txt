@@ -57,3 +57,14 @@ seccomp note (checked against source, not assumed):
   directly. lids.c is the shim for the Rust spelling, exposing the same filter
   as nw_apply_house_seccomp(); the Makefile builds lids.o as a target nothing
   currently links. The seccomp-kill test therefore passes on a real filter.
+
+FFI contract unverified here:
+  lids.h declares    int nw_apply_house_seccomp(void);
+  nwsup.rs:19        fn nw_apply_house_seccomp() -> c_int;
+  These were read side by side on 2026-09-09 and agree exactly: c_int is C
+  int, and an empty Rust argument list matches (void). That is a reading, not
+  a build. No rustc here, so nwsup.rs was never compiled or linked against
+  lids.o, and nothing in this container can check the two declarations against
+  each other — the C compiler never sees the Rust one. A mismatch introduced
+  later would not appear in make test; it would surface only at Rust link
+  time, or as undefined behaviour at run time if the linker accepted it.
