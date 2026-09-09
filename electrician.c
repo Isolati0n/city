@@ -185,10 +185,11 @@ int main(int argc, char **argv)
     pid_t pids[NW_MAX_UNITS];
     for (uint32_t i = 0; i < h->n_units; i++) {
         int wires[NW_MAX_EDGES];
+        uint32_t peer[NW_MAX_EDGES];
         int nw = 0;
         for (uint32_t e = 0; e < h->n_edges; e++) {
-            if (ed[e].a == i) wires[nw++] = pair[e][0];
-            else if (ed[e].b == i) wires[nw++] = pair[e][1];
+            if (ed[e].a == i)      { peer[nw] = ed[e].b; wires[nw++] = pair[e][0]; }
+            else if (ed[e].b == i) { peer[nw] = ed[e].a; wires[nw++] = pair[e][1]; }
         }
         int pp[2];
         if (pipe2(pp, O_CLOEXEC) < 0) die("pid pipe");
@@ -219,6 +220,14 @@ int main(int argc, char **argv)
             setenv("NW_BUDGET", bbuf, 1);
             setenv("NW_WINDOW", wbuf, 1);
             setenv("NW_CRITICAL", cbuf, 1);
+            /* Wire position carries no meaning: a unit looks up the peer it
+             * wants and gets a descriptor. pack_kit placed wire k at 3+k by
+             * dup2 construction, so the suffix is not a guess. */
+            for (int k = 0; k < nw; k++) {
+                char kbuf[24];
+                snprintf(kbuf, sizeof kbuf, "NW_WIRE_%d", 3 + k);
+                setenv(kbuf, u[peer[k]].name, 1);
+            }
             execl(sup, "nw-sup", u[i].exec_path, u[i].name, (char *)0);
             die("exec nw-sup");
         }

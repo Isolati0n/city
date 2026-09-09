@@ -36,18 +36,30 @@ UNIT_LEN = 32 + 128 + struct.calcsize("<BBHBB")
 EDGE = struct.Struct("<HH")
 
 
-def run(cmd):
-    p = subprocess.run(cmd, capture_output=True)
+def run(cmd, env=None):
+    p = subprocess.run(cmd, capture_output=True, env=env)
     p.out = (p.stdout or b"").decode("utf-8", "replace")
     p.err = (p.stderr or b"").decode("utf-8", "replace")
     return p
 
 
-def boot(plan, hold):
+def boot(plan, hold, expect=None):
     cmd = ["unshare", "--pid", "--fork", "--mount-proc", "--",
            f"{STAGE}/nw-root", "--hold-ms", str(hold), plan]
-    p = run(cmd)
+    env = None
+    if expect:
+        env = dict(os.environ)
+        # Inherited down nw-root -> electrician -> nw-sup -> house.
+        env["NW_HUB_EXPECT"] = ",".join(expect)
+    p = run(cmd, env)
     return cmd, p.returncode, p.out + p.err
+
+
+def hubbind(out):
+    lines = [ln for ln in out.splitlines() if "hubbind " in ln]
+    if len(lines) != 1:
+        raise SystemExit(f"expected exactly one hubbind line, got {len(lines)}\n{out}")
+    return lines[0][lines[0].index("hubbind "):].strip()
 
 
 def bake(city_text, city_path, blob_path):
@@ -133,17 +145,23 @@ def case(label, peers, hold, show_expect=True):
     print(f"   FWD edges: {pf['edges'][:4]}{' ...' if pf['ne'] > 4 else ''}")
     print(f"   REV edges: {pr['edges'][:4]}{' ...' if pr['ne'] > 4 else ''}")
 
-    cmd, rc, out = boot(fb, hold)
-    print("\n   $ " + " ".join(cmd))
+    cmd, rc, out = boot(fb, hold, expect=peers)
+    print("\n   $ NW_HUB_EXPECT=" + ",".join(peers[:4])
+          + ("..." if len(peers) > 4 else "") + " \\\n     " + " ".join(cmd))
     fwd_line = hubmap(out)
+    fwd_bind = hubbind(out)
     print(f"   rc={rc}")
     print("   " + fwd_line)
+    print("   " + fwd_bind)
 
-    cmd, rc, out = boot(rb, hold)
-    print("\n   $ " + " ".join(cmd))
+    cmd, rc, out = boot(rb, hold, expect=peers)
+    print("\n   $ NW_HUB_EXPECT=" + ",".join(peers[:4])
+          + ("..." if len(peers) > 4 else "") + " \\\n     " + " ".join(cmd))
     rev_line = hubmap(out)
+    rev_bind = hubbind(out)
     print(f"   rc={rc}")
     print("   " + rev_line)
+    print("   " + rev_bind)
 
     exp_fwd = f"0x{fnv1a_tokens(['IAM=' + p for p in peers]):08x}"
     exp_rev = f"0x{fnv1a_tokens(['IAM=' + p for p in reversed(peers)]):08x}"
@@ -154,28 +172,38 @@ def case(label, peers, hold, show_expect=True):
           f"{got_fwd == exp_fwd and got_rev == exp_rev}")
 
     flipped = fwd_line != rev_line
-    print(f"   fd->peer map changed when only the edge ORDER changed: {flipped}\n")
-    return flipped
+    print(f"   fd->peer map changed when only the edge ORDER changed: {flipped}")
+
+    bind_ok = ("status=OK" in fwd_bind) and ("status=OK" in rev_bind)
+    print(f"   name->fd binding resolved and asserted in BOTH orderings: {bind_ok}")
+    print("   (binding is the real criterion: stability is not knowability)\n")
+    return flipped, bind_ok
 
 
 def main():
     for exe in ("nw-root", "nw-check", "unit-hub", "unit-ident"):
         if not os.path.exists(f"{STAGE}/{exe}"):
             raise SystemExit(f"missing {STAGE}/{exe} -- run `make stage` first")
-    print("== wire-order reproduction ==\n")
-    small = case("small", ["north", "south"], 900)
+    print("== wire-order: position vs name binding ==\n")
+    small_flip, small_bind = case("small", ["north", "south"], 900)
     big_peers = [f"h{i:02d}" for i in range(1, 63)]   # 62 peers + hub = 63 units
-    big = case("large-N", big_peers, 2500)
+    big_flip, big_bind = case("large-N", big_peers, 2500)
     print("=" * 60)
-    if small and big:
-        print("VERDICT: REPRODUCED at N=2 wires and at N=62 wires.")
-        print("fd 3+k names the k-th edge in file order, not a fixed peer.")
-        return 1
-    if small or big:
-        print(f"VERDICT: PARTIAL. small_flipped={small} largeN_flipped={big}")
-        return 1
-    print("VERDICT: NOT reproduced. fd->peer mapping survived edge reordering.")
-    return 0
+
+    # The criterion is BINDING, not stability. fd 3+k is still the k-th
+    # declared edge -- the map is still expected to flip. What must hold is
+    # that a unit naming a peer resolves it to the right descriptor in BOTH
+    # orderings. A green run on stability alone would be the sorting trap.
+    print(f"ordering: map flips with edge order   small={small_flip} largeN={big_flip}")
+    print(f"binding : name->fd asserted OK        small={small_bind} largeN={big_bind}")
+    if small_bind and big_bind:
+        print("\nVERDICT: BINDING HOLDS at N=2 and N=62.")
+        print("A unit names its peer and gets the right descriptor in both")
+        print("orderings. Descriptor position carries no meaning.")
+        return 0
+    print("\nVERDICT: BINDING FAILED -- a named peer did not resolve to the")
+    print("descriptor that delivered its identity. See hubbind lines above.")
+    return 1
 
 
 if __name__ == "__main__":

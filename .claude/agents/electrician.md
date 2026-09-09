@@ -21,6 +21,46 @@ booted in the 2026-09-06 run; C remains the reference.
 2. **Readiness observed, not reported.** You performed the binding, so you know.
    The unit is never asked and cannot misreport. This is the gap systemd
    structurally cannot close. Do not accept a readiness message from a unit.
+3. **Units bind by name; descriptor position carries no meaning.** Each unit
+   gets `NW_WIRE_<fd>=<peer name>` per wire alongside `NW_WIRES`. A unit names
+   the peer it wants and resolves a descriptor. Never reintroduce a rule that
+   makes position significant.
+
+## Wire position once carried meaning — this is why it does not
+
+Until 2026-09-09 a unit's wires were collected in **blob edge-declaration
+order** and the unit was told only a count. So `fd 3+k` meant "the k-th edge in
+file order that mentions me", pinned to nothing: not by the blob, not by the
+env, not by `nw_check`, which validates edges for range, self-edge and
+duplicates and imposes no ordering. Two plans with the same units, the same
+peers and the same edge multiset — differing only in the order two `wire` lines
+appeared — wired the same unit to different peers on the same descriptor.
+
+It was **silent**, which is the recurring shape here: no error at any layer,
+both blobs accepted with rc=0, both booting rc=0. Reproduced before it was
+fixed, at 2 wires and at 62: `fd3` carried `IAM=north` in one ordering and
+`IAM=south` in the other, and at 62 wires the whole permutation reversed.
+`tests/wire_order.py` holds that reproduction.
+
+Three things worth keeping from it:
+
+- **The spec never granted this structure.** `Wire` in `plan.als` is an
+  unordered `sig` with no ordering relation, so two blobs differing only in
+  edge order are *the same instance* in the model. The implementation invented
+  an order the spec does not have. That is not a spec violation; it is a place
+  where the code read meaning into something the format left free.
+- **Sorting is the trap, not the fix.** Canonically sorting edges here makes
+  the mapping stable, which passes a test comparing two orderings — while the
+  unit still cannot name its peers. Stability is not knowability. Ordering by
+  peer name is worse than it looks for a second reason: inserting a new peer
+  renumbers every existing descriptor, silently, with no plan-visible change to
+  the edges that already existed. That is an ordering list to get wrong, which
+  section 14 of `HISTORY.md` names directly.
+- **The fd suffix is not a guess.** `pack_kit` places wire `k` at `3+k` by
+  `dup2` construction; the `F_DUPFD_CLOEXEC` parking stage is lowest-available
+  and intermediate only. If you ever change the final placement, the suffix
+  must be computed from the descriptor actually installed, or the binding
+  silently mis-names peers — worse than the bug it replaced.
 
 ## Hard rules
 

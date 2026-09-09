@@ -10,6 +10,17 @@
  *
  * digest is FNV-1a over the ordered tokens ("tok0\0tok1\0..."), so the full
  * fd->peer permutation is asserted even at large N where the map is elided.
+ *
+ * It ALSO binds by name, which is the real criterion. Before reading anything
+ * it resolves each peer named in NW_HUB_EXPECT to a descriptor by scanning
+ * NW_WIRE_<fd>, and afterwards asserts that descriptor delivered that peer's
+ * identity. A second line reports it:
+ *
+ *   hubbind expect=N ok=N status=OK resolved=north:fd3,south:fd4
+ *
+ * The resolved fds differ between two edge orderings and status stays OK --
+ * that is the point. Position carries no meaning; the name does. Reading fd 3
+ * and hoping would pass the hubmap check and fail this one.
  * Not in the TCB.
  */
 #define _GNU_SOURCE
@@ -41,6 +52,38 @@ int main(void)
     int nw = w ? atoi(w) : 0;
     if (nw < 0) nw = 0;
     if (nw > MAX_W) nw = MAX_W;
+
+    /* Resolve name -> descriptor from the environment BEFORE any read. */
+    const char *wname[MAX_W];
+    for (int i = 0; i < nw; i++) {
+        char kbuf[24];
+        snprintf(kbuf, sizeof kbuf, "NW_WIRE_%d", 3 + i);
+        wname[i] = getenv(kbuf);
+    }
+    char expect[MAX_W][TOK_LEN];
+    int  exp_idx[MAX_W];
+    int  nexp = 0;
+    const char *ev = getenv("NW_HUB_EXPECT");
+    if (ev && *ev) {
+        const char *p = ev;
+        while (*p && nexp < MAX_W) {
+            const char *c = strchr(p, ',');
+            size_t len = c ? (size_t)(c - p) : strlen(p);
+            if (len > 0 && len < TOK_LEN) {
+                memcpy(expect[nexp], p, len);
+                expect[nexp][len] = 0;
+                exp_idx[nexp] = -1;
+                for (int i = 0; i < nw; i++)
+                    if (wname[i] && strcmp(wname[i], expect[nexp]) == 0) {
+                        exp_idx[nexp] = i;
+                        break;
+                    }
+                nexp++;
+            }
+            if (!c) break;
+            p = c + 1;
+        }
+    }
 
     for (int i = 0; i < nw; i++) {
         int fd = 3 + i;
@@ -109,6 +152,53 @@ int main(void)
         ssize_t r = write(1, line, (size_t)n);
         (void)r;
     }
+    /* The logger reads the pipe 256 bytes at a time and re-prefixes each
+     * chunk. The hubmap line alone approaches that, so let it drain before
+     * the second line rather than have the two split across one read. */
+    usleep(150 * 1000);
+
+    /* Binding assertion: the peer named must be the peer that arrived. */
+    if (nexp > 0) {
+        char rmap[176];
+        size_t ro = 0;
+        int ok = 0, rel = 0;
+        for (int j = 0; j < nexp; j++) {
+            int i = exp_idx[j];
+            /* expect[j] is bounded by construction: len < TOK_LEN. */
+            char want[4 + TOK_LEN];
+            size_t el = strlen(expect[j]);
+            memcpy(want, "IAM=", 4);
+            memcpy(want + 4, expect[j], el + 1);
+            int good = (i >= 0 && strcmp(tok[i], want) == 0);
+            if (good) ok++;
+            char one[16 + TOK_LEN];
+            int k;
+            if (i < 0)
+                k = snprintf(one, sizeof one, "%s%s:UNRESOLVED",
+                             ro ? "," : "", expect[j]);
+            else if (good)
+                k = snprintf(one, sizeof one, "%s%s:fd%d",
+                             ro ? "," : "", expect[j], 3 + i);
+            else
+                k = snprintf(one, sizeof one, "%s%s:MISMATCH@fd%d",
+                             ro ? "," : "", expect[j], 3 + i);
+            /* Display elision must never stop the counting: an earlier
+             * version broke out of this loop when rmap filled, so ok topped
+             * out at whatever fitted and a passing run read as FAIL. */
+            if (k < 0) continue;
+            if (rel || ro + (size_t)k + 5 > sizeof rmap - 1) { rel = 1; continue; }
+            memcpy(rmap + ro, one, (size_t)k);
+            ro += (size_t)k;
+        }
+        rmap[ro] = 0;
+        if (rel) { memcpy(rmap + ro, ",...", 5); ro += 4; }
+        char bl[512];
+        int bn = snprintf(bl, sizeof bl,
+                          "hubbind expect=%d ok=%d status=%s resolved=%s\n",
+                          nexp, ok, ok == nexp ? "OK" : "FAIL", rmap);
+        if (bn > 0) { ssize_t r2 = write(1, bl, (size_t)bn); (void)r2; }
+    }
+
     usleep(200 * 1000);
     return 0;
 }

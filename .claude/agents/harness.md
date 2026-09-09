@@ -23,23 +23,34 @@ rejects self-wire; 200-byte fuzz with 0 accepted; happy slot A with kits
 CRC HALT 70; talk↔listen PING on a real wire; critical house boom HALT 70;
 seccomp kills a house that calls `socket()`.
 
-**Expected to fail (1): `tests/wire_order.py`, exit 1.** Not wired into
-`tests/run.py`, deliberately — `make test` must stay at 12/12. Run it directly.
-It demonstrates that `electrician.c:189-192` assigns a unit's wires in blob
-edge-declaration order while the unit is told only a count, so `fd 3+k` names
-the k-th edge in file order rather than a fixed peer. Reproduced at 2 wires and
-at 62, deterministic across ten alternating boots.
+**Thirteenth (1): `tests/wire_order.py`, now exit 0.** Not wired into
+`tests/run.py` — `make test` stays at 12/12. Run it directly.
 
-**Its going green is itself a finding — report it, do not quietly re-baseline.**
-Exit 0 means the fd→peer mapping stopped depending on edge order, which is
-either the defect being fixed or the test no longer exercising it. Say which,
-and quote the mapping from both orderings. In particular, a fix that
-canonically sorts edges inside the electrician turns this test green while
-leaving the real defect in place: the unit still cannot name its peers, since
-no variable in the env set at `electrician.c:214-221` carries a peer name. Green
-plus a `map=` line the house could not have predicted in advance is not a fix.
-Retire this entry only when a unit can state which peer it expects on a
-descriptor before reading it.
+It went green on 2026-09-09, and per the rule below that is reported rather
+than re-baselined. It was expected-to-fail while `electrician.c` assigned wires
+in blob edge-declaration order with the unit told only a count. The fix exports
+`NW_WIRE_<fd>=<peer name>` per wire, so a unit resolves a peer name to a
+descriptor.
+
+**Read what it now asserts, because the criterion changed.** It does *not*
+assert the mapping stopped moving. `fd 3+k` is still the k-th declared edge and
+the map still flips when edge order changes — that is expected and printed. It
+asserts **binding**: the hub names each peer, resolves it through `NW_WIRE_*`
+before reading anything, and checks that descriptor delivered that peer's
+identity. Both orderings, both scales:
+
+    hubbind expect=2  ok=2  status=OK resolved=north:fd3,south:fd4
+    hubbind expect=2  ok=2  status=OK resolved=north:fd4,south:fd3
+    hubbind expect=62 ok=62 status=OK
+    hubbind expect=62 ok=62 status=OK
+
+Different descriptors, same names, OK in both — that is the property.
+
+**A future change to these results is still a finding.** If it goes red, a
+named peer stopped resolving to the descriptor that delivered it. If someone
+makes it pass by asserting stability instead of binding — canonically sorting
+edges is the tempting way — that is the sorting trap and the fix is not done:
+stability is not knowability. Keep `hubbind` as the criterion, not `hubmap`.
 
 ## How to write a test here
 
