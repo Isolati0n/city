@@ -68,3 +68,24 @@ FFI contract unverified here:
   each other — the C compiler never sees the Rust one. A mismatch introduced
   later would not appear in make test; it would surface only at Rust link
   time, or as undefined behaviour at run time if the linker accepted it.
+
+Port divergence — wire name binding (2026-09-09):
+  electrician.c      exports NW_WIRE_<fd>=<peer name>, one per wire, so a house
+                     resolves a peer by name and gets a descriptor.
+  electrician.rs:209 sets only NW_WIRES / NW_KIT.
+  electrician.zig:308 sets only NW_WIRES / NW_KIT.
+
+  A house written against the name-binding contract sees every peer UNRESOLVED
+  under either port. Nothing shipped is affected: the Makefile builds
+  nw-electrician from electrician.c, and the C spelling is the TCB reference.
+
+  UNCAUGHT BY make test. The test target runs tests/run.py only; tests/bakeoff.py
+  is the thing that would compare the three spellings and it never executes here
+  (no rustc, ZIG=/tmp/zig/zig absent). So this divergence is invisible to the
+  suite and is recorded here instead of being detected.
+
+  Porting is DEFERRED until there is a toolchain to compile against. A blind
+  edit to a file that cannot be compiled, run, or diffed against the C spelling
+  is not a fix — it is an untested claim of one, and it would convert a known
+  gap into an unknown one. Close this when rustc and zig are available: port
+  the NW_WIRE_<fd> block to both spellings, build them, and run tests/bakeoff.py.

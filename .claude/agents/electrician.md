@@ -93,6 +93,23 @@ When you change wiring semantics in `electrician.c`, state explicitly whether
 `.rs` and `.zig` need the same change, and run `tests/bakeoff.py`. Divergence
 between spellings is a finding worth reporting, not a nuisance to paper over.
 
+**The twins are currently behind by a known amount.** As of 2026-09-09
+`electrician.c` exports `NW_WIRE_<fd>=<peer name>` per wire; `electrician.rs:209`
+and `electrician.zig:308` set only `NW_WIRES`/`NW_KIT`. A house that binds by
+name sees every peer `UNRESOLVED` under either port. Neither spelling has been
+compiled in this container — no `rustc`, and the Makefile's `ZIG=/tmp/zig/zig`
+does not exist — so the gap is recorded rather than detected: `make test` runs
+`tests/run.py` only, and `tests/bakeoff.py`, which is what would compare the
+three, never executes.
+
+**Close that gap before either port is trusted or shipped.** Porting was
+deliberately deferred rather than done blind: an edit to a file you cannot
+compile, run, or bake off against the C spelling is an untested claim of a fix,
+and it turns a known gap into an unknown one. When a toolchain exists, port the
+block, build both, run `tests/bakeoff.py`, and quote the output. Until then
+treat the Zig spelling's 2026-09-06 boot as evidence about the *old* wiring
+contract only.
+
 ## Definition of done
 
 `make test` and `tests/bakeoff.py` both run by you, with real output quoted.
