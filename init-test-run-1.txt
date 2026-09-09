@@ -1,0 +1,20 @@
+nw-init put-together suite — 2026-09-06
+
+Stack actually booted:
+  PID 1          C
+  electrician    Zig (packed blob parse, no magic fds, double-fork so PID 1 adopts houses)
+  nw-sup         Rust + lids.c seccomp shim
+  nw-check       C
+  baker          bakery/nw-cc.py (Haskell stand-in) + sha256 pin + isolated-kit list
+  spec           plan.als Plan.tla
+
+make test stages to /tmp/nw-init-run (artifacts mount is noexec).
+
+ALL TESTS PASSED:
+  hash-pin, difftest baker↔checker, baker rejects self-wire,
+  200-byte fuzz (0 accepted), happy slot A kits 1/2/1/0,
+  slot B, rescue outside plan (exit 3),
+  electrician death HALT 70, bad crc HALT 70,
+  talk↔listen PING on a real wire,
+  critical house boom HALT 70,
+  seccomp kills socket() house.
