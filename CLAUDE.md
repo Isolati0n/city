@@ -225,6 +225,20 @@ that fan out, plus rules that arrive when they are relevant.** Reviewers are
 the part that pays — they need no shared context and they cannot break
 anything.
 
+**Edit a territory file with `Edit` or `Write`, not a Bash heredoc.** The
+hook matches `Bash` too and will search a command string for a territory
+filename, but that is a backstop and it is guessable-around. The dedicated
+tools name the file, so the match is exact.
+
+This is worth a rule because the first version of that hook matched only
+`Edit|Write`, worked perfectly, and **never fired once** — nearly every edit
+here goes through Bash with a python heredoc, so it never matched. A
+mechanism that is correct and routed around is worse than a broken one: it
+looks like it is working. The diagnosis was wrong too, and wrongly confident
+— "settings load at session start" was inferred from a missing stamp and
+reported as the cause without testing it. Hooks and agent definitions both
+refresh live; that was checked afterwards, by running a probe.
+
 ## How briefs are written
 
 `CLAUDE.md` and the agent briefs in `.claude/agents/` are read by agents that
