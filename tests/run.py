@@ -45,6 +45,20 @@ def skip(name, why):
     print(f"SKIP {name} -- {why}")
 
 
+def fs_mountable(name):
+    """Whether the kernel can mount this filesystem.
+
+    Reads /proc/filesystems rather than checking for a mkfs tool. Those are
+    different questions and getting them confused is how the FAT gap was
+    mis-reported on 2026-09-10: mkfs.vfat is installed here and the kernel
+    has no FAT driver at all, so `command -v mkfs.vfat` said the gap could be
+    closed and mount(2) said otherwise."""
+    for line in open("/proc/filesystems"):
+        if line.split()[-1] == name:
+            return True
+    return False
+
+
 _LANDLOCK = None
 
 
@@ -85,9 +99,14 @@ def print_environment():
     abi = landlock_abi()
     print(f"  landlock   : {'ABI ' + str(abi) if abi else 'UNAVAILABLE'}"
           f"{'' if abi else '  -- lid-landlock tests will SKIP, not pass'}")
-    vfat = run(["sh", "-c", "command -v mkfs.vfat"]).returncode == 0
-    print(f"  mkfs.vfat  : {'present' if vfat else 'ABSENT'}"
-          f"{'' if vfat else '  -- dawn-real-boot uses ext4 for the ESP'}")
+    mk = run(["sh", "-c", "command -v mkfs.vfat"]).returncode == 0
+    mnt = fs_mountable("vfat")
+    print(f"  vfat       : mkfs {'present' if mk else 'ABSENT'}, "
+          f"kernel {'can' if mnt else 'CANNOT'} mount"
+          f"{'' if mnt else '  -- the ESP is ext4 and FAT is unexercised'}")
+    print("  mountable  : " + " ".join(
+        f for f in ("ext4", "vfat", "squashfs", "erofs", "overlay")
+        if fs_mountable(f)))
     loop = run(["sh", "-c", "command -v losetup"]).returncode == 0
     print(f"  losetup    : {'present' if loop else 'ABSENT'}")
     print()
@@ -288,14 +307,30 @@ def test_dawn_real_boot():
     lab = f"{WORK}/dawnlab"
     subprocess.run(["rm", "-rf", lab], check=False)
     os.makedirs(f"{lab}/mr"); os.makedirs(f"{lab}/me")
+
+    # A real ESP is FAT32. Use one where the kernel can mount it, and say so
+    # loudly where it cannot: docs/options/06 rules the ESP out for bricks on
+    # FAT's absent execute bit, absent ownership and 4 GiB cap, and none of
+    # that is exercised by an ext4 stand-in.
+    if fs_mountable("vfat"):
+        esp_fs, esp_mb, esp_mkfs = "vfat", 64, ["mkfs.vfat", "-F", "32"]
+    else:
+        esp_fs, esp_mb, esp_mkfs = "ext4", 16, ["mkfs.ext4", "-q"]
+        skip("dawn-real-boot:vfat-esp",
+             "kernel has no FAT driver (/proc/filesystems lists none), so the "
+             "ESP is ext4 and FAT's execute bit, ownership and 4 GiB cap stay "
+             "untested -- which is what docs/options/06 reasons from")
+
     loops = []
     try:
-        for name, mb in (("root", 48), ("esp", 16)):
+        for name, mb, mkfs in (("root", 48, ["mkfs.ext4", "-q"]),
+                               ("esp", esp_mb, esp_mkfs)):
             img = f"{lab}/{name}.img"
             subprocess.run(["dd", "if=/dev/zero", f"of={img}", "bs=1M",
                             f"count={mb}"], check=True,
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            subprocess.run(["mkfs.ext4", "-q", img], check=True)
+            subprocess.run(mkfs + [img], check=True,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             dev = subprocess.run(["losetup", "--find", "--show", img],
                                  capture_output=True, text=True,
                                  check=True).stdout.strip()
@@ -337,7 +372,7 @@ def test_dawn_real_boot():
         def boot_dawn():
             cmd = ["unshare", "--mount", "--pid", "--fork", "--",
                    "env", f"NW_ROOT={rootdev}", "NW_ROOT_FSTYPE=ext4",
-                   f"NW_ESP={espdev}", "NW_ESP_FSTYPE=ext4",
+                   f"NW_ESP={espdev}", f"NW_ESP_FSTYPE={esp_fs}",
                    f"{BIN}/nw-dawn"]
             p = run(cmd)
             return p.returncode, p.out + p.err
@@ -376,7 +411,7 @@ def test_dawn_real_boot():
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         for dev in loops:
             subprocess.run(["losetup", "-d", dev], check=False)
-    print("ok dawn-real-boot")
+    print(f"ok dawn-real-boot (ESP {esp_fs})")
 
 
 def test_term_signal():

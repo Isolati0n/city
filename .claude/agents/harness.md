@@ -47,16 +47,46 @@ provides. **When you report a suite result, report that block with it.** A
 green line is evidence only against a stated environment; without one it is a
 claim about nothing.
 
-Two shapes to watch for, both found here:
+**Detect the capability, not a tool that implies it.** `fs_mountable()`
+reads `/proc/filesystems`; it does not check for `mkfs.vfat`. Those are
+different questions, and confusing them produced a wrong correction on
+2026-09-10: the mkfs tool is installed here, the kernel has no FAT driver at
+all, and "the tool exists so the gap can close" was published before anything
+tried to mount one. Ask the question the code under test asks.
 
-- **A negative assertion that passes on absence.** `expect("badcall survived"
-  not in out)` is also satisfied when the house never ran at all. Pair every
-  such assertion with a positive one that proves the mechanism was reached —
-  `expect("badcall started" in out)` — or it is testing nothing.
 - **A branch taken because something was missing.** If a test has an if/else
   on a capability, only one side runs on any given machine. Say which side
-  ran, in the `ok` line, so a reader of the output knows what was actually
-  exercised.
+  ran, in the `ok` line, so a reader of the output knows what was exercised.
+
+## Every absence assertion must be paired. The pairing is the test.
+
+**An assertion that something is absent must sit beside a positive assertion
+that the thing which would have produced it actually ran.** Unpaired, it is
+satisfied by the mechanism working *and* by the mechanism never being
+reached, and those are opposite outcomes reported identically.
+
+This is not a nicety and not a style preference. It is the test. Alone,
+`expect("badcall survived" not in out)` asserts nothing about seccomp: it
+passes when the filter kills the house, when the exec fails, when the plan
+never booted, and when the fixture was not built. Adding `expect("badcall
+started" in out)` is what turns it into a claim about the filter, because
+only then does the pair mean *the house reached the call and did not get
+past it*.
+
+Check for this shape whenever you touch a test, not once. It has been found
+three separate times in this suite, which makes it common rather than
+incidental:
+
+- `lid-advisory` passed on every machine that lacked Landlock;
+- `seccomp-kill` asserted only that `badcall survived` was absent;
+- `kind-exit0` asserted only that `restart quitter` was absent.
+
+Grep for it: `not in out`, `not in (`, `== 0`, `is None`, `assertNotIn`,
+`returncode != 0`. For each hit ask **what else makes this true**, and if the
+answer includes "the code under test never ran", the assertion is not
+finished. A rejection test has the same shape from the other side: a baker
+that exits non-zero for a syntax error is not proof that it rejected the
+thing you meant, so assert the reason string too.
 
 ## The rule that makes a test worth having
 

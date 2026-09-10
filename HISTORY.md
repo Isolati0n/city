@@ -1489,12 +1489,18 @@ machine boots is how the boot half stayed unbuilt without anyone noticing, so:
 this is a known divergence, and the fix is to restructure `make stage` to
 mirror `/nw` and `/efi` rather than to add more tests against the flat shape.
 
-> **CORRECTION 2026-09-10:** `command -v mkfs.vfat` succeeds in this
-> container. Either it was always there and the claim below was never
-> checked, or the image changed; either way the stated *reason* for the ESP
-> being ext4 is false today, and the FAT gap is now untested for no current
-> reason. The suite's `print_environment()` reports `mkfs.vfat` on every run
-> so this cannot go stale again silently.
+> **CORRECTION 2026-09-10, itself corrected the same day.** The first
+> correction said `command -v mkfs.vfat` succeeds here, so the stated reason
+> was false and the gap could close. That was checking for a tool and
+> reporting it as a capability. `mkfs.vfat` is installed and **the kernel has
+> no FAT driver at all** — `/proc/filesystems` lists none, and mounting a
+> freshly made FAT32 image returns `unknown filesystem type 'vfat'`. So the
+> conclusion below is right and its reason was wrong, and so was the first
+> correction. `dawn-real-boot` now asks `fs_mountable("vfat")`, uses a real
+> FAT32 ESP wherever the kernel allows one, and records a named skip where it
+> does not; `print_environment()` reports mkfs and mount support separately.
+> Logged rather than quietly fixed because it is the characteristic failure
+> committed one round after the rule against it was written down.
 
 Two things the test still does not cover: the ESP is **ext4, not vfat**,
 because `mkfs.vfat` is not available in this container — so FAT's missing
