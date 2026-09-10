@@ -19,12 +19,13 @@ static const char *errs[] = {
     "brick without NEWNS lid",
     "bind count",
     "bind unit index",
-    "bind path"
+    "bind path",
+    "landlock without brick"
 };
 
 const char *nw_errstr(int e)
 {
-    if (e < 0 || e > NW_E_BINDPATH) return "unknown";
+    if (e < 0 || e > NW_E_LLBRICK) return "unknown";
     return errs[e];
 }
 
@@ -156,6 +157,12 @@ int nw_check(const void *blob, uint32_t len)
          * path, and it forces NEWNS -- a house cannot pivot into its own root
          * without a private mount namespace, and nw-sup must not quietly
          * supply the lid the plan failed to declare. */
+        /* Landlock grants read and execute beneath the house's root. That is
+         * a restriction only when the root is a brick; on the machine root it
+         * confines nothing, which is a lid that decides nothing while
+         * claiming to. See the decision in nwsup.c's lid_landlock. */
+        if ((u[i].lids & NW_LID_LANDLOCK) && !u[i].brick[0])
+            return NW_E_LLBRICK;
         if (u[i].brick[0]) {
             if (!path_ok_len(u[i].brick, NW_BRICK_LEN)) return NW_E_BRICK;
             if (!(u[i].lids & NW_LID_NEWNS)) return NW_E_BRICKNS;

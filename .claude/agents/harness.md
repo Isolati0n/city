@@ -28,6 +28,36 @@ lines; a fixture that writes more than a chunk gets split mid-line. So: have
 the fixture tag every line with its own unit name, and do not write assertions
 against the logger's prefix for anything but the first line.
 
+## A test whose outcome depends on the environment must say so
+
+**Never let a test pass down a branch the environment forced.** `lid-landlock`
+existed for its whole life without ever running: every machine it was
+exercised on lacked Landlock, so it took the unavailable path, returned early,
+and the suite printed a green line. The lid granted too little to execute a
+dynamically linked binary and nothing found out.
+
+So: detect the capability explicitly, the same way the code under test detects
+it — `landlock_abi()` calls `landlock_create_ruleset` rather than reading a
+config file. Then `skip(name, why)` with a named reason. A skipped test is not
+a passing test, and `main()` refuses to print a bare `ALL TESTS PASSED` when
+anything was skipped.
+
+`print_environment()` runs before the first test and says what this machine
+provides. **When you report a suite result, report that block with it.** A
+green line is evidence only against a stated environment; without one it is a
+claim about nothing.
+
+Two shapes to watch for, both found here:
+
+- **A negative assertion that passes on absence.** `expect("badcall survived"
+  not in out)` is also satisfied when the house never ran at all. Pair every
+  such assertion with a positive one that proves the mechanism was reached —
+  `expect("badcall started" in out)` — or it is testing nothing.
+- **A branch taken because something was missing.** If a test has an if/else
+  on a capability, only one side runs on any given machine. Say which side
+  ran, in the `ok` line, so a reader of the output knows what was actually
+  exercised.
+
 ## The rule that makes a test worth having
 
 **A test you add must be shown *failing* when the thing it tests is

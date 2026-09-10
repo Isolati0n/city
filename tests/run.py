@@ -33,6 +33,66 @@ def blob_h(name):
     raise SystemExit(f"blob.h has no {name}")
 
 
+SKIPPED = []
+
+
+def skip(name, why):
+    """Record a test the environment cannot exercise. A skipped test is not a
+    passing test: main() refuses to print a bare ALL TESTS PASSED when this
+    list is non-empty. lid-landlock hid for its whole existence behind a
+    green line produced by a kernel that could not run it."""
+    SKIPPED.append((name, why))
+    print(f"SKIP {name} -- {why}")
+
+
+_LANDLOCK = None
+
+
+def landlock_abi():
+    """The Landlock ABI version this kernel reports, or None.
+
+    Detected by calling landlock_create_ruleset(NULL, 0, VERSION), which is
+    exactly what nw-sup does, rather than by reading a config file or a
+    securityfs path that may not be mounted."""
+    global _LANDLOCK
+    if _LANDLOCK is not None:
+        return _LANDLOCK[0]
+    src = f"{WORK}/llprobe.c"
+    binp = f"{WORK}/llprobe"
+    open(src, "w").write(
+        "#define _GNU_SOURCE\n"
+        "#include <linux/landlock.h>\n#include <stdio.h>\n"
+        "#include <sys/syscall.h>\n#include <unistd.h>\n"
+        "int main(void){long a=syscall(__NR_landlock_create_ruleset,(void*)0,0,"
+        "LANDLOCK_CREATE_RULESET_VERSION);"
+        "if(a<0)return 1;printf(\"%ld\\n\",a);return 0;}\n")
+    c = run(["gcc", "-o", binp, src])
+    if c.returncode != 0:
+        _LANDLOCK = (None,)
+        return None
+    p = run([binp])
+    _LANDLOCK = (int(p.out.strip()) if p.returncode == 0 else None,)
+    return _LANDLOCK[0]
+
+
+def print_environment():
+    """Say what this machine can and cannot exercise, before any test runs.
+
+    Added 2026-09-10 after a green suite was reported for a commit whose
+    feature could not execute here at all. A suite result is evidence only
+    against a stated environment."""
+    print("== environment ==")
+    abi = landlock_abi()
+    print(f"  landlock   : {'ABI ' + str(abi) if abi else 'UNAVAILABLE'}"
+          f"{'' if abi else '  -- lid-landlock tests will SKIP, not pass'}")
+    vfat = run(["sh", "-c", "command -v mkfs.vfat"]).returncode == 0
+    print(f"  mkfs.vfat  : {'present' if vfat else 'ABSENT'}"
+          f"{'' if vfat else '  -- dawn-real-boot uses ext4 for the ESP'}")
+    loop = run(["sh", "-c", "command -v losetup"]).returncode == 0
+    print(f"  losetup    : {'present' if loop else 'ABSENT'}")
+    print()
+
+
 def run(cmd, **kw):
     p = subprocess.run(cmd, capture_output=True, **kw)
     p.out = (p.stdout or b"").decode("utf-8", "replace")
@@ -208,6 +268,10 @@ def test_kind_exit0():
     expect(b.returncode == 0, f"bake\n{b.out}{b.err}")
     rc, out2 = boot(plan=blob2, hold=1200)
     expect(rc == 0, f"city should survive, rc={rc}\n{out2}")
+    # "restart quitter" is also absent when quitter never ran, so assert it
+    # ran and exited before asserting it was not restarted. Same shape as the
+    # seccomp test: a negative assertion alone passes on absence.
+    expect("house exit quitter" in out2, f"quitter never ran\n{out2}")
     expect("restart quitter" not in out2, f"oneshot exit 0 must not restart\n{out2}")
     print("ok kind-exit0")
 
@@ -363,6 +427,11 @@ def test_seccomp_kills():
     b = run(["python3", CC, "--city", city, "--out", blob])
     expect(b.returncode == 0, b.err)
     rc, out = boot(plan=blob, hold=600)
+    # "survived" absent is not enough on its own: it is also absent when the
+    # house never ran, which is how a test passes for the wrong reason. Assert
+    # the house started, then that the call did not survive -- together those
+    # mean the filter did the killing.
+    expect("badcall started" in out, f"house never ran\n{out}")
     expect("badcall survived" not in out, f"seccomp leak\n{out}")
     print("ok seccomp-kill")
 
@@ -578,21 +647,23 @@ def test_brick_needs_newns():
 def test_lids_are_not_advisory():
     """A declared lid that cannot be applied must stop that house starting.
 
-    lid_landlock used to say-and-continue on three paths -- Landlock absent,
-    ruleset creation failed, restrict_self failed. On each, the house ran with
-    no file restriction while the plan said it was confined, the boot
-    succeeded, and nothing noticed. Invariant 6 says a lid decides what a
-    house can do; a lid that decides nothing while claiming to is the same
-    defect as a brick that roots on the machine while logging `lid brick`.
+    lid_landlock used to say-and-continue when Landlock was absent, so the
+    house ran with no file restriction while the plan said it was confined.
+    Invariant 6 says a lid decides what a house can do; a lid that decides
+    nothing while claiming to is the same defect as a brick that roots on the
+    machine while logging `lid brick`.
 
-    Written to assert the *rule*, not this container: Landlock is compiled out
-    here, but the target kernel has it. Either the lid goes on and the house
-    runs, or it does not and the house does not -- and never a third outcome."""
-    probe = f"{BIN}/unit-probe"
+    Asserts the rule, not the environment: either the lid goes on and the
+    house runs, or it does not and the house does not, and never a third
+    outcome. Both branches are real, but only one runs on any given kernel --
+    the environment banner says which, and test_landlock_confines is the one
+    that actually exercises the lid."""
+    brick = make_brick("advisory-brick")
     city = f"{WORK}/lid-advisory.city"
     open(city, "w").write(
-        f"house locked {probe} kind=oneshot lids=landlock\n"
-        f"house plain {probe} kind=oneshot budget=0 lids=none\n"
+        f"house locked /bin/brick kind=oneshot lids=newns,landlock "
+        f"brick={brick}\n"
+        f"house plain {BIN}/unit-probe kind=oneshot budget=0 lids=none\n"
     )
     blob = f"{WORK}/lid-advisory.blob"
     b = run(["python3", CC, "--city", city, "--out", blob])
@@ -600,8 +671,7 @@ def test_lids_are_not_advisory():
     rc, out = boot(plan=blob, hold=1500)
 
     # The say-and-continue form was "[nw-sup] landlock ..."; the fatal form is
-    # "[nw-sup] FAIL landlock ...". If a soft line ever comes back, so does
-    # the defect.
+    # "[nw-sup] FAIL landlock ...". If a soft line comes back, so does the bug.
     expect("[nw-sup] landlock" not in out,
            f"a declared lid was skipped with a log line\n{out}")
 
@@ -609,19 +679,81 @@ def test_lids_are_not_advisory():
     refused = "FAIL landlock" in out
     expect(applied != refused,
            f"exactly one of applied/refused must happen\n{out}")
-
     if refused:
-        expect("house=locked" not in out,
+        expect("locked id=" not in out,
                f"lid could not be applied and the house ran anyway\n{out}")
+        expect(landlock_abi() is None,
+               "the lid was refused on a kernel that has Landlock")
     else:
-        expect("house=locked" in out,
-               f"lid was applied but the house did not run\n{out}")
+        expect("locked id=" in out,
+               f"lid was applied but the house did not start\n{out}")
 
-    # Nothing a house does halts the city: the other house boots either way.
     expect("house=plain" in out, f"an unrelated house must still run\n{out}")
     expect(rc == 0 and "HALT" not in out,
            f"a house that cannot wear its lid must not halt the city\n{out}")
-    print("ok lids-not-advisory" + (" (landlock absent here)" if refused else ""))
+    print("ok lids-not-advisory " +
+          ("(refused branch: no landlock here)" if refused
+           else "(applied branch)"))
+
+
+def test_landlock_confines():
+    """The lid must let a house start AND demonstrably restrict it.
+
+    This is the test that did not exist, and its absence is why the lid could
+    grant too little to execute anything for its whole life. It asserts three
+    things in one boot:
+
+      the house started            -- it can read and execute its own brick
+      it can write a declared bind -- the plan said that path was its to write
+      it CANNOT write its brick    -- nothing granted write beneath the root
+
+    The third is the confinement. Without it this is a test that the house
+    started, which proves nothing about what it can touch.
+
+    Negative control: change the "/" grant in lid_landlock from `ro` to `rw`
+    and wr_root becomes ok, failing this test."""
+    abi = landlock_abi()
+    if abi is None:
+        skip("landlock-confines",
+             "kernel has no Landlock (landlock_create_ruleset -> ENOSYS); "
+             "the lid cannot be exercised here at all")
+        return
+
+    shared = f"{WORK}/ll-shared"
+    os.makedirs(shared, exist_ok=True)
+    open(f"{shared}/token", "w").write("token-from-the-machine\n")
+    brick = make_brick("landlock-brick", mirrors=(shared,))
+
+    city = f"{WORK}/ll.city"
+    open(city, "w").write(
+        f"house sealed /bin/brick kind=oneshot lids=newns,landlock "
+        f"brick={brick} bind={shared}\n")
+    blob = f"{WORK}/ll.blob"
+    b = run(["python3", CC, "--city", city, "--out", blob])
+    expect(b.returncode == 0, f"bake\n{b.out}{b.err}")
+
+    rc, out = boot(plan=blob, hold=1500)
+    expect(rc == 0, f"landlock city rc={rc}\n{out}")
+    expect("lid landlock" in out, f"lid was not applied\n{out}")
+
+    def field(k):
+        return dict(re.findall(r"(\w+) " + k + r"=(\S+)", out))
+
+    # Started at all: a dynamically linked house under the old ruleset died
+    # here with EACCES from execv, because the loader was unreadable.
+    expect(field("id").get("sealed") == "landlock-brick",
+           f"house did not start under the lid\n{out}")
+    # Allowed read: the bind the plan declared.
+    expect(field("bind").get("sealed") == "token-from-the-machine",
+           f"declared bind unreadable under the lid\n{out}")
+    # Allowed write: same bind.
+    expect(field("wr_bind").get("sealed") == "ok",
+           f"declared bind not writable under the lid\n{out}")
+    # DENIED write: the brick itself. This is the confinement.
+    wr = field("wr_root").get("sealed", "")
+    expect(wr.startswith("denied"),
+           f"the house wrote into its own sealed brick: wr_root={wr}\n{out}")
+    print(f"ok landlock-confines (ABI {abi})")
 
 
 def test_non_provision_at_max():
@@ -668,6 +800,7 @@ def test_hash_pin():
 
 def main():
     os.chdir(ROOT)
+    print_environment()
     print("== city suite ==")
     test_hash_pin()
     test_difftest()
@@ -689,7 +822,15 @@ def main():
     test_brick_needs_newns()
     test_path_traversal_refused()
     test_non_provision_at_max()
-    print("ALL TESTS PASSED")
+    test_landlock_confines()
+    if SKIPPED:
+        print("PASSED, WITH SKIPS -- this environment could not exercise:")
+        for name, why in SKIPPED:
+            print(f"  {name}: {why}")
+        print("A skipped test is not a passing test. Do not report this run "
+              "as evidence about the features named above.")
+    else:
+        print("ALL TESTS PASSED")
 
 
 if __name__ == "__main__":

@@ -122,64 +122,98 @@ static void lid_brick(const char *brick, char *const *binds, int nbinds)
 }
 
 /* LIDS ARE NOT ADVISORY. If a declared lid cannot be applied, this house does
- * not start.
+ * not start. Every lid path in this file ends in die(); none of them logs and
+ * continues. A house that runs unconfined while the plan says it is confined
+ * is the plan lying, and invariant 6 says a lid is the thing that decides
+ * what a house can do.
  *
- * This function used to say-and-continue on three paths -- Landlock absent
- * from the kernel, ruleset creation failed, restrict_self failed -- and on
- * each of them the house ran with no file restriction at all while the plan
- * said it was confined. The boot succeeded, the log mentioned it in passing,
- * and no test noticed. That is worse than a comment that lies to a reader:
- * it lies to the plan, and invariant 6 says a lid is the thing that decides
- * what a house can do. A lid that decides nothing while claiming to is the
- * same defect as a brick that roots on the machine while logging `lid brick`.
+ * THIS LID IS FOR A HOUSE IN A BRICK. That is a decision, taken 2026-09-10,
+ * and it decides what the rules below grant.
  *
- * Every other lid was already fatal (`unshare`, the brick pivot, seccomp).
- * This one is now too, including the two add_rule calls whose returns were
- * discarded: a ruleset missing a rule is not the confinement the plan asked
- * for, even when the omission happens to fail closed.
+ * The previous ruleset granted EXECUTE|READ_FILE on the exec path and
+ * READ_FILE on /dev/null, and nothing else. **It had never worked.** A
+ * dynamically linked house cannot start under it -- the loader and libc are
+ * unreadable, so execv returns EACCES before the house runs a line. Nobody
+ * saw it because every environment it was ever exercised in lacked Landlock
+ * and took the early-return path above; making that path fatal is what
+ * finally surfaced it. A confinement feature that claimed to work, was never
+ * run where it applies, and granted too little to start anything.
  *
- * die() exits the supervisor's *child*, so nw-sup applies the ordinary
- * restart budget and the house stays down once it is spent. That is
- * deliberate. A do-not-restart signal would be a second meaning on the
- * exit-status channel, which is bug 9's shape -- see blob.h. Nothing a house
- * does halts the city, so every other house boots normally.
+ * So: grant read and execute beneath the house's own root. This runs after
+ * the brick pivot, so "/" is the brick. A brick carries its own loader and
+ * libraries, which is why this works for any linkage without a list of
+ * library paths to guess at -- and guessing a list of paths in the TCB is the
+ * fixed-descriptor-number class wearing a third costume.
  *
- * Consequence worth knowing: this runs after the brick pivot, so a brick
- * house wearing landlock must carry /dev/null inside its brick or bind it in.
- * Previously that was silently skipped. */
-static void lid_landlock(const char *exec_path)
+ * The restriction that remains is write. Nothing grants write beneath the
+ * root, so **a house cannot write into its own brick** -- which is a property
+ * the mount namespace never gave us, and the seal a content-addressed brick
+ * is supposed to have. Declared binds get read and write: the plan already
+ * says which paths are the house's to modify, so the bind table is the policy
+ * input and nothing new is invented.
+ *
+ * Device nodes are deliberately not creatable even in a bind (MAKE_CHAR and
+ * MAKE_BLOCK are handled and never granted).
+ *
+ * A landlock house therefore requires a brick. Without one, "/" is the
+ * machine root and granting read and execute beneath it confines nothing --
+ * a lid that decides nothing while claiming to, which is the defect this
+ * whole function just stopped having. nwcheck.c returns NW_E_LLBRICK; this
+ * file re-checks it because it reads its unit from the environment.
+ */
+static void ll_beneath(int rfd, const char *path, uint64_t access)
 {
-    struct landlock_ruleset_attr attr = {
-        .handled_access_fs =
-            LANDLOCK_ACCESS_FS_EXECUTE |
-            LANDLOCK_ACCESS_FS_READ_FILE |
-            LANDLOCK_ACCESS_FS_READ_DIR
+    int fd = open(path, O_PATH | O_CLOEXEC);
+    if (fd < 0) die("landlock open");
+    struct landlock_path_beneath_attr pb = {
+        .allowed_access = access,
+        .parent_fd = fd
     };
-    if (sys_landlock_create_ruleset(NULL, 0, LANDLOCK_CREATE_RULESET_VERSION) < 0)
-        die("landlock unavailable");
+    if (sys_landlock_add_rule(rfd, LANDLOCK_RULE_PATH_BENEATH, &pb, 0) < 0)
+        die("landlock rule");
+    close(fd);
+}
+
+static void lid_landlock(char *const *binds, int nbinds)
+{
+    int abi = sys_landlock_create_ruleset(NULL, 0, LANDLOCK_CREATE_RULESET_VERSION);
+    if (abi < 0) die("landlock unavailable");
+
+    /* Handle every filesystem right the kernel and this header both know, so
+     * anything not granted below is denied. Masked by the ABI the kernel
+     * reports rather than by a version assumed at build time: asking to
+     * handle a right an older kernel does not know is EINVAL. */
+    uint64_t handled =
+        LANDLOCK_ACCESS_FS_EXECUTE     | LANDLOCK_ACCESS_FS_WRITE_FILE |
+        LANDLOCK_ACCESS_FS_READ_FILE   | LANDLOCK_ACCESS_FS_READ_DIR   |
+        LANDLOCK_ACCESS_FS_REMOVE_DIR  | LANDLOCK_ACCESS_FS_REMOVE_FILE|
+        LANDLOCK_ACCESS_FS_MAKE_CHAR   | LANDLOCK_ACCESS_FS_MAKE_DIR   |
+        LANDLOCK_ACCESS_FS_MAKE_REG    | LANDLOCK_ACCESS_FS_MAKE_SOCK  |
+        LANDLOCK_ACCESS_FS_MAKE_FIFO   | LANDLOCK_ACCESS_FS_MAKE_BLOCK |
+        LANDLOCK_ACCESS_FS_MAKE_SYM;
+    if (abi >= 3) handled |= LANDLOCK_ACCESS_FS_TRUNCATE;
+
+    const uint64_t ro = LANDLOCK_ACCESS_FS_EXECUTE
+                      | LANDLOCK_ACCESS_FS_READ_FILE
+                      | LANDLOCK_ACCESS_FS_READ_DIR;
+    const uint64_t rw = (ro
+                      | LANDLOCK_ACCESS_FS_WRITE_FILE
+                      | LANDLOCK_ACCESS_FS_MAKE_REG
+                      | LANDLOCK_ACCESS_FS_MAKE_DIR
+                      | LANDLOCK_ACCESS_FS_MAKE_SYM
+                      | LANDLOCK_ACCESS_FS_MAKE_SOCK
+                      | LANDLOCK_ACCESS_FS_MAKE_FIFO
+                      | LANDLOCK_ACCESS_FS_REMOVE_FILE
+                      | LANDLOCK_ACCESS_FS_REMOVE_DIR
+                      | LANDLOCK_ACCESS_FS_TRUNCATE) & handled;
+
+    struct landlock_ruleset_attr attr = { .handled_access_fs = handled };
     int rfd = sys_landlock_create_ruleset(&attr, sizeof attr, 0);
-    if (rfd < 0)
-        die("landlock ruleset");
+    if (rfd < 0) die("landlock ruleset");
 
-    int pathfd = open(exec_path, O_PATH | O_CLOEXEC);
-    if (pathfd < 0) die("landlock open exec_path");
-    struct landlock_path_beneath_attr pe = {
-        .allowed_access = LANDLOCK_ACCESS_FS_EXECUTE | LANDLOCK_ACCESS_FS_READ_FILE,
-        .parent_fd = pathfd
-    };
-    if (sys_landlock_add_rule(rfd, LANDLOCK_RULE_PATH_BENEATH, &pe, 0) < 0)
-        die("landlock rule exec_path");
-    close(pathfd);
-
-    int devnull = open("/dev/null", O_PATH | O_CLOEXEC);
-    if (devnull < 0) die("landlock open /dev/null");
-    struct landlock_path_beneath_attr pn = {
-        .allowed_access = LANDLOCK_ACCESS_FS_READ_FILE,
-        .parent_fd = devnull
-    };
-    if (sys_landlock_add_rule(rfd, LANDLOCK_RULE_PATH_BENEATH, &pn, 0) < 0)
-        die("landlock rule /dev/null");
-    close(devnull);
+    ll_beneath(rfd, "/", ro);
+    for (int i = 0; i < nbinds; i++)
+        ll_beneath(rfd, binds[i], rw);
 
     if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) < 0)
         die("nnp landlock");
@@ -218,6 +252,10 @@ int main(int argc, char **argv)
     if ((e = getenv("NW_KIND"))) kind = (unsigned)atoi(e);
     const char *brick = getenv("NW_BRICK");
     if (brick && !brick[0]) brick = NULL;
+    /* Landlock grants beneath the house's root, which is only a restriction
+     * if that root is a brick. nw-check returns NW_E_LLBRICK; re-checked here
+     * because nw-sup reads its unit from the environment. */
+    if ((lids & NW_LID_LANDLOCK) && !brick) die("landlock without brick");
     char *binds[NW_MAX_BINDS];
     int nbinds = 0;
     if (brick) {
@@ -262,7 +300,7 @@ int main(int argc, char **argv)
             if (lids & NW_LID_NEWNET) lid_netns();
             if (lids & NW_LID_NEWNS) lid_newns();
             if (brick) lid_brick(brick, binds, nbinds);
-            if (lids & NW_LID_LANDLOCK) lid_landlock(path);
+            if (lids & NW_LID_LANDLOCK) lid_landlock(binds, nbinds);
             if (lids & NW_LID_SECCOMP) {
                 if (nw_apply_house_seccomp() < 0) die("house seccomp");
                 say("lid seccomp");

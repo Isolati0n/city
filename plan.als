@@ -35,6 +35,10 @@ fact brickNeedsNewNS { all h: House | some h.brick => NewNS in h.lids }
    root to bind into (NW_E_BINDIDX). */
 fact bindsNeedBrick { all h: House | some h.binds => some h.brick }
 
+/* Landlock grants beneath the house's root, which is a restriction only when
+   that root is a brick (NW_E_LLBRICK). */
+fact landlockNeedsBrick { all h: House | Landlock in h.lids => some h.brick }
+
 fact namesAreHouses { #House >= 1 }
 
 /* Derived budget: 8 reserved + 2 per house. One constant. */

@@ -18,6 +18,7 @@
  */
 #define _GNU_SOURCE
 #include <dirent.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -91,6 +92,25 @@ static void report_fds(void)
     printf("%s fds_ge3=%d\n", me, n);
 }
 
+/* Try to create a file and say what happened. This is how confinement is
+ * demonstrated rather than asserted: under the landlock lid the house's own
+ * brick is read-only and a declared bind is not, so the two answers must
+ * differ. A test that only proves the house started proves nothing about
+ * what it can touch. */
+static void report_write(const char *key, const char *dir)
+{
+    char p[512];
+    snprintf(p, sizeof p, "%s/probe.tmp", dir);
+    int fd = open(p, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    if (fd < 0) {
+        printf("%s %s=denied(%d)\n", me, key, errno);
+        return;
+    }
+    ssize_t w = write(fd, "x", 1);
+    close(fd);
+    printf("%s %s=%s\n", me, key, w == 1 ? "ok" : "openonly");
+}
+
 int main(int argc, char **argv)
 {
     /* nw-sup execs a house with argv[0] set to its unit name and nothing
@@ -108,6 +128,8 @@ int main(int argc, char **argv)
         snprintf(p, sizeof p, "%s/token", b);
         report_file("bind", p);
     }
+    report_write("wr_root", "");        /* "/probe.tmp" -- its own brick */
+    if (b && b[0]) report_write("wr_bind", b);
     fflush(stdout);
     return 0;
 }

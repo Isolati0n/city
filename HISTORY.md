@@ -1489,6 +1489,13 @@ machine boots is how the boot half stayed unbuilt without anyone noticing, so:
 this is a known divergence, and the fix is to restructure `make stage` to
 mirror `/nw` and `/efi` rather than to add more tests against the flat shape.
 
+> **CORRECTION 2026-09-10:** `command -v mkfs.vfat` succeeds in this
+> container. Either it was always there and the claim below was never
+> checked, or the image changed; either way the stated *reason* for the ESP
+> being ext4 is false today, and the FAT gap is now untested for no current
+> reason. The suite's `print_environment()` reports `mkfs.vfat` on every run
+> so this cannot go stale again silently.
+
 Two things the test still does not cover: the ESP is **ext4, not vfat**,
 because `mkfs.vfat` is not available in this container — so FAT's missing
 execute bit, ownership and 4 GiB cap are untested assumptions, not verified
@@ -1857,3 +1864,116 @@ descriptors on the floor with no error. `NW_FD_SWEEP` is now derived in
 covers the whole legal range, and overflowing the collection is a `die()`
 rather than a silent drop. Limits are derived, never declared twice
 (invariant 3); this class has now been killed five times.
+
+## 26. The Landlock lid had never worked — 2026-09-10
+
+§25 made an unappliable lid fatal. That change is what exposed this: on a
+kernel that **has** Landlock, the lid applies and then the house cannot start.
+
+```
+[nw-sup] lid landlock
+[nw-sup] FAIL exec house errno=13        (EACCES)
+```
+
+`unit-probe` is a dynamically linked PIE. It needs
+`/lib64/ld-linux-x86-64.so.2` and `/lib/x86_64-linux-gnu/libc.so.6`. The
+ruleset granted `EXECUTE|READ_FILE` on the exec path and `READ_FILE` on
+`/dev/null`, and nothing else, so the loader was unreadable and `execv` failed
+before the house ran a line.
+
+**The lid had never worked, in any environment, and nothing noticed** — every
+machine it was exercised on lacked Landlock, so it always took the
+`unavailable` early return. The container this was developed in reports
+`ENOSYS` from `landlock_create_ruleset`; the operator's clone reports ABI 7.
+Same code, opposite results, and the failing environment is the one closer to
+the target machine, which runs 6.18 and will have Landlock.
+
+This is the characteristic failure in its purest form: a confinement feature
+that claimed to work, was never run where it applies, and granted too little
+to start anything.
+
+### The decision: this lid is for a house in a brick
+
+The answer changes what the rules must grant, so it is taken deliberately
+rather than patched around.
+
+A dynamically linked house needs its loader and libraries readable and
+executable. Enumerating those paths in `nwsup.c` would be a list of guessed
+constants in the TCB — the fixed-descriptor-number class in a third costume.
+A house in a brick needs no such list, because **a brick carries its own
+loader and libraries**.
+
+So: grant read and execute beneath the house's own root. `lid_landlock` runs
+after the brick pivot, so `/` is the brick, and any linkage works by
+construction.
+
+What remains is write. Nothing grants write beneath the root, so **a house
+cannot write into its own brick** — a property the mount namespace never gave
+us, and the seal a content-addressed brick is supposed to have. Declared binds
+get read *and* write: the plan already says which paths are the house's to
+modify, so the bind table is the policy input and nothing is invented. Device
+nodes stay uncreatable even in a bind (`MAKE_CHAR` and `MAKE_BLOCK` are
+handled and never granted). The handled set is masked by the ABI the kernel
+reports rather than by a version assumed at build time.
+
+**`landlock` now requires `brick`.** Without one, `/` is the machine root and
+granting read and execute beneath it confines nothing — a lid that decides
+nothing while claiming to, which is exactly what was just removed.
+`NW_E_LLBRICK`, refused by the baker and by `nwcheck.c` independently. This
+forecloses using Landlock on a machine-rooted house; reversing it means
+deciding what such a house may read, which the plan has no field for.
+
+The `/dev/null` rule is gone. Reading it is covered by the root grant, and
+the init already hands the house `/dev/null` on descriptor 0 — an open
+descriptor is not affected by a later ruleset. A house needing a *writable*
+`/dev/null` declares a bind. This also removes the trap §25 introduced, where
+a brick house wearing landlock had to carry `/dev/null` inside its brick.
+
+### The test that did not exist
+
+`test_landlock_confines` asserts three things in one boot: the house started
+(it can read and execute its own brick), it can write a path the plan declared
+as a bind, and it **cannot** write its own brick. The third is the
+confinement. Without it this is a test that a house started, which proves
+nothing about what it can touch — and a test that only proves the house
+started is what would have let the old ruleset through if it had ever run.
+
+**UNVERIFIED HERE.** This container reports `ENOSYS`, so the redesigned
+ruleset has not been executed on any kernel. The test skips loudly rather than
+passing, and the fix must be confirmed on a machine with Landlock before it is
+believed. Saying so is the point: the previous version of this feature was
+believed for its whole life on exactly this evidence.
+
+### The process defect underneath
+
+A green suite was reported for a commit whose feature could not execute in the
+environment that produced the green line. That is worse than the bug: it means
+suite output was not evidence about anything kernel-dependent, and nobody
+could tell from the output which parts were real.
+
+`tests/run.py` now prints `print_environment()` before the first test —
+Landlock ABI, `mkfs.vfat`, `losetup` — and `skip(name, why)` records a test
+the environment cannot exercise. **When anything is skipped the suite refuses
+to print `ALL TESTS PASSED`**, printing `PASSED, WITH SKIPS` and naming each
+one instead. A skipped test is not a passing test.
+
+### Audit: what else passes because something was unavailable
+
+Asked for and done. Two more of the shape, both fixed here:
+
+- **`seccomp-kill`** asserted only that `badcall survived` was *absent*. That
+  is also true when the house never ran — for any reason, including the filter
+  never being applied. It now asserts `badcall started` first, so the pair
+  means the filter did the killing.
+- **`kind-exit0`** asserted `restart quitter` absent, which is likewise true
+  if `quitter` never ran. It now asserts `house exit quitter` first.
+
+Not the shape, checked: `crash-does-not-halt` and `kind-exit0`'s longrun half
+pair their `HALT`-absent assertions with positive ones; `dawn-real-boot` uses
+`check=True` on `losetup` and `mkfs.ext4`, so a missing tool errors rather
+than passing; `fuzz-200`'s "nothing accepted" is preceded by the difftest
+proving `nw-check` accepts a good blob.
+
+One environment claim was itself false: §21 says the ESP is ext4 "because
+`mkfs.vfat` is not available in this container". It is available. That section
+is corrected in place, and `print_environment()` reports it every run.

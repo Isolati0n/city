@@ -98,7 +98,8 @@ enum {
     NW_E_BRICKNS = 12,
     NW_E_BINDS = 13,
     NW_E_BINDIDX = 14,
-    NW_E_BINDPATH = 15
+    NW_E_BINDPATH = 15,
+    NW_E_LLBRICK = 16
 };
 
 const char *nw_errstr(int e);

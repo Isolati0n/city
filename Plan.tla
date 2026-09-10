@@ -10,6 +10,7 @@ VARIABLES n, kind, lids, brick, binds
 N == n
 
 LidNewNS == 4
+LidLandlock == 2
 
 FdNeed == Reserved + 2 * n
 
@@ -29,6 +30,11 @@ TypeOK ==
    the pivot repoints the machine's root. nwcheck.c returns NW_E_BRICKNS. *)
 BrickNeedsNewNS ==
   \A i \in 1..n : brick[i] # "" => LidNewNS \in lids[i]
+
+(* Landlock grants beneath the house's root; only a restriction when that
+   root is a brick. nwcheck.c returns NW_E_LLBRICK. *)
+LandlockNeedsBrick ==
+  \A i \in 1..n : LidLandlock \in lids[i] => brick[i] # ""
 
 (* No root, nothing to bind into. nwcheck.c returns NW_E_BINDIDX. *)
 BindsNeedBrick ==

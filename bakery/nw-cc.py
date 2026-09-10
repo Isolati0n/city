@@ -62,6 +62,13 @@ def check(houses, binds):
                 "component")
         if not h["name"] or not h["name"].replace("-", "x").replace("_", "x").isalnum():
             raise SystemExit("name")
+        # Landlock grants beneath the house's root; that is only a
+        # restriction when the root is a brick.
+        if (h["lids"] & LID_LANDLOCK) and not h["brick"]:
+            raise SystemExit(
+                f"house {h['name']}: lids=...,landlock needs brick=; on the "
+                "machine root the lid grants read and execute beneath / and "
+                "confines nothing")
         if h["brick"]:
             if not path_clean(h["brick"]):
                 raise SystemExit(

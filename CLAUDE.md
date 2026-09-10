@@ -91,6 +91,14 @@ sections after this one and are deliberately not numbered here.
    There is **one** allow-list and a house does not choose it; the second
    profile that briefly existed is `HISTORY.md` §23.
 
+   **The Landlock lid is for a house in a brick**, and requires one
+   (`NW_E_LLBRICK`). It grants read and execute beneath the house's own root
+   — which is the brick, since it runs after the pivot — so any linkage works
+   without a list of library paths guessed at in the TCB. Nothing grants write
+   beneath the root, so a house cannot write into its own brick; declared
+   binds get read and write, which makes the bind table the policy input.
+   `HISTORY.md` §26.
+
    **Lids are not advisory.** If a declared lid cannot be applied, that house
    does not start: every lid path in `nwsup.c` ends in `die()`, never in a log
    line and a return. A house that runs unconfined while the plan says it is
@@ -286,6 +294,13 @@ been seen failing is a test that has never been tested.
 
 Two corollaries worth stating, because both have been got wrong:
 
+- **A green suite is evidence only against a stated environment.** The
+  Landlock lid never worked, in any environment, for its whole life: every
+  machine it ran on lacked Landlock, so it took an early return and the suite
+  printed green. `tests/run.py` prints `print_environment()` before the first
+  test and refuses to print `ALL TESTS PASSED` when anything was skipped.
+  **Report that block whenever you report a suite result** — and never report
+  a green line as evidence about a feature the machine cannot execute.
 - **A control that passes is not good news.** It means the test is bad, or the
   control is. The first control on `brick-is-a-root` passed because the suite
   runs staged binaries and `make` alone had not restaged — the harness was
