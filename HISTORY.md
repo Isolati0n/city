@@ -636,9 +636,17 @@ formula until that item is fixed, or the two defects compound and the
 validator does cycle detection and describes optimising it with a counting-sort
 adjacency index. A search for `cycle|acyclic|topolog` across every `.c`, `.h`,
 `.py`, `.als` and `.tla` in the tree returns **nothing**. Cycle detection exists
-in neither the checker nor the baker. Section 6 should not be cited as
-precedent until that discrepancy is resolved — either it was removed, or the
-claim was never accurate.
+in neither the checker nor the baker.
+
+**Section 6 is deliberately left as written.** Neither the author of this note
+nor the operator can tell whether the check was implemented and later removed,
+or whether the claim was never accurate. Editing section 6 would erase the
+evidence that the two disagree, and the disagreement is the useful artifact: it
+means at least one statement in the historical record about what the TCB does
+was wrong at some point, and nothing caught it. Recorded here as a live
+documentation defect rather than repaired silently. Do not cite section 6 as
+precedent for a baker-only check until it is resolved, and resolve it by
+determining which of the two is true rather than by making them agree.
 
 **Second, the structural blocker.** `struct nw_edge` is `{uint16_t a; uint16_t
 b;}` — no direction, no capability label. Duplicate detection normalises to
@@ -691,12 +699,117 @@ Granting that direction is added, the genuinely baker-only checks are:
   either baking a new slot at UI rates or letting layout lag. Two artifacts —
   a KEEP referencing a layout blob by hash — keeps the blob CRC meaningful.
 
-### If it proceeds
+### App-broker death — settled
+
+Both horns, then a recommendation, because this gates everything else.
+
+**Fatal.** Preserves one rule for all brokers with no exception to remember, and
+makes split-brain structurally impossible: if everything the broker wired dies
+with it, no survivor holds an orphaned descriptor.
+
+It fails on a premise check. The electrician *earns* halt-on-death because it is
+**inert after startup** — seccomp'd down to `pause`, `rt_sigreturn`,
+`exit_group`, with zero `wait`, `waitpid` or budget arithmetic remaining. Its
+death is therefore nearly impossible and genuinely exceptional, so treating it
+as fatal costs almost nothing. An app broker is the exact inverse: long-lived,
+interactive, servicing UI events, mutating a graph live. It cannot be inert and
+stay responsive. Applying halt-on-death to a process with the opposite
+characteristics copies the electrician's *conclusion* while discarding its
+*premise*. The result is the worst combination available — the component most
+likely to crash, given the most catastrophic death semantics. A desktop that
+loses every running app because the wiring canvas segfaulted is not a desktop.
+
+**Not fatal, reconstruct from the KEEP.** Survives the crash, and gives up
+nothing that was actually held: the KEEP already is a second copy of the graph,
+so the "only copy" property is gone by construction the moment a KEEP exists.
+
+Naively it is unsound, and for a reason sharper than the usual split-brain
+argument. Surviving apps hold descriptors minted by the dead broker. A
+replacement either mints fresh socketpairs for the same logical edge — leaving
+each app holding one end of a *different* pair, so messages go nowhere, silently
+— or it trusts the KEEP and never verifies, in which case its table describes
+connections it cannot confirm. **And the deeper problem: to re-wire a surviving
+app the broker must pass it a descriptor, which requires a control channel to
+that app — a channel the dead broker created.** Reconstruction from the KEEP
+does not restore the means of reconstruction.
+
+**What the dilemma actually turns on.** "Only copy of the connection graph" was
+never the real reason; it is a proxy for **undetectability**. The electrician's
+death is unrecoverable because a replacement has no way to learn what survivors
+hold and no channel by which to correct them. The property that matters is the
+absence of a re-adoption mechanism, not the uniqueness of the graph. That
+distinction is what makes the two brokers genuinely different rather than
+analogous: the electrician has no such mechanism and could not easily be given
+one; the app broker can be built with one from the start.
+
+**Recommendation: non-fatal, conditional on two things, and unsound without
+both.**
+
+1. **Control channels provisioned by the system plane, not the app broker.**
+   Each app gets a control socket created at boot by PID 1 or its supervisor and
+   handed to the app broker. Its lifetime is independent of the broker, so a
+   replacement receives the same channels and can reach every surviving app. The
+   system plane's static provisioning is what makes the app plane's dynamic
+   wiring recoverable — non-provision is preserved for the channel that matters.
+2. **Apps must support rebinding an edge descriptor at runtime.** A restarted
+   broker *replaces* descriptors rather than assuming the old ones, which is
+   what defeats split-brain. This is not a new burden: a live wiring canvas
+   already means an app's edges can change while it runs, so any app fit for
+   this plane must handle rebind regardless. Section 5 and `supervisor.md`
+   already treat rebinding as cheap and available.
+
+With both, the app broker holds no unrecoverable state: the graph is in the
+KEEP, the channels come from the system plane, and descriptors are replaceable.
+Restart is then sound and the halt rule correctly does not transfer. With
+either missing, restart reproduces exactly the failure `electrician.md`
+describes, in the plane where halting is least acceptable — so *plain*
+"non-fatal, reconstruct from the KEEP" as proposed is rejected.
+
+Corollary worth stating: the app broker is not analogous to the electrician and
+should inherit none of its rules by default. Each rule must be re-derived from
+the app broker's own premises. `electrician.md`'s "do not add self-restart"
+applies to the electrician and not here.
+
+### Verdict — direction first, as its own piece of work
+
+Unsoftened: **the two-plane proposal should not proceed as specified, and
+adding direction to the edge record should be a separate piece of work that
+lands first.**
+
+The goal is worth having. The order is wrong, for a reason that is not
+stylistic. With undirected edges the baker can check connectivity and nothing
+else, and on a desktop canvas nearly every app is in one connected component —
+so the answer to almost any confinement question is "yes, connected", which
+is no answer. Effectively every property the app plane is *for* — this app must
+not reach the network, that one must not reach the filesystem service, this
+capability must not flow past that boundary — is directional. Build the
+two-plane machinery on today's `{a, b}` record and you get a doorman, a
+split-brain hazard, a warn-at-save path with almost nothing it can warn about,
+and a background baker whose full validation is barely stronger than the
+broker's local check. That is a large amount of mechanism bought for very little
+checking, and the checking was the entire justification for the two-phase model.
+
+Direction wants to land alone for the ordinary reason: it touches `blob.h`,
+`nwcheck.c`, `bakery/nw-cc.py`, `plan.als`, `Plan.tla`, the electrician's wire
+collection, and the four fd-budget sites. That is a format change across the
+TCB and both specs, and it should be verified on its own evidence rather than
+as a sub-task inside a desktop feature.
+
+Sequence: fix the section 12 `parked[]` item (limits cannot move until the
+formula is honest) → add direction to the edge record as standalone work →
+then reconsider the app plane, with the restart conditions above as
+preconditions rather than open questions.
+
+Direction is **necessary but not sufficient**. It does not touch the invariant 5
+objection: a broker that manufactures edges on request is still a doorman, and
+that remains the strongest argument against the whole shape. Direction makes the
+two-plane model *checkable*; it does not make it *structural*.
+
+### If it proceeds anyway
 
 Narrow the broker's local check to exactly the subset that *guarantees*
 single-edge saveability: name validity, self-edge, duplicate, degree and budget
 headroom. Then only genuinely multi-hop properties can fail late, the warn path
 covers a small well-defined set, and "the edge responsible" is usually
 meaningful because it is the edge that closed a cycle or crossed a confinement
-boundary. Settle app-broker death semantics and the restart split-brain question
-before any of it, because that one has no answer in the current design.
+boundary.
