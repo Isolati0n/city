@@ -12,9 +12,9 @@ One supervisor per unit. TCB.
 ## Lids
 
 `lids.c` builds the house seccomp filter as a linear allow-list ending in
-`SECCOMP_RET_KILL_PROCESS`, after `PR_SET_NO_NEW_PRIVS`. Both the Rust and C
-spellings call `nw_apply_house_seccomp()` — one table, not two. Keep it that
-way; a second copy is a drift bug waiting to happen.
+`SECCOMP_RET_KILL_PROCESS`, after `PR_SET_NO_NEW_PRIVS`. `nwsup.c` calls
+`nw_apply_house_seccomp()` — one table, not two. Keep it that way; a second
+copy is a drift bug waiting to happen.
 
 **This was aspirational when written, and is now true.** Until 2026-09-09 the
 C twin did not call into `lids.c` at all: `nwsup.c` defined its own
