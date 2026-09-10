@@ -8,7 +8,7 @@ model: inherit
 You own the put-together suite and the fixture houses. Not in the TCB.
 
 Fixtures: `unit-probe` (reports its kit/descriptor count), `unit-talk` and
-`unit-listen` (PING across a real wire), `unit-boom` (crashes, to exercise the
+`unit-boom` (crashes, to exercise the
 critical-unit HALT), `unit-badcall` (issues a forbidden syscall, to prove
 seccomp kills it).
 

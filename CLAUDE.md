@@ -36,14 +36,21 @@ live in the baker instead, does.
    successful termination is the completion signal, not something to watch
    for. Spawning is boot-time only: PID 1 has no respawn path and restart
    budgets live in `nw-sup`. Do not give the spawner a mid-life.
-5. **A unit holds nothing above stderr.** `/dev/null` on 0, its own log pipe on
-   1 and 2, and `close_others` sweeps the rest. There is nothing a unit is
-   supposed to be handed beyond those. (Until 2026-09-10 this read "wiring is
-   non-provision, not enforcement" and concerned declared edges; edges were
-   removed — see `HISTORY.md` §17.)
-6. **Isolation of units is by lids, not by topology.** Seccomp, Landlock and
-   namespaces are applied per unit by `nw-sup` before `execv`. Cybersecurity is
-   not a goal of this system; containerization applies to apps.
+5. **The init provisions nothing.** Every house gets `/dev/null` on 0 and its
+   own log pipe on 1 and 2. `close_others` sweeps the rest. There is no third
+   thing, and no mechanism for granting one. (This replaces the pre-2026-09-10
+   statement "wiring is non-provision, not enforcement", which concerned
+   declared edges. Edges are erased permanently — `HISTORY.md` §17.)
+6. **Lids are the only thing that decides what a house can touch.** Seccomp,
+   Landlock and namespaces are applied per unit by `nw-sup` before `execv`.
+   Cybersecurity is not a goal; containerization applies to apps.
+
+   The honest consequence, recorded because it is load-bearing: **reachability
+   has moved out of the sealed plan and into the lid set.** A `lids=none` house
+   can open its own socket — nothing structural stops it. `__NR_socket` is
+   absent from the `lids.c` allow-list, so a `lids=seccomp` house is killed for
+   trying, and that is a live test. The plan no longer says what a house can
+   reach; only its lids do.
 7. **Authoritative state never auto-restarts on an integrity fault.**
 8. **The live city does not grow verbs.** A new plan is a new slot (A/B), never
    an in-place rewrite. This is now an operational rule only: `NoLiveRewrite`

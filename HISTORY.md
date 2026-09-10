@@ -963,3 +963,136 @@ that was correct and still led somewhere that got deleted. Section 16 concluded
 that undirected edges could not support the app plane, and that conclusion is
 part of why edges are gone. A record that only contains decisions which
 survived is not a history, it is a brochure.
+
+---
+
+## 18. Consequences of §17 — 2026-09-10
+
+§17 stands permanently. Edges are erased from the design; they are not under
+review and are not to be reintroduced. This section records what that decision
+discharges, what it breaks, and what it leaves as the product.
+
+### The replacement statement
+
+The old formulation — "wiring is non-provision, not enforcement; a unit with no
+declared edges receives zero descriptors" — described a mechanism that no
+longer exists. It is replaced by:
+
+> **The init provisions nothing.** Every house gets `/dev/null` on 0 and its
+> own log pipe on 1 and 2. There is no third thing and no mechanism for
+> granting one. **What a house can reach is decided entirely by its lids.**
+
+What was removed in §17 was *provisioned* IPC — declared edges becoming
+socketpairs placed in a kit. That is narrower than "all IPC", and the
+difference is load-bearing:
+
+- A `lids=none` house **can open its own socket.** Nothing structural prevents
+  it and nothing sweeps it afterwards.
+- `__NR_socket` is absent from the `lids.c` allow-list, so a `lids=seccomp`
+  house is killed for trying. That is a live test (`seccomp-kill`).
+- Therefore **reachability has moved out of the sealed plan and into the lid
+  set.** The plan used to say what a house could reach. It no longer says
+  anything about reachability; only the lids do.
+
+This is a real transfer of authority from an offline, validated artifact to a
+runtime filter, and it runs against the project's own preference for putting
+decisions in the baker. It is recorded rather than argued because the premise
+behind it — cybersecurity is not a goal — was settled outside this document.
+
+### Decision #3 (fd allocator before isolation growth) — DISCHARGED
+
+The gate existed because edges and fixed descriptor bases collided: bugs 5, 9
+and 13 were all `BASE + i` arithmetic meeting dynamically allocated
+descriptors. With no edges there are no socketpairs, no `parked[]`, no edge
+range, and no `NW_WIRE_<fd>` numbering. `pack_kit` is now `/dev/null` on 0 and
+a log pipe on 1 and 2, with **no descriptor arithmetic of any kind**.
+
+There is no allocator problem left, so there is no gate. **All lid work is
+unblocked as of 2026-09-10.** Do not reintroduce #3 as a precondition for
+Landlock, namespace, cgroup or any other isolation work.
+
+### H1 (opaque kits) — RETIRED
+
+H1 required that a house never learn an absolute fd number for anything in its
+kit. There is no kit content left to be opaque about: fds 0, 1 and 2 are fixed
+by POSIX convention and known to every process that has ever run. **Retired,
+not satisfied** — the requirement has no subject. Do not reintroduce it as a
+constraint on future handle work without restating what it would protect.
+
+### Defect — `critical=1` halts the city on success
+
+`pid1.c:79` acts on the critical flag on any reap, without testing exit
+status:
+
+```c
+if (!shutting_down && houses[i].critical)
+    halt_now("critical house");
+```
+
+Measured, not reasoned. Control matrix, `--hold-ms 700`, two-unit plans:
+
+| unit | exit | critical | result |
+|---|---|---|---|
+| `/bin/true` | 0 | 1 | **rc=70, `HALT: critical house`** |
+| `/bin/true` | 0 | 0 | rc=0, no halt |
+| `/bin/false` | 1 | 1 | rc=70, `HALT: critical house` — intended |
+| `/bin/false` | 1 | 0 | rc=0, no halt |
+
+The boot log makes the omission plain, printing the status it does not use:
+
+```
+[nw-root] house exit done status=0
+[nw-root] HALT: critical house
+```
+
+So `critical` does not mean "halt if this unit fails". It means **"halt when
+this unit terminates, for any reason"**. A critical oneshot cannot exist: any
+unit that legitimately completes takes the city down with it. Not fixed here —
+recorded, with the reproduction above.
+
+Note the interaction with the supervisor: `nwsup.c` exits 0 when its house
+exits 0, *before* consulting `critical`, so the supervisor is correct and PID 1
+is the sole source of this behaviour.
+
+### Open item — `critical` versus decision #14 (unresolved)
+
+[UNVERIFIED] Decision #14 is reported to have removed the critical bit from
+houses. In this repository `critical` is live: it is in `struct nw_unit`,
+validated by `nwcheck.c` (`NW_E_CRIT`), acted on by `pid1.c`, and asserted by a
+**passing `critical-halt` test**.
+
+Either this repository predates #14, or #14 is not in force. **Not resolved
+here, deliberately.** The point worth flagging: a green test currently enforces
+the opposite of what is reported to be a locked decision, so the suite is
+defending a retired feature or the decision register is stale. One of those is
+true and neither is visible from inside this repo.
+
+Separately, and independent of #14: `critical` is a **per-unit policy fixed at
+bake time**. Even where it works as intended it cannot distinguish "this death
+was a corruption fault" from "this death was an ordinary crash". That is the
+reason it cannot serve as a do-not-restart channel — a better reason than #14,
+and one that survives however #14 resolves.
+
+### What is left is supervision, and it does not exist
+
+With edges gone the init's whole job is: validate a sealed plan, spawn N
+supervised processes with lids, reap, halt. Everything distinctive that remains
+is inside the word *supervised*.
+
+Grep across every `.c`, `.h`, `.py`, `.als` and `.tla` for
+`heartbeat|deadline|liveness|readiness|ready|watchdog|alive|ping`: **one hit,
+the word "alive" in a prose comment.** There is no supervision machinery of any
+kind.
+
+Three measured gaps, all now product-level rather than incidental:
+
+1. **A house that goes silent but never exits is invisible.** No timeout, no
+   heartbeat, no readiness. `nw-sup` blocks in `waitpid` forever.
+2. **Exit 66 and exit 99 are handled byte-identically** — both nonzero, both
+   non-critical, both restarted up to `budget` within `window_s`. A house
+   reporting corruption is restarted straight back into the corrupt state.
+3. **The `critical` exit-0 halt above.**
+
+A week ago these were gaps around the edges of a system whose distinctive claim
+was the connection graph. That claim is gone. These three are now the whole of
+what makes this an init rather than a fork loop.

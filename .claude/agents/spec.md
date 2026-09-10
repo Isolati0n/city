@@ -33,7 +33,7 @@ does it violate, or does it violate none? Say "none" when that is true — do no
 manufacture an objection.
 
 Be honest about the limits of these files. They are small, the Alloy scope is
-8 houses and 16 wires, `Plan.tla` has no real next-state relation, and
+8 houses, `Plan.tla` has no real next-state relation, and
 what remains is a type predicate no behaviour is checked against. If
 someone treats a passing check here as evidence the implementation is correct,
 correct them. The specs constrain the *plan format*; they say nothing about

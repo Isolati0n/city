@@ -1,6 +1,6 @@
 ---
 name: fd-auditor
-description: Read-only adversarial reviewer for the recurring failure class in this codebase — fixed descriptor numbers alongside dynamic allocation, descriptor leaks, CLOEXEC, and range collisions. Use proactively after any change that touches fds, dup2, socketpair, pipe, exec or the blob layout, and before merging TCB changes.
+description: Read-only adversarial reviewer for the recurring failure class in this codebase — fixed descriptor numbers alongside dynamic allocation, descriptor leaks, CLOEXEC, and range collisions. Use proactively after any change that touches fds, dup2, pipe, exec or the blob layout, and before merging TCB changes.
 tools: Read, Grep, Glob, Bash
 model: inherit
 ---
@@ -39,7 +39,7 @@ large N.
 1. Any literal or `#define`d fd number, any `BASE + i` arithmetic. Compute the
    N at which it collides with a neighbouring range and state that number.
 2. `dup2` where source may equal destination.
-3. `CLOEXEC` set at creation (`socketpair` with `SOCK_CLOEXEC`, `pipe2`,
+3. `CLOEXEC` set at creation (`pipe2`,
    `O_CLOEXEC`), and cleared deliberately only for descriptors meant to survive
    `exec`.
 4. `close_others` / `/proc/self/fd` sweeps: is the `keep` list exactly right?
