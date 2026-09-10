@@ -1,11 +1,11 @@
 # Build products. The Makefile writes binaries into the repo root and stages
 # them to /tmp/nw-init-run; none of it belongs in git.
+#
+# Patterns, not a name list: this file previously enumerated each binary and
+# fell behind twice when new targets were added (nw-dawn and unit-term).
+# Every TCB binary is nw-* and every fixture is unit-*, while every source is
+# nwcheck.c / nwspawn.c / nwsup.c / unit_probe.c -- underscores, no hyphen --
+# so these patterns catch the products and no source.
 *.o
-nw-root
-nw-spawn
-nw-check
-nw-sup
-nw-rescue
-unit-probe
-unit-boom
-unit-badcall
+nw-*
+unit-*
