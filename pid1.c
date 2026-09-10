@@ -177,11 +177,52 @@ static int run_rescue(const char *slot)
     _exit(WIFEXITED(st) ? WEXITSTATUS(st) : 3);
 }
 
+/* Read the live slot name from <slots>/current and build that slot's path.
+ *
+ * This is the one place PID 1 reads text, and it is at boot, in the same
+ * phase as loading the blob -- not "after start", which is what invariant 1
+ * forbids. It is bounded and validating rather than parsing: at most
+ * NW_NAME_LEN bytes, and every byte must be in [A-Za-z0-9_-]. A name with a
+ * slash or a dot cannot get through, so the result cannot escape <slots>.
+ *
+ * Justified per the TCB rule because the alternative is worse: before this,
+ * slots/current was written by `make stage` and read by nothing, while PID 1
+ * took --slot from argv. Two sources of truth with one ignored is the shape
+ * behind several past bugs, and it made A/B a directory layout rather than a
+ * mechanism. PID 1 mounts nothing here and still learns nothing about
+ * filesystems -- it opens a path it was handed. */
+static int slot_from_current(const char *slots, char *out, size_t outsz)
+{
+    char cur[512];
+    if (snprintf(cur, sizeof cur, "%s/current", slots) >= (int)sizeof cur)
+        return -1;
+    int fd = open(cur, O_RDONLY);
+    if (fd < 0) return -1;
+    char nm[NW_NAME_LEN];
+    ssize_t n = read(fd, nm, sizeof nm - 1);
+    close(fd);
+    if (n <= 0) return -1;
+    /* trim trailing newline or space; make_stage writes "A\n" */
+    while (n > 0 && (nm[n - 1] == '\n' || nm[n - 1] == '\r' || nm[n - 1] == ' '))
+        n--;
+    if (n <= 0) return -1;
+    nm[n] = 0;
+    for (ssize_t i = 0; i < n; i++) {
+        char c = nm[i];
+        int ok = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')
+              || (c >= '0' && c <= '9') || c == '_' || c == '-';
+        if (!ok) return -1;
+    }
+    if (snprintf(out, outsz, "%s/%s", slots, nm) >= (int)outsz) return -1;
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     int hold_ms = 800;
     const char *plan = NULL;
     const char *slot = NULL;
+    const char *slots = NULL;
     const char *rescue = NULL;
     int kill_spawner_test = 0;
 
@@ -192,18 +233,38 @@ int main(int argc, char **argv)
             kill_spawner_test = 1;
         else if (!strcmp(argv[i], "--slot") && i + 1 < argc)
             slot = argv[++i];
+        else if (!strcmp(argv[i], "--slots") && i + 1 < argc)
+            slots = argv[++i];
         else if (!strcmp(argv[i], "--rescue") && i + 1 < argc)
             rescue = argv[++i];
         else if (argv[i][0] != '-')
             plan = argv[i];
     }
 
-    if (rescue && !plan && !slot)
+    if (rescue && !plan && !slot && !slots)
         return run_rescue(rescue);
+
+    /* Precedence, most explicit first, and it is deliberate:
+     *   --plan FILE   an exact blob; wins over everything.
+     *   --slot DIR    an exact slot directory; overrides the live slot.
+     *   --slots DIR   the normal boot path: DIR/current names the live slot.
+     * dawn passes --slots. --slot survives only as an explicit override for
+     * the harness and for rescue, and when both are given --slot wins so that
+     * an operator can boot a slot that is not the current one without
+     * rewriting the file that records which slot is current. */
+    char slotbuf[384];
+    if (!plan && !slot && slots) {
+        if (slot_from_current(slots, slotbuf, sizeof slotbuf) < 0)
+            halt_now("slots/current");
+        slot = slotbuf;
+        say("live slot", slot);
+    }
 
     char planbuf[512];
     if (slot && !plan) {
-        snprintf(planbuf, sizeof planbuf, "%s/plan.blob", slot);
+        if (snprintf(planbuf, sizeof planbuf, "%s/plan.blob", slot)
+            >= (int)sizeof planbuf)
+            halt_now("slot path too long");
         plan = planbuf;
     }
     if (!plan) halt_now("no plan");
@@ -328,7 +389,7 @@ int main(int argc, char **argv)
 
     {
         char b[96];
-        snprintf(b, sizeof b, "houses=%u slot=%s",
+        snprintf(b, sizeof b, "houses=%u slot=%.63s",
                  n_houses, slot ? slot : "-");
         say("city open", b);
     }

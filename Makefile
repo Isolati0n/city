@@ -1,5 +1,5 @@
 # Linux city TCB:
-#   PID 1, nw-spawn, nw-check, rescue = C
+#   dawn, PID 1, nw-spawn, nw-check, rescue = C
 #   nw-sup = nwsup.c + lids.c
 #   baker = Python, offline
 # `make test` stages to /tmp/nw-init-run.
@@ -8,7 +8,10 @@ CC = gcc
 CFLAGS = -Wall -Wextra -O2 -g -std=gnu11
 STAGE = /tmp/nw-init-run
 
-all: nw-root nw-spawn nw-check nw-sup nw-rescue unit-probe unit-boom unit-badcall unit-term
+all: nw-dawn nw-root nw-spawn nw-check nw-sup nw-rescue unit-probe unit-boom unit-badcall unit-term
+
+nw-dawn: dawn.c
+	$(CC) $(CFLAGS) -o $@ dawn.c
 
 nw-root: pid1.c nwcheck.c blob.h
 	$(CC) $(CFLAGS) -o $@ pid1.c nwcheck.c
@@ -42,7 +45,7 @@ unit-term: houses/term.c
 
 stage: all
 	mkdir -p $(STAGE)/slots/A $(STAGE)/slots/B $(STAGE)/slots/rescue
-	cp -f nw-root nw-spawn nw-check nw-sup nw-rescue \
+	cp -f nw-dawn nw-root nw-spawn nw-check nw-sup nw-rescue \
 	      unit-probe unit-boom unit-badcall unit-term $(STAGE)/
 	chmod +x $(STAGE)/*
 	python3 bakery/nw-cc.py --probe $(STAGE)/unit-probe --out $(STAGE)/slots/A/plan.blob --lids seccomp
@@ -58,6 +61,6 @@ test: stage
 	python3 tests/run.py
 
 clean:
-	rm -f lids.o nw-root nw-spawn nw-check nw-sup nw-rescue \
+	rm -f lids.o nw-dawn nw-root nw-spawn nw-check nw-sup nw-rescue \
 	      unit-probe unit-boom unit-badcall unit-term
 	rm -rf $(STAGE)

@@ -168,6 +168,109 @@ def test_kind_exit0():
     print("ok kind-exit0")
 
 
+def test_dawn_real_boot():
+    """The real boot path, not the staged one: dawn mounts genuine ext4
+    filesystems on loop devices, pivot_roots into them, mounts the kernel
+    filesystems plus tmpfs and cgroup2, and execs nw-root -- which reads
+    /efi/slots/current to learn which slot is live.
+
+    This is the only test that exercises mount(2), pivot_root(2) or the
+    /nw and /efi layout at all. Everything else in this suite runs against
+    the flat staged directory under /tmp."""
+    lab = f"{STAGE}/dawnlab"
+    subprocess.run(["rm", "-rf", lab], check=False)
+    os.makedirs(f"{lab}/mr"); os.makedirs(f"{lab}/me")
+    loops = []
+    try:
+        for name, mb in (("root", 48), ("esp", 16)):
+            img = f"{lab}/{name}.img"
+            subprocess.run(["dd", "if=/dev/zero", f"of={img}", "bs=1M",
+                            f"count={mb}"], check=True,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.run(["mkfs.ext4", "-q", img], check=True)
+            dev = subprocess.run(["losetup", "--find", "--show", img],
+                                 capture_output=True, text=True,
+                                 check=True).stdout.strip()
+            loops.append(dev)
+        rootdev, espdev = loops
+
+        subprocess.run(["mount", rootdev, f"{lab}/mr"], check=True)
+        subprocess.run(["mount", espdev, f"{lab}/me"], check=True)
+
+        # The layout dawn expects, built the way a real image would be.
+        for d in ("nw/bin", "nw/bricks", "nw/stores", "efi",
+                  "proc", "sys/fs/cgroup", "dev", "run", "tmp"):
+            os.makedirs(f"{lab}/mr/{d}", exist_ok=True)
+        for b in ("nw-root", "nw-spawn", "nw-sup", "nw-rescue", "unit-probe"):
+            subprocess.run(["cp", f"{STAGE}/{b}", f"{lab}/mr/nw/bin/"], check=True)
+        # A real root filesystem carries the loader and libc; without them
+        # execve returns ENOENT and the failure looks like a missing binary.
+        ldd = subprocess.run(["ldd", f"{STAGE}/nw-root"],
+                             capture_output=True, text=True).stdout
+        for tok in ldd.split():
+            if tok.startswith("/") and ".so" in tok:
+                os.makedirs(f"{lab}/mr{os.path.dirname(tok)}", exist_ok=True)
+                subprocess.run(["cp", "-L", tok, f"{lab}/mr{tok}"], check=True)
+
+        os.makedirs(f"{lab}/me/slots/A"); os.makedirs(f"{lab}/me/slots/B")
+        for slot, names in (("A", ["alpha", "beta"]), ("B", ["solo"])):
+            city = f"{lab}/city{slot}"
+            open(city, "w").write("".join(
+                f"house {n} /nw/bin/unit-probe kind=oneshot lids=none\n"
+                for n in names))
+            p = run(["python3", CC, "--city", city,
+                     "--out", f"{lab}/me/slots/{slot}/plan.blob"])
+            expect(p.returncode == 0, f"bake {slot}\n{p.out}{p.err}")
+        open(f"{lab}/me/slots/current", "w").write("A\n")
+        subprocess.run(["sync"], check=True)
+        subprocess.run(["umount", f"{lab}/mr"], check=True)
+        subprocess.run(["umount", f"{lab}/me"], check=True)
+
+        def boot_dawn():
+            cmd = ["unshare", "--mount", "--pid", "--fork", "--",
+                   "env", f"NW_ROOT={rootdev}", "NW_ROOT_FSTYPE=ext4",
+                   f"NW_ESP={espdev}", "NW_ESP_FSTYPE=ext4",
+                   f"{STAGE}/nw-dawn"]
+            p = run(cmd)
+            return p.returncode, p.out + p.err
+
+        rc, out = boot_dawn()
+        expect(rc == 0, f"dawn boot rc={rc}\n{out}")
+        expect("mounted /sysroot" in out, f"root not mounted\n{out}")
+        expect("mounted /sysroot/efi" in out, f"esp not mounted\n{out}")
+        expect("pivoted" in out, f"no pivot_root\n{out}")
+        expect("mounted /sys/fs/cgroup" in out, f"cgroup2 not mounted\n{out}")
+        expect("mounted /run" in out and "mounted /tmp" in out,
+               f"tmpfs missing\n{out}")
+        expect("live slot /efi/slots/A" in out, f"current not read\n{out}")
+        expect("houses=2" in out, f"slot A should hold 2 units\n{out}")
+
+        # slots/current is authoritative: flip it and a different plan boots.
+        subprocess.run(["mount", espdev, f"{lab}/me"], check=True)
+        open(f"{lab}/me/slots/current", "w").write("B\n")
+        subprocess.run(["sync"], check=True)
+        subprocess.run(["umount", f"{lab}/me"], check=True)
+        rc, out = boot_dawn()
+        expect(rc == 0, f"slot B rc={rc}\n{out}")
+        expect("live slot /efi/slots/B" in out, f"B not selected\n{out}")
+        expect("houses=1" in out, f"slot B should hold 1 unit\n{out}")
+
+        # A name that would escape the slots directory must be refused.
+        subprocess.run(["mount", espdev, f"{lab}/me"], check=True)
+        open(f"{lab}/me/slots/current", "w").write("../../etc\n")
+        subprocess.run(["sync"], check=True)
+        subprocess.run(["umount", f"{lab}/me"], check=True)
+        rc, out = boot_dawn()
+        expect("HALT: slots/current" in out, f"traversal not refused\n{out}")
+    finally:
+        for d in (f"{lab}/mr", f"{lab}/me"):
+            subprocess.run(["umount", d], check=False,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        for dev in loops:
+            subprocess.run(["losetup", "-d", dev], check=False)
+    print("ok dawn-real-boot")
+
+
 def test_term_signal():
     """D11: nw-spawn blocks all signals before forking and the mask survives
     fork+exec, so houses used to start fully masked and TERM handlers never
@@ -243,6 +346,7 @@ def main():
     test_bad_crc()
     test_crash_does_not_halt()
     test_term_signal()
+    test_dawn_real_boot()
     test_kind_required()
     test_kind_exit0()
     test_seccomp_kills()

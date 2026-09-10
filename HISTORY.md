@@ -1337,3 +1337,101 @@ Two added, bringing the suite to **14**:
 
 The fd budget is untouched and all four places still agree:
 `reserved + 2 × units`, ceiling 1024.
+
+---
+
+## 21. Disk layout implemented — 2026-09-10
+
+`docs/options/06` option A, built. ESP plus a single read-write root; bricks
+at `/nw/bricks/<hash>/`, stores at `/nw/stores/<store-id>/`; `dawn` mounts and
+pivots; tmpfs for `/run` and `/tmp`; cgroup2 mounted and unused.
+
+### `dawn`, and why PID 1 did not grow
+
+`nw-check` must read the plan before anything is trusted, so whatever holds
+the plan must already be mounted before PID 1 runs. **PID 1 cannot mount the
+thing it needs in order to learn what to mount.** The alternative was a
+hardcoded device or filesystem type inside `pid1.c` — a constant naming
+hardware, in the process where a fault does not crash a program but fails to
+boot a machine. That is the fixed-descriptor-number class in a new costume,
+and it was rejected in `06` as option E.
+
+So `dawn` is a separate binary that runs as the initramfs init, mounts, pivots
+and execs. **`grep` for `mount` in `pid1.c` returns zero and must keep
+returning zero.**
+
+Configuration comes from the environment, which the bootloader supplies via
+the kernel command line — the kernel hands unrecognised `key=value` parameters
+to init as environment. The harness sets the same variables directly, so
+production and test take the identical code path. Nothing is defaulted:
+`NW_ROOT`, `NW_ROOT_FSTYPE`, `NW_ESP`, `NW_ESP_FSTYPE` are all required and a
+boot that does not say what to mount fails loudly rather than guessing at
+hardware.
+
+**Strict versus ensure.** The root and the ESP must be mounted *by dawn* or the
+boot is not what we think, so failing there is fatal. `/dev`, `/proc`, `/sys`
+and cgroup2 are the kernel's own filesystems where the requirement is that
+they are *present*: `EBUSY` means already-mounted and is accepted. This
+distinction exists because a real initramfs hands over an empty `/dev` while a
+container may not, and collapsing the two would either break the container or
+paper over a genuine failure on iron.
+
+### `slots/current` is now authoritative
+
+It was written by `make stage` and read by nothing; `pid1.c` took `--slot`
+from `argv`. Two sources of truth with one ignored, which made A/B a directory
+shape rather than a mechanism.
+
+PID 1 now reads it. Precedence, most explicit first: `--plan FILE` beats
+`--slot DIR` beats `--slots DIR`, and `--slot` wins over the file so an
+operator can boot a non-current slot without rewriting the record of which
+slot is current. `dawn` passes `--slots`.
+
+This is the one place PID 1 reads text, and it is justified rather than
+assumed: it happens at boot in the same phase as loading the blob, not "after
+start" which is what invariant 1 forbids, and it is bounded and validating
+rather than parsing — at most `NW_NAME_LEN` bytes, every byte in
+`[A-Za-z0-9_-]`, so a name containing a slash or a dot cannot get through and
+the result cannot escape the slots directory. Verified by putting `../../etc`
+in the file: `HALT: slots/current`.
+
+### What is actually tested, and what is not
+
+`dawn-real-boot` is the first test in this project's history to exercise
+`mount(2)`, `pivot_root(2)` or the `/nw` and `/efi` layout. It builds two
+**real ext4 filesystems**, attaches them to **real loop devices**, populates
+them the way an image would be, and boots:
+
+```
+[dawn] already mounted /dev
+[dawn] mounted /sysroot
+[dawn] mounted /sysroot/efi
+[dawn] pivoted
+[dawn] mounted /proc … /sys … /dev … /run … /tmp … /sys/fs/cgroup
+[dawn] exec /nw/bin/nw-root
+[nw-root] live slot /efi/slots/A
+[nw-root] city open houses=2 slot=/efi/slots/A
+[nw-root] closed houses_reaped=2 orphans=0
+```
+
+Slot A holds a two-unit plan and slot B a one-unit plan, so flipping
+`current` and seeing `houses=1` proves the file drives the choice. **This is
+also the first time the two slots have ever held different bytes** — `make
+stage` writes A and B as identical copies, so the older `slot-B` test could
+not have detected a slot-selection bug.
+
+**The harness and the real path now differ in shape, not just in prefix, and
+that is worth stating plainly.** The other fourteen tests run against a flat
+`/tmp/nw-init-run` with binaries at the top level and `slots/` beside them.
+The real layout is `/nw/bin/…` and `/efi/slots/…`. Only `dawn-real-boot`
+builds the real shape. A harness that tests a different structure than the
+machine boots is how the boot half stayed unbuilt without anyone noticing, so:
+this is a known divergence, and the fix is to restructure `make stage` to
+mirror `/nw` and `/efi` rather than to add more tests against the flat shape.
+
+Two things the test still does not cover: the ESP is **ext4, not vfat**,
+because `mkfs.vfat` is not available in this container — so FAT's missing
+execute bit, ownership and 4 GiB cap are untested assumptions, not verified
+ones. And no firmware is involved: the test starts at dawn, not at a
+bootloader, so the UKI and the kernel command line that would really supply
+`NW_ROOT` are stubbed by `env`.

@@ -8,6 +8,7 @@ offline, then a runtime table interpreter executes it. Robustness comes from
 
 | component | file(s) | language | in TCB |
 |---|---|---|---|
+| `dawn` (mount stage) | `dawn.c` | C | **yes** |
 | `nw-root` (PID 1) | `pid1.c` + `nwcheck.c` | C | **yes** |
 | `nw-spawn` (boot spawner) | `nwspawn.c` + `nwcheck.c` | C | **yes** |
 | `nw-check` | `nwcheck_main.c` + `nwcheck.c` | C | **yes** |
@@ -29,6 +30,11 @@ sections after this one and are deliberately not numbered here.
 
 1. **No allocation, no parsing, no recursion after start in PID 1.** The blob
    is already validated; PID 1 reads a table, it does not interpret text.
+   **PID 1 mounts nothing** — `grep` for `mount` in `pid1.c` returns zero.
+   `dawn` mounts and hands PID 1 a path; nothing in the TCB below `dawn`
+   learns what a filesystem is. The one text PID 1 reads is
+   `<slots>/current`, at boot, bounded to `NW_NAME_LEN` and validated to
+   `[A-Za-z0-9_-]` so it cannot escape the slots directory.
    **PID 1 has no restart budget and must not grow one** — `grep` for
    `budget`, `restart` or `respawn` in `pid1.c` returns nothing. Budgets live
    in `nw-sup`; see invariant 4.
