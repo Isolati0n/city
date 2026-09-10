@@ -44,20 +44,22 @@ unit-term: houses/term.c
 	$(CC) $(CFLAGS) -o $@ houses/term.c
 
 stage: all
-	mkdir -p $(STAGE)/slots/A $(STAGE)/slots/B $(STAGE)/slots/rescue
+	rm -rf $(STAGE)
+	mkdir -p $(STAGE)/nw/bin $(STAGE)/nw/bricks $(STAGE)/nw/stores
+	mkdir -p $(STAGE)/efi/slots/A $(STAGE)/efi/slots/B $(STAGE)/work
 	cp -f nw-dawn nw-root nw-spawn nw-check nw-sup nw-rescue \
-	      unit-probe unit-boom unit-badcall unit-term $(STAGE)/
-	chmod +x $(STAGE)/*
-	python3 bakery/nw-cc.py --probe $(STAGE)/unit-probe --out $(STAGE)/slots/A/plan.blob --lids seccomp
-	cp -f $(STAGE)/slots/A/plan.blob $(STAGE)/slots/B/plan.blob
-	cp -f $(STAGE)/slots/A/plan.blob.sha256 $(STAGE)/slots/B/plan.blob.sha256 2>/dev/null || true
-	cp -f $(STAGE)/nw-rescue $(STAGE)/slots/rescue/nw-rescue
-	echo A > $(STAGE)/slots/current
-	cp -f $(STAGE)/slots/A/plan.blob $(STAGE)/plan.blob
-	cp -f $(STAGE)/slots/A/plan.blob.sha256 $(STAGE)/plan.blob.sha256
+	      unit-probe unit-boom unit-badcall unit-term $(STAGE)/nw/bin/
+	chmod +x $(STAGE)/nw/bin/*
+	python3 bakery/nw-cc.py --probe $(STAGE)/nw/bin/unit-probe \
+	    --out $(STAGE)/efi/slots/A/plan.blob --lids seccomp
+	printf 'house solo %s/nw/bin/unit-probe kind=oneshot lids=seccomp\n' $(STAGE) >  $(STAGE)/work/slot-b.city
+	printf 'house duo %s/nw/bin/unit-probe kind=oneshot lids=seccomp\n'  $(STAGE) >> $(STAGE)/work/slot-b.city
+	python3 bakery/nw-cc.py --city $(STAGE)/work/slot-b.city \
+	    --out $(STAGE)/efi/slots/B/plan.blob
+	echo A > $(STAGE)/efi/slots/current
 
 test: stage
-	$(STAGE)/nw-check $(STAGE)/plan.blob
+	$(STAGE)/nw/bin/nw-check $(STAGE)/efi/slots/A/plan.blob
 	python3 tests/run.py
 
 clean:

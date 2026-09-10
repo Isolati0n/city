@@ -11,6 +11,13 @@ import zlib
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 STAGE = "/tmp/nw-init-run"
+# The staged tree mirrors the production layout and differs only in prefix:
+# BIN is /nw/bin on a real machine, SLOTS is /efi/slots. Scratch files that
+# have no production counterpart live in WORK.
+BIN = f"{STAGE}/nw/bin"
+SLOTS = f"{STAGE}/efi/slots"
+WORK = f"{STAGE}/work"
+os.makedirs(WORK, exist_ok=True)
 CC = os.path.join(ROOT, "bakery", "nw-cc.py")
 
 
@@ -22,7 +29,7 @@ def run(cmd, **kw):
 
 
 def boot(slot=None, plan=None, extra=None, hold=800):
-    cmd = ["unshare", "--pid", "--fork", "--mount-proc", "--", f"{STAGE}/nw-root", "--hold-ms", str(hold)]
+    cmd = ["unshare", "--pid", "--fork", "--mount-proc", "--", f"{BIN}/nw-root", "--hold-ms", str(hold)]
     if slot:
         cmd += ["--slot", slot]
     if plan:
@@ -40,7 +47,7 @@ def expect(cond, msg):
 
 
 def test_happy():
-    rc, out = boot(slot=f"{STAGE}/slots/A", hold=900)
+    rc, out = boot(slot=f"{SLOTS}/A", hold=900)
     expect(rc == 0, f"happy rc={rc}\n{out}")
     # No edges: a unit holds nothing above stderr. This is what is left of the
     # descriptor assertion after wiring was removed.
@@ -52,14 +59,24 @@ def test_happy():
 
 
 def test_slot_b():
-    rc, out = boot(slot=f"{STAGE}/slots/B", hold=700)
+    """A and B hold genuinely different plans -- A the four-unit probe city,
+    B a two-unit one. They were byte-identical copies until 2026-09-10, which
+    meant this test could not have detected a slot-selection bug: booting the
+    wrong slot produced the same output. The unit count is the assertion."""
+    a_rc, a_out = boot(slot=f"{SLOTS}/A", hold=900)
+    expect(a_rc == 0, f"slot A rc={a_rc}\n{a_out}")
+    expect("houses=4" in a_out, f"slot A should hold four units\n{a_out}")
+
+    rc, out = boot(slot=f"{SLOTS}/B", hold=700)
     expect(rc == 0, f"slot B rc={rc}\n{out}")
+    expect("houses=2" in out, f"slot B should hold two units\n{out}")
+    expect("solo" in out and "duo" in out, f"slot B unit names\n{out}")
     print("ok slot-B")
 
 
 def test_rescue():
     p = run(["unshare", "--pid", "--fork", "--mount-proc", "--",
-             f"{STAGE}/nw-root", "--rescue", f"{STAGE}/slots/rescue"])
+             f"{BIN}/nw-root", "--rescue", f"{BIN}"])
     out = p.out + p.err
     expect(p.returncode == 3, f"rescue rc={p.returncode}\n{out}")
     expect("outside the plan" in out, "rescue text")
@@ -70,18 +87,18 @@ def test_halt_spawner():
     """nw-spawn exits as its success path, so PID 1 cannot watch for its death.
     It requires a complete pid report and a clean exit instead. Kill it before
     it reports and boot must fail rather than come up short-staffed."""
-    rc, out = boot(slot=f"{STAGE}/slots/A", extra=["--kill-spawner"], hold=400)
+    rc, out = boot(slot=f"{SLOTS}/A", extra=["--kill-spawner"], hold=400)
     expect(rc == 70, f"halt rc={rc}\n{out}")
     expect("HALT: spawn report" in out, f"halt text\n{out}")
     print("ok halt-spawner")
 
 
 def test_bad_crc():
-    bad = f"{STAGE}/bad.blob"
-    d = bytearray(open(f"{STAGE}/plan.blob", "rb").read())
+    bad = f"{WORK}/bad.blob"
+    d = bytearray(open(f"{SLOTS}/A/plan.blob", "rb").read())
     d[16] ^= 0xFF
     open(bad, "wb").write(d)
-    chk = run([f"{STAGE}/nw-check", bad])
+    chk = run([f"{BIN}/nw-check", bad])
     expect(chk.returncode == 1 and "crc32" in (chk.err + chk.out), "check crc")
     rc, out = boot(plan=bad, hold=200)
     expect(rc == 70 and "crc32" in out, f"boot crc\n{out}")
@@ -89,25 +106,25 @@ def test_bad_crc():
 
 
 def test_baker_rejects():
-    city = f"{STAGE}/bad-city.txt"
+    city = f"{WORK}/bad-city.txt"
     open(city, "w").write("house a /bin/true kind=oneshot\n"
                           "house a /bin/true kind=oneshot\n")
-    p = run(["python3", CC, "--city", city, "--out", f"{STAGE}/nope.blob"])
+    p = run(["python3", CC, "--city", city, "--out", f"{WORK}/nope.blob"])
     expect(p.returncode != 0, "duplicate name should fail bake")
     expect("duplicate name" in (p.out + p.err), f"reason\n{p.out}{p.err}")
     print("ok baker-reject-dupname")
 
 
 def test_fuzz_checker():
-    good = open(f"{STAGE}/plan.blob", "rb").read()
+    good = open(f"{SLOTS}/A/plan.blob", "rb").read()
     accepted = 0
     for i in range(200):
         d = bytearray(good)
         d[i % len(d)] ^= 1 + (i % 7)
-        p = tempfile.NamedTemporaryFile(delete=False, dir=STAGE)
+        p = tempfile.NamedTemporaryFile(delete=False, dir=WORK)
         p.write(d)
         p.close()
-        r = run([f"{STAGE}/nw-check", p.name])
+        r = run([f"{BIN}/nw-check", p.name])
         if r.returncode == 0:
             accepted += 1
     expect(accepted == 0, f"fuzz accepted {accepted}")
@@ -116,7 +133,7 @@ def test_fuzz_checker():
 
 def test_difftest():
     """Baker output must be accepted by C nw-check; flipped crc must not."""
-    r = run([f"{STAGE}/nw-check", f"{STAGE}/plan.blob"])
+    r = run([f"{BIN}/nw-check", f"{SLOTS}/A/plan.blob"])
     expect(r.returncode == 0, "difftest good")
     print("ok difftest")
 
@@ -124,13 +141,13 @@ def test_difftest():
 def test_kind_required():
     """kind= is explicit or it is a bake error. No default, no inference --
     a silent default is the failure mode this project keeps designing out."""
-    city = f"{STAGE}/nokind.city"
+    city = f"{WORK}/nokind.city"
     open(city, "w").write("house a /bin/true lids=none\n")
-    p = run(["python3", CC, "--city", city, "--out", f"{STAGE}/nope.blob"])
+    p = run(["python3", CC, "--city", city, "--out", f"{WORK}/nope.blob"])
     expect(p.returncode != 0, "missing kind should fail the bake")
     expect("kind= is required" in (p.out + p.err), f"reason\n{p.out}{p.err}")
     open(city, "w").write("house a /bin/true kind=daemon lids=none\n")
-    p = run(["python3", CC, "--city", city, "--out", f"{STAGE}/nope.blob"])
+    p = run(["python3", CC, "--city", city, "--out", f"{WORK}/nope.blob"])
     expect(p.returncode != 0, "bad kind should fail the bake")
     expect("must be oneshot or longrun" in (p.out + p.err), f"reason\n{p.out}{p.err}")
     print("ok kind-required")
@@ -140,13 +157,13 @@ def test_kind_exit0():
     """D12: exit 0 no longer means do-not-restart on its own. A longrun that
     exits 0 is restarted within budget; a oneshot that exits 0 is done. Same
     binary, same exit code, opposite handling -- decided by the plan."""
-    probe = f"{STAGE}/unit-probe"
-    long_city = f"{STAGE}/longrun.city"
+    probe = f"{BIN}/unit-probe"
+    long_city = f"{WORK}/longrun.city"
     open(long_city, "w").write(
         f"house quitter /bin/true kind=longrun budget=2 window=9 lids=none\n"
         f"house idle {probe} kind=oneshot lids=none\n"
     )
-    blob = f"{STAGE}/longrun.blob"
+    blob = f"{WORK}/longrun.blob"
     b = run(["python3", CC, "--city", long_city, "--out", blob])
     expect(b.returncode == 0, f"bake\n{b.out}{b.err}")
     rc, out = boot(plan=blob, hold=1200)
@@ -154,12 +171,12 @@ def test_kind_exit0():
     expect("HALT" not in out, f"nothing may halt the city\n{out}")
     expect("restart quitter" in out, f"longrun exit 0 must restart\n{out}")
 
-    one_city = f"{STAGE}/oneshot.city"
+    one_city = f"{WORK}/oneshot.city"
     open(one_city, "w").write(
         f"house quitter /bin/true kind=oneshot budget=2 window=9 lids=none\n"
         f"house idle {probe} kind=oneshot lids=none\n"
     )
-    blob2 = f"{STAGE}/oneshot.blob"
+    blob2 = f"{WORK}/oneshot.blob"
     b = run(["python3", CC, "--city", one_city, "--out", blob2])
     expect(b.returncode == 0, f"bake\n{b.out}{b.err}")
     rc, out2 = boot(plan=blob2, hold=1200)
@@ -177,7 +194,7 @@ def test_dawn_real_boot():
     This is the only test that exercises mount(2), pivot_root(2) or the
     /nw and /efi layout at all. Everything else in this suite runs against
     the flat staged directory under /tmp."""
-    lab = f"{STAGE}/dawnlab"
+    lab = f"{WORK}/dawnlab"
     subprocess.run(["rm", "-rf", lab], check=False)
     os.makedirs(f"{lab}/mr"); os.makedirs(f"{lab}/me")
     loops = []
@@ -202,10 +219,10 @@ def test_dawn_real_boot():
                   "proc", "sys/fs/cgroup", "dev", "run", "tmp"):
             os.makedirs(f"{lab}/mr/{d}", exist_ok=True)
         for b in ("nw-root", "nw-spawn", "nw-sup", "nw-rescue", "unit-probe"):
-            subprocess.run(["cp", f"{STAGE}/{b}", f"{lab}/mr/nw/bin/"], check=True)
+            subprocess.run(["cp", f"{BIN}/{b}", f"{lab}/mr/nw/bin/"], check=True)
         # A real root filesystem carries the loader and libc; without them
         # execve returns ENOENT and the failure looks like a missing binary.
-        ldd = subprocess.run(["ldd", f"{STAGE}/nw-root"],
+        ldd = subprocess.run(["ldd", f"{BIN}/nw-root"],
                              capture_output=True, text=True).stdout
         for tok in ldd.split():
             if tok.startswith("/") and ".so" in tok:
@@ -230,7 +247,7 @@ def test_dawn_real_boot():
             cmd = ["unshare", "--mount", "--pid", "--fork", "--",
                    "env", f"NW_ROOT={rootdev}", "NW_ROOT_FSTYPE=ext4",
                    f"NW_ESP={espdev}", "NW_ESP_FSTYPE=ext4",
-                   f"{STAGE}/nw-dawn"]
+                   f"{BIN}/nw-dawn"]
             p = run(cmd)
             return p.returncode, p.out + p.err
 
@@ -276,10 +293,10 @@ def test_term_signal():
     fork+exec, so houses used to start fully masked and TERM handlers never
     ran. Assert the handler is observably reached -- checking only that the
     process is gone proves nothing, since SIGKILL would do that too."""
-    term = f"{STAGE}/unit-term"
-    city = f"{STAGE}/term.city"
+    term = f"{BIN}/unit-term"
+    city = f"{WORK}/term.city"
     open(city, "w").write(f"house term {term} kind=oneshot lids=none\n")
-    blob = f"{STAGE}/term.blob"
+    blob = f"{WORK}/term.blob"
     b = run(["python3", CC, "--city", city, "--out", blob])
     expect(b.returncode == 0, f"bake\n{b.out}{b.err}")
     rc, out = boot(plan=blob, hold=500)
@@ -294,14 +311,14 @@ def test_term_signal():
 def test_crash_does_not_halt():
     """Nothing a house does halts the city. A house that crashes past its
     budget stays dead; the city carries on and shuts down normally."""
-    boom = f"{STAGE}/unit-boom"
-    probe = f"{STAGE}/unit-probe"
-    city = f"{STAGE}/crash.city"
+    boom = f"{BIN}/unit-boom"
+    probe = f"{BIN}/unit-probe"
+    city = f"{WORK}/crash.city"
     open(city, "w").write(
         f"house boom {boom} kind=longrun budget=2 window=9 lids=none\n"
         f"house idle {probe} kind=oneshot lids=none\n"
     )
-    blob = f"{STAGE}/crash.blob"
+    blob = f"{WORK}/crash.blob"
     b = run(["python3", CC, "--city", city, "--out", blob])
     expect(b.returncode == 0, f"bake\n{b.out}{b.err}")
     rc, out = boot(plan=blob, hold=1200)
@@ -312,10 +329,10 @@ def test_crash_does_not_halt():
 
 
 def test_seccomp_kills():
-    bad = f"{STAGE}/unit-badcall"
-    city = f"{STAGE}/sec.city"
+    bad = f"{BIN}/unit-badcall"
+    city = f"{WORK}/sec.city"
     open(city, "w").write(f"house bad {bad} kind=oneshot lids=seccomp\n")
-    blob = f"{STAGE}/sec.blob"
+    blob = f"{WORK}/sec.blob"
     b = run(["python3", CC, "--city", city, "--out", blob])
     expect(b.returncode == 0, b.err)
     rc, out = boot(plan=blob, hold=600)
@@ -324,10 +341,10 @@ def test_seccomp_kills():
 
 
 def test_hash_pin():
-    h = open(f"{STAGE}/plan.blob.sha256").read().strip()
+    h = open(f"{SLOTS}/A/plan.blob.sha256").read().strip()
     expect(len(h) == 64, "sha256 len")
     import hashlib
-    got = hashlib.sha256(open(f"{STAGE}/plan.blob", "rb").read()).hexdigest()
+    got = hashlib.sha256(open(f"{SLOTS}/A/plan.blob", "rb").read()).hexdigest()
     expect(h == got, "sha256 match")
     print("ok hash-pin")
 

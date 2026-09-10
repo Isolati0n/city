@@ -139,12 +139,47 @@ ESP, outside the PE. Taking that as given, the ESP holds the boot artifacts,
 the A/B slot directories with their `plan.blob` and `.sha256` pin, and
 `slots/current`.
 
-FAT32 constrains what can live there, and these are hard limits, not
-preferences: no ownership, no permission bits, no symlinks, no hardlinks, no
-checksums, 4 GiB maximum file size, and case-insensitivity. **Anything needing
-an execute bit, an owner, or integrity cannot live on the ESP.** That rules
-the ESP out for bricks and for stores by itself, independently of any design
-preference.
+FAT32 constrains what can live there: no ownership, no permission bits, no
+symlinks, no hardlinks, no checksums, 4 GiB maximum file size, and
+case-insensitivity. That rules the ESP out for bricks and for stores.
+
+### The execute-bit argument was wrong — corrected 2026-09-10
+
+This section originally said "anything needing an execute bit, an owner, or
+integrity cannot live on the ESP." **The execute-bit half of that is not
+right.** A FAT filesystem stores no mode bits, but Linux's vfat driver
+synthesises them from mount options (`umask`, `fmask`, `dmask`), so files on a
+vfat mount normally come out executable and `execve` works. Something like
+`nw-rescue` *could* run from the ESP.
+
+The conclusion survives on the other grounds, which are genuine: no ownership
+means units cannot be separated, no checksums means no integrity, the 4 GiB
+cap bounds any brick, and case-insensitivity is hostile to content-addressed
+names. But one of the four supporting arguments was false and is withdrawn
+rather than quietly left standing.
+
+### UNTESTED: the ESP is never vfat in any test
+
+`dawn-real-boot` mounts the ESP as **ext4, not vfat.** `dosfstools` installs
+cleanly and `mkfs.vfat` works, but **this kernel cannot mount the result**:
+
+```
+$ cat /proc/filesystems | grep -c vfat
+0
+$ mount /dev/loop1 /mnt
+mount: unknown filesystem type 'vfat'
+```
+
+`/proc/filesystems` lists only ext2/ext3/ext4 plus virtual filesystems; there
+is no `/lib/modules` and no `modprobe`, so the kernel is monolithic without
+FAT and no module can be loaded. This is an environment limit, not a design
+choice, and it cannot be worked around here.
+
+So every FAT-specific property above is an **assumption, not a verified
+fact**, including the corrected execute-bit claim. The first machine that
+boots with a real vfat ESP is where these get tested, and case-insensitivity
+is the one most likely to bite something, because content-addressed brick
+names are hex and a case collision would be silent.
 
 ### Q3 — Is there a root filesystem, and is it writable?
 
