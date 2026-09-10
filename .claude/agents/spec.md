@@ -10,13 +10,14 @@ TCB.
 
 ## What they currently assert
 
-`plan.als`: at least one house; `critical` is 0 or 1;
+`plan.als`: at least one house; `kind` is `Oneshot` or `Longrun`;
 `fdNeed = 8 + 2×#House` and `sealed` requires `fdNeed <= 1024`. Scope
-`for 8 House`. (`sig Wire` and its facts were removed with edges — §17.)
+`for 8 House`. (`sig Wire` and its facts went with edges — §17; `critical`
+went in §19, and `sig Kind` took its place in §20.)
 
 `Plan.tla`: `MaxUnits = 64`, `MaxFds = 1024`, `Reserved = 8`;
-`FdNeed == Reserved + 2*n + 2*e`; `TypeOK` bounds `n`, `e`, `crit` and requires
-`FdNeed <= MaxFds`; `NoLiveRewrite` (a new plan is a new slot, the live city
+`FdNeed == Reserved + 2*n`; `TypeOK` bounds `n` and `kind` and requires
+`FdNeed <= MaxFds`. `NoLiveRewrite` (a new plan is a new slot, the live city
 does not grow verbs) and `HaltOnElectricianDeath` were both withdrawn when
 edges were removed — see `HISTORY.md` §17 for why restating NoLiveRewrite
 would have been vacuous rather than reassuring.
@@ -39,4 +40,4 @@ someone treats a passing check here as evidence the implementation is correct,
 correct them. The specs constrain the *plan format*; they say nothing about
 descriptor handling at runtime, which is where every real bug has been.
 
-You do not edit C, Rust, Zig or Python. Report; the owning agent changes code.
+You do not edit C or Python. Report; the owning agent changes code.

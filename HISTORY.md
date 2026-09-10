@@ -640,7 +640,17 @@ in neither the checker nor the baker.
 
 **Section 6 is deliberately left as written.** Neither the author of this note
 nor the operator can tell whether the check was implemented and later removed,
-or whether the claim was never accurate. Editing section 6 would erase the
+or whether the claim was never accurate.
+
+> **Status, 2026-09-10: closed by removal, not answered on the merits.** Edges
+> were erased (§17), so a plan is a flat list of units with no relations.
+> There is no graph, so cycle detection is not deferred — it is *undefined*.
+> The question of whether the check once existed is now unanswerable and no
+> longer matters; `validator.md` and `baker.md` have been corrected to say
+> there is nothing to detect rather than that a feature is missing. Section 6
+> still stands unedited, and the disagreement it records is still the useful
+> artifact: a statement about what the TCB did was wrong at some point and
+> nothing caught it. Editing section 6 would erase the
 evidence that the two disagree, and the disagreement is the useful artifact: it
 means at least one statement in the historical record about what the TCB does
 was wrong at some point, and nothing caught it. Recorded here as a live

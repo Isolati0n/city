@@ -23,21 +23,39 @@ never from further design discussion. Two specific failures are your mandate:
 So: **never report a single sample.** Report n, median, and spread. If spread
 exceeds the effect, say the result is noise and stop.
 
-## Established numbers (Xeon @ 2.1 GHz, single core) — baselines to compare against
+## Established numbers (Xeon @ 2.1 GHz, single core)
 
+**Still valid — these measure primitives, not this system's topology:**
 function call 52 cycles; `getpid` syscall floor 276; `mprotect` flip 7,290;
 remap 2 MiB 82,864; attach page fault 157–169/page; `fork` 55–80 µs, flat and
-independent of open fd count. At 2,000 units (4,005 processes): idle CPU ~0
-cost, ~326 kB per unit including its supervisor, 1.5× degradation for unrelated
-work between 500 and 2,000 units, boot ~2.3 ms/unit with 99% in fork.
-Ceilings: `fs.nr_open` allows ~500,000 units; `pid_max` binds first at ~16,000.
+independent of open fd count. Ceilings: `fs.nr_open` allows ~500,000 units;
+`pid_max` binds first at ~16,000.
+
+**MEASURED UNDER A SUPERSEDED TOPOLOGY — do not use as baselines:** at 2,000
+units (4,005 processes): idle CPU ~0 cost, ~326 kB per unit including its
+supervisor, 1.5× degradation for unrelated work between 500 and 2,000 units,
+boot ~2.3 ms/unit with 99% in fork.
+
+Those were taken against roughly **two processes per unit**. The current tree
+is **three per unit** — one logger forked by PID 1, one `nw-sup`, and the
+house it forks — so steady state is `1 + 3n` processes (PID 1 plus three per
+unit; `nw-spawn` exits at the end of boot and does not persist). At 2,000
+units that is ~6,001, not 4,005. Per-unit memory and boot time were measured
+against the smaller tree and are not comparable.
+
+**Do not correct these numbers by scaling them.** Re-measure against the
+current topology and say so, or report them as unavailable. A guess wearing a
+measured number's clothes is worse than an absent one, which is the whole
+reason this agent exists.
 
 ## Standing caveats you must state
 
 - These are container numbers on a contended 2-core box. Nothing has run on
   real hardware.
-- Protection keys are **unmeasured**. `pkeybench.c` exists but this
-  hypervisor does not expose PKU (`pkey_alloc` returns `EINVAL`). This is the
+- Protection keys are **unmeasured**. A `pkeybench.c` is referenced in older
+  notes but is not in this repository, so the PKU claim (that this hypervisor
+  returns `EINVAL` from `pkey_alloc`) has no artifact behind it here and is
+  itself unverified. This is the
   one number that could still move the architecture. Do not estimate it —
   report it as unknown.
 

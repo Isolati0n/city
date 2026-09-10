@@ -19,11 +19,12 @@ behind the rule, and the rule still applies to what remains.
 
 ## The class you exist for
 
-Three of thirteen bugs were the same mistake: **fixed descriptor numbers
-alongside dynamic allocation.** This deserves a systematic answer rather than a
+Three bugs were the same mistake: **fixed descriptor numbers alongside
+dynamic allocation.** This deserves a systematic answer rather than a
 fourth point fix.
 
-- Bug 5: `dup2(fd, fd)` does not clear `CLOEXEC` — every unit got zero edges.
+- Bug 5: `dup2(fd, fd)` does not clear `CLOEXEC` — every unit received an
+  empty kit.
 - Bug 9: `ADOPT_FD` collided with the edge range; a unit read a struct field as
   a peer message.
 - Bug 13: socketpairs collided with `LOG_BASE`; at 46 edges, 32 of 33 units

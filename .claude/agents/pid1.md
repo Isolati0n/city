@@ -1,6 +1,6 @@
 ---
 name: pid1
-description: Works on nw-root / PID 1 (pid1.c) — signal blocking, the unit table, per-unit log pipes, forking nw-spawn and the loggers, reaping (including orphans), restart budget, reverse-order shutdown, and HALT paths. Use for any change to boot sequence, child reaping, or shutdown ordering.
+description: Works on nw-root / PID 1 (pid1.c) — signal blocking, the unit table, per-unit log pipes, forking nw-spawn and the loggers, reaping (including orphans), reverse-order shutdown, and HALT paths. NOT restart budgets: those live entirely in nw-sup and PID 1 has no respawn path. Use for any change to boot sequence, child reaping, or shutdown ordering.
 tools: Read, Grep, Glob, Edit, Write, Bash
 model: inherit
 ---
@@ -20,10 +20,17 @@ State lives in `struct house houses[NW_MAX_UNITS]`.
 
 - **No allocation, no parsing, no recursion after start.** The blob is already
   validated; PID 1 reads a table, it does not interpret text.
-- **Restart budget is a ring of timestamps.** Never a counter — there is
-  nothing to overflow. Do not reintroduce one.
-- **Never nest budgets.** Bug 3: a supervisor gave up, PID 1 restarted it with
-  a fresh budget, and the pair looped. One budget authority per unit.
+- **PID 1 has no restart budget, and must not grow one.** `grep` for
+  `budget`, `restart` or `respawn` in `pid1.c` returns nothing; the budget
+  ring lives entirely in `nwsup.c`, which owns it. PID 1 records a house exit
+  and does not re-exec anything.
+
+  The rule the budget must obey belongs to `nw-sup`, and is repeated here only
+  so you do not recreate it on this side: it is a ring of timestamps, never a
+  counter, because there is nothing to overflow. **Never nest budgets** —
+  bug 3 was a supervisor giving up, PID 1 restarting it with a fresh budget,
+  and the pair looping. One budget authority per unit, and it is not this
+  file.
 - **`nw-spawn` exits, and that is success.** It forks every supervisor, reports
   the pids and terminates. Require a complete report *and* `WIFEXITED` with
   status 0 before the city is open; do not watch for its death. Its
@@ -41,12 +48,17 @@ State lives in `struct house houses[NW_MAX_UNITS]`.
 
 - `SIGCHLD` behaviour during shutdown is undefined. Decide it explicitly rather
   than letting the race pick.
-- Orphan reaping is real and tested (9 orphans across three restarts), so any
-  change to the reap loop must be re-run under `unshare`, not reasoned about.
+- **Orphan reaping across restarts is untested.** The reap loop counts
+  orphans and `happy` asserts `orphans=0`, which exercises the happy path
+  only. Nothing drives orphans through a restart cycle. A figure once recorded
+  here as a standing result was not produced by any test in the suite. If this
+  is worth guarding, it is a gap to fill, not a result to cite.
+- Any change to the reap loop must be re-run under `unshare`, not reasoned
+  about.
 
 ## Definition of done
 
 `make test` passes, and you ran the boot yourself under
 `unshare --pid --fork --mount-proc`. Report the actual exit codes and log
-lines you saw. Never claim a change works from reading alone — thirteen bugs
-in this project were found by running and none by reading.
+lines you saw. Never claim a change works from reading alone — every bug in
+this project was found by running and none by reading.
