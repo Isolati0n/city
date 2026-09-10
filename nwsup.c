@@ -130,12 +130,22 @@ int main(int argc, char **argv)
     if (argc < 3) die("argv");
     const char *path = argv[1];
     const char *name = argv[2];
-    unsigned lids = 0, budget = 0, window_s = 2, critical = 0;
+    unsigned lids = 0, budget = 0, window_s = 2;
     const char *e;
     if ((e = getenv("NW_LIDS"))) lids = (unsigned)atoi(e);
     if ((e = getenv("NW_BUDGET"))) budget = (unsigned)atoi(e);
     if ((e = getenv("NW_WINDOW"))) window_s = (unsigned)atoi(e);
-    if ((e = getenv("NW_CRITICAL"))) critical = (unsigned)atoi(e);
+
+    /* nw-spawn blocks every signal before its first fork, and a signal mask
+     * survives both fork and exec -- so without this the supervisor and every
+     * house start fully masked. Installing a handler on a blocked signal does
+     * nothing: it stays pending and never runs. That made on_term below dead
+     * code and meant graceful shutdown did not exist anywhere: PID 1 sent
+     * TERM, nothing answered, and the grace window expired into SIGKILL.
+     * Clear the mask before installing anything. (D11) */
+    sigset_t empty;
+    sigemptyset(&empty);
+    sigprocmask(SIG_SETMASK, &empty, NULL);
 
     /* Stay. Isolation applies to the house child, not to wait/restart. */
     signal(SIGTERM, on_term);
@@ -166,9 +176,6 @@ int main(int argc, char **argv)
 
         if (WIFEXITED(st) && WEXITSTATUS(st) == 0)
             _exit(0);
-
-        if (critical)
-            _exit(WIFEXITED(st) ? WEXITSTATUS(st) : 71);
 
         long long t = now_ms();
         if (t - win0 > (long long)window_s * 1000) {

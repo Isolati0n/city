@@ -48,7 +48,6 @@ static char *dir_of_self(void)
 struct house {
     char  name[NW_NAME_LEN];
     pid_t pid;
-    int   critical;
     int   log_r, log_w;
     pid_t logger;
 };
@@ -76,8 +75,9 @@ static void reap_all(int block)
                 char b[80];
                 snprintf(b, sizeof b, "%.31s status=%d", houses[i].name, st);
                 say("house exit", b);
-                if (!shutting_down && houses[i].critical)
-                    halt_now("critical house");
+                /* Nothing a house does halts the city. Only two things do:
+                 * the plan fails validation at boot, or PID 1 itself dies.
+                 * See HISTORY.md section 19. */
             }
             if (houses[i].logger == p) {
                 houses[i].logger = 0;
@@ -242,7 +242,6 @@ int main(int argc, char **argv)
     n_houses = h->n_units;
     for (uint32_t i = 0; i < n_houses; i++) {
         memcpy(houses[i].name, u[i].name, NW_NAME_LEN);
-        houses[i].critical = u[i].critical;
         houses[i].pid = 0;
         int pfd[2];
         if (pipe2(pfd, O_CLOEXEC) < 0) halt_now("log pipe");

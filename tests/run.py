@@ -120,21 +120,44 @@ def test_difftest():
     print("ok difftest")
 
 
-def test_critical_halt():
+def test_term_signal():
+    """D11: nw-spawn blocks all signals before forking and the mask survives
+    fork+exec, so houses used to start fully masked and TERM handlers never
+    ran. Assert the handler is observably reached -- checking only that the
+    process is gone proves nothing, since SIGKILL would do that too."""
+    term = f"{STAGE}/unit-term"
+    city = f"{STAGE}/term.city"
+    open(city, "w").write(f"house term {term} lids=none\n")
+    blob = f"{STAGE}/term.blob"
+    b = run(["python3", CC, "--city", city, "--out", blob])
+    expect(b.returncode == 0, f"bake\n{b.out}{b.err}")
+    rc, out = boot(plan=blob, hold=500)
+    expect(rc == 0, f"term rc={rc}\n{out}")
+    expect("sigterm_blocked=0" in out, f"house inherited a blocked mask\n{out}")
+    expect("SIGTERM handler ran" in out, f"handler never ran\n{out}")
+    expect("exiting cleanly after TERM" in out, f"no clean exit\n{out}")
+    expect("houses_reaped=1" in out, f"house was killed, not reaped\n{out}")
+    print("ok term-signal")
+
+
+def test_crash_does_not_halt():
+    """Nothing a house does halts the city. A house that crashes past its
+    budget stays dead; the city carries on and shuts down normally."""
     boom = f"{STAGE}/unit-boom"
     probe = f"{STAGE}/unit-probe"
-    city = f"{STAGE}/crit.city"
+    city = f"{STAGE}/crash.city"
     open(city, "w").write(
-        f"house boom {boom} critical=1 lids=none\n"
+        f"house boom {boom} budget=2 window=9 lids=none\n"
         f"house idle {probe} lids=none\n"
     )
-    blob = f"{STAGE}/crit.blob"
+    blob = f"{STAGE}/crash.blob"
     b = run(["python3", CC, "--city", city, "--out", blob])
-    expect(b.returncode == 0, b.err)
-    rc, out = boot(plan=blob, hold=800)
-    expect(rc == 70, f"crit rc={rc}\n{out}")
-    expect("HALT: critical house" in out, f"crit text\n{out}")
-    print("ok critical-halt")
+    expect(b.returncode == 0, f"bake\n{b.out}{b.err}")
+    rc, out = boot(plan=blob, hold=1200)
+    expect(rc == 0, f"city should survive a crashing house, rc={rc}\n{out}")
+    expect("HALT" not in out, f"nothing may halt the city\n{out}")
+    expect("restart boom" in out, f"boom should have been restarted\n{out}")
+    print("ok crash-does-not-halt")
 
 
 def test_seccomp_kills():
@@ -170,7 +193,8 @@ def main():
     test_rescue()
     test_halt_spawner()
     test_bad_crc()
-    test_critical_halt()
+    test_crash_does_not_halt()
+    test_term_signal()
     test_seccomp_kills()
     print("ALL TESTS PASSED")
 

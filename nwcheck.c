@@ -12,9 +12,7 @@ static const char *errs[] = {
     "name",
     "duplicate name",
     "exec_path",
-    "critical",
-    "fd budget",
-    "empty name",
+    "reserved byte nonzero",
     "lids"
 };
 
@@ -119,7 +117,12 @@ int nw_check(const void *blob, uint32_t len)
     for (uint32_t i = 0; i < h->n_units; i++) {
         if (!name_ok(u[i].name, NW_NAME_LEN)) return NW_E_NAME;
         if (!path_ok(u[i].exec_path)) return NW_E_PATH;
-        if (u[i].critical > 1) return NW_E_CRIT;
+        /* Reserved bytes must be zero. An unvalidated spare byte cannot be
+         * given meaning later: an old blob carrying garbage would be accepted
+         * by a new checker that reads it. _rsv0 held 'critical' until it was
+         * removed on 2026-09-10. */
+        if (u[i]._rsv0 != 0) return NW_E_RSV;
+        if (u[i]._pad != 0) return NW_E_RSV;
         if (u[i].lids & ~(uint8_t)(NW_LID_SECCOMP | NW_LID_LANDLOCK
                                    | NW_LID_NEWNS | NW_LID_NEWNET))
             return NW_E_LIDS;
@@ -139,8 +142,13 @@ int nw_check(const void *blob, uint32_t len)
         }
     }
 
-    uint32_t fdneed = NW_FD_RESERVED + h->n_units * 2u;
-    if (fdneed > NW_MAX_FDS) return NW_E_FDBUDGET;
+    /* The runtime fd-budget check was retired on 2026-09-10. With edges gone
+     * the worst case is 8 + 2*64 = 136 against a 1024 ceiling, so it could not
+     * fire at any legal unit count -- dead code in a TCB file that read as a
+     * live safety property. The bound is still enforced where it can actually
+     * bite: the _Static_assert in blob.h at compile time, and the baker at
+     * bake time. The real binding constraint on unit count is pid_max, which
+     * is not a descriptor property and is not modelled here. */
 
     return NW_OK;
 }

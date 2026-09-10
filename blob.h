@@ -21,7 +21,7 @@ _Static_assert(NW_MAX_UNITS * 2 + NW_FD_RESERVED <= NW_MAX_FDS,
 struct nw_unit {
     char     name[NW_NAME_LEN];
     char     exec_path[NW_PATH_LEN];
-    uint8_t  critical;
+    uint8_t  _rsv0;      /* was 'critical', removed 2026-09-10; must be 0 */
     uint8_t  budget;
     uint16_t window_s;
     uint8_t  lids;
@@ -46,10 +46,8 @@ enum {
     NW_E_NAME = 5,
     NW_E_DUPNAME = 6,
     NW_E_PATH = 7,
-    NW_E_CRIT = 8,
-    NW_E_FDBUDGET = 9,
-    NW_E_EMPTY = 10,
-    NW_E_LIDS = 11
+    NW_E_RSV = 8,
+    NW_E_LIDS = 9
 };
 
 const char *nw_errstr(int e);

@@ -36,9 +36,7 @@ def check(houses):
     need = FD_RESERVED + len(houses) * 2
     if need > MAX_FDS:
         raise SystemExit("fd budget")
-    for name, path, crit, budget, window, lids in houses:
-        if crit not in (0, 1):
-            raise SystemExit("critical")
+    for name, path, budget, window, lids in houses:
         if lids & ~KNOWN_LIDS:
             raise SystemExit("lids")
         if not path.startswith("/"):
@@ -51,9 +49,11 @@ def check(houses):
 def bake(path, houses):
     idx = check(houses)
     unit = b""
-    for name, exe, crit, budget, window, lids in houses:
+    for name, exe, budget, window, lids in houses:
         unit += pad(name, NAME_LEN) + pad(exe, PATH_LEN)
-        unit += struct.pack("<BBHBB", crit, budget, window, lids, 0)
+        # _rsv0 (was "critical", removed 2026-09-10) and _pad both zero;
+        # nwcheck.c rejects either being nonzero.
+        unit += struct.pack("<BBHBB", 0, budget, window, lids, 0)
     prefix = b"NWPLAN03" + struct.pack("<I", len(houses))
     crc = zlib.crc32(prefix + struct.pack("<I", 0) + unit) & 0xFFFFFFFF
     blob = prefix + struct.pack("<I", crc) + unit
@@ -66,10 +66,10 @@ def bake(path, houses):
 
 def default_city(probe: str, lids: int):
     return [
-        ("alpha", probe, 0, 3, 2, lids),
-        ("beta",  probe, 0, 3, 2, lids),
-        ("gamma", probe, 0, 3, 2, lids),
-        ("delta", probe, 0, 1, 2, lids),
+        ("alpha", probe, 3, 2, lids),
+        ("beta", probe, 3, 2, lids),
+        ("gamma", probe, 3, 2, lids),
+        ("delta", probe, 1, 2, lids),
     ]
 
 
@@ -93,18 +93,20 @@ def load_city(path: str):
         parts = line.split()
         if parts[0] == "house":
             name, exe = parts[1], parts[2]
-            crit, budget, window, lids = 0, 3, 2, 0
+            budget, window, lids = 3, 2, 0
             for kv in parts[3:]:
                 k, _, v = kv.partition("=")
                 if k == "critical":
-                    crit = int(v)
+                    raise SystemExit(
+                        "critical= was removed on 2026-09-10: nothing a house "
+                        "does halts the city")
                 elif k == "budget":
                     budget = int(v)
                 elif k == "window":
                     window = int(v)
                 elif k == "lids":
                     lids = parse_lids(v)
-            houses.append((name, os.path.abspath(exe), crit, budget, window, lids))
+            houses.append((name, os.path.abspath(exe), budget, window, lids))
         else:
             raise SystemExit(f"bad city line: {line}")
     return houses

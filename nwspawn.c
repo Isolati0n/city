@@ -4,8 +4,8 @@
  * reports their pids, and EXITS.
  *
  * It exists only during boot. PID 1 has no respawn path (see reap_all in
- * pid1.c: a house exit is recorded, and halts the city if critical, but is
- * never re-execed), and restart budgets live in nw-sup, one authority per
+ * pid1.c: a house exit is recorded but never re-execed; nothing a house
+ * does halts the city), and restart budgets live in nw-sup, one authority per
  * unit. So spawning happens exactly once per unit and a process whose
  * lifetime is exactly boot matches that need.
  *
@@ -167,17 +167,15 @@ int main(int argc, char **argv)
             }
             close(pp[1]);
             if (pack_kit(logw[i]) < 0) die("pack kit");
-            char lbuf[8], bbuf[8], wbuf[8], cbuf[8];
+            char lbuf[8], bbuf[8], wbuf[8];
             snprintf(lbuf, sizeof lbuf, "%u", (unsigned)u[i].lids);
             snprintf(bbuf, sizeof bbuf, "%u", (unsigned)u[i].budget);
             snprintf(wbuf, sizeof wbuf, "%u", (unsigned)u[i].window_s);
-            snprintf(cbuf, sizeof cbuf, "%u", (unsigned)u[i].critical);
             setenv("NW_UNIT", u[i].name, 1);
             setenv("NW_HOUSE", u[i].name, 1);
             setenv("NW_LIDS", lbuf, 1);
             setenv("NW_BUDGET", bbuf, 1);
             setenv("NW_WINDOW", wbuf, 1);
-            setenv("NW_CRITICAL", cbuf, 1);
             execl(sup, "nw-sup", u[i].exec_path, u[i].name, (char *)0);
             die("exec nw-sup");
         }

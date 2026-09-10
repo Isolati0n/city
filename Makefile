@@ -8,7 +8,7 @@ CC = gcc
 CFLAGS = -Wall -Wextra -O2 -g -std=gnu11
 STAGE = /tmp/nw-init-run
 
-all: nw-root nw-spawn nw-check nw-sup nw-rescue unit-probe unit-boom unit-badcall
+all: nw-root nw-spawn nw-check nw-sup nw-rescue unit-probe unit-boom unit-badcall unit-term
 
 nw-root: pid1.c nwcheck.c blob.h
 	$(CC) $(CFLAGS) -o $@ pid1.c nwcheck.c
@@ -37,10 +37,13 @@ unit-boom: houses/boom.c
 unit-badcall: houses/badcall.c
 	$(CC) $(CFLAGS) -o $@ houses/badcall.c
 
+unit-term: houses/term.c
+	$(CC) $(CFLAGS) -o $@ houses/term.c
+
 stage: all
 	mkdir -p $(STAGE)/slots/A $(STAGE)/slots/B $(STAGE)/slots/rescue
 	cp -f nw-root nw-spawn nw-check nw-sup nw-rescue \
-	      unit-probe unit-boom unit-badcall $(STAGE)/
+	      unit-probe unit-boom unit-badcall unit-term $(STAGE)/
 	chmod +x $(STAGE)/*
 	python3 bakery/nw-cc.py --probe $(STAGE)/unit-probe --out $(STAGE)/slots/A/plan.blob --lids seccomp
 	cp -f $(STAGE)/slots/A/plan.blob $(STAGE)/slots/B/plan.blob
@@ -56,5 +59,5 @@ test: stage
 
 clean:
 	rm -f lids.o nw-root nw-spawn nw-check nw-sup nw-rescue \
-	      unit-probe unit-boom unit-badcall
+	      unit-probe unit-boom unit-badcall unit-term
 	rm -rf $(STAGE)

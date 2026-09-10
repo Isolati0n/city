@@ -1096,3 +1096,135 @@ Three measured gaps, all now product-level rather than incidental:
 A week ago these were gaps around the edges of a system whose distinctive claim
 was the connection graph. That claim is gone. These three are now the whole of
 what makes this an init rather than a fork loop.
+
+---
+
+## 19. D11, and the removal of `critical` — 2026-09-10
+
+### D11 — graceful shutdown did not exist
+
+`nwspawn.c` calls `sigfillset` then `sigprocmask(SIG_BLOCK, ...)` before its
+first fork. **A signal mask survives both `fork` and `exec`**, so every
+`nw-sup` and every house started with all signals blocked. `nwsup.c` installed
+`signal(SIGTERM, on_term)` and never touched the mask — and installing a
+handler on a blocked signal does nothing: the signal stays pending and the
+handler never runs.
+
+So `on_term` was dead code and **graceful shutdown did not exist anywhere in
+the system.** PID 1 sent TERM, nothing answered, the grace window expired, and
+everything died to SIGKILL. Reproduced before fixing, with a house that
+reports its own inherited mask:
+
+```
+[term] [term-house] sigterm_blocked=1
+[nw-root] shutdown TERM houses
+[nw-root] closed houses_reaped=0 orphans=0
+```
+
+`houses_reaped=0` is the tell, and it had been seen before in the 2026-09-06
+run and misread as a reaping-order quirk. It was not: nothing was reaped
+because nothing exited, it was killed.
+
+Fix: three lines at the top of `nw-sup`'s `main`, before the `signal()` calls —
+`sigemptyset` and `sigprocmask(SIG_SETMASK, &empty, NULL)`. In `nw-sup` rather
+than `nw-spawn`, because the supervisor needs a sane mask for itself as well as
+for the house it forks. After:
+
+```
+[term] [term-house] sigterm_blocked=0
+[nw-root] shutdown TERM houses
+[term] [term-house] SIGTERM handler ran
+[term-house] exiting cleanly after TERM
+[nw-root] house exit term status=0
+[nw-root] closed houses_reaped=1 orphans=0
+```
+
+Guarded by `term-signal` in the suite, which asserts the handler is
+*observably reached* — a test that only checks the process is gone proves
+nothing, because SIGKILL achieves that too.
+
+### `critical` removed
+
+Decision, not proposal. The flag had two coherent readings — always-running
+versus fatal-on-failure — and rather than pick one the concept is erased.
+
+> **The init starts things and restarts them. It does not judge them.**
+
+Nothing a house does halts the city. Exactly two things halt it: the plan
+fails validation at boot, or PID 1 itself dies. Everything else is restart
+within budget, after which that house stays dead and the city carries on.
+
+The defect recorded in §18 — `critical=1` halting the city on a clean exit 0 —
+is resolved by removal rather than by adding an exit-status test, and the open
+item about `critical` versus decision #14 is closed the same way: whatever #14
+said, the flag is gone.
+
+What changed:
+
+- `blob.h` — `critical` renamed `_rsv0`. **`struct nw_unit` stays 166 bytes**,
+  so no format churn, and the design gets a spare byte back. `NW_E_CRIT`
+  removed.
+- `nwcheck.c` — range check gone; `_rsv0` and `_pad` must both be zero.
+- `nwspawn.c` — `NW_CRITICAL` no longer exported.
+- `nwsup.c` — the `if (critical)` branch gone.
+- `pid1.c` — the halt-on-critical path gone; `struct house` loses the field.
+- `bakery/nw-cc.py` — `critical=` in a city file is now a **hard error** naming
+  the removal, rather than being silently ignored.
+- `plan.als`, `Plan.tla` — `critical` and `crit` dropped.
+- `critical-halt` deleted, replaced by `crash-does-not-halt`, which asserts a
+  house crashing past its budget leaves the city running with no HALT.
+
+### Reserved bytes are now validated
+
+`_pad` was never checked: a blob with `_pad = 0xAB` passed clean. That
+discipline existed in gen 2 and had been lost. It matters precisely because
+`_pad` is the spare byte — **an unvalidated spare cannot be safely given
+meaning later**, since an old blob carrying garbage would be accepted by a new
+checker that reads it. Both reserved bytes now return `NW_E_RSV`, verified by
+crafting blobs with each set and re-CRCing:
+
+```
+_rsv0 = 1     REJECT reserved byte nonzero (8)   rc=1
+_pad  = 0xAB  REJECT reserved byte nonzero (8)   rc=1
+unmodified    OK units=4 crc=0x0ded2eb1          rc=0
+```
+
+### `NW_E_EMPTY` deleted
+
+Declared and never returned. An empty name is caught by `name_ok` returning
+zero and comes back as `NW_E_NAME`. It was dead as code 14 in gen 2 and still
+dead as code 10 in gen 3 — an error that cannot happen, surviving two
+generations. Deleted rather than wired up: `name_ok`'s answer is already
+correct and a second code for the same condition is a distinction without a
+difference.
+
+### The runtime fd-budget check retired
+
+`8 + 2 × 64 = 136` against a 1024 ceiling: `NW_E_FDBUDGET` could not fire at
+any legal unit count. That is dead code in a TCB file that reads as a live
+safety property, which is worse than absent.
+
+Retired from `nwcheck.c` only. The bound is still enforced where it can
+actually bite — the `_Static_assert` in `blob.h` at compile time, and the baker
+at bake time — and `fdNeed`/`FdNeed` stay in the specs as the record of what a
+unit costs in descriptors, so invariant 3's four-way agreement is intact:
+`reserved + 2 × units`, ceiling 1024, identical in `blob.h`,
+`bakery/nw-cc.py`, `plan.als` and `Plan.tla`.
+
+**With edges gone the binding constraint on unit count is `pid_max`, not
+descriptors.** That is a process property, it is not modelled anywhere, and
+nothing in the plan format currently expresses it.
+
+### D12 — exit 0 is an undocumented do-not-restart channel
+
+Not changed, per instruction. Recorded for decision: `nwsup.c` tests
+`WIFEXITED && WEXITSTATUS == 0` *before* any budget logic and `_exit(0)`s, so a
+house that exits cleanly is never restarted whatever its budget says. Correct
+for a oneshot; for a long-running house that quits cleanly — a compositor
+exiting, a daemon reloading itself — it means the house stays dead and nothing
+says why.
+
+This matters beyond itself: a reserved exit code meaning *do not restart* is
+under consideration for the storage work (`docs/options/05`, Q4), and there is
+already a reserved exit code in the code with the **opposite** meaning. Whatever
+is chosen there has to account for 0 already being taken.
