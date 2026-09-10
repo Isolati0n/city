@@ -7,11 +7,26 @@
 # read. Written 2026-09-10 to make running a reviewer cheap enough to be the
 # default rather than a decision.
 #
-#   sh tools/review-pack.sh [base]   > packet.md
+# It writes a FILE and prints its path, rather than to stdout. That is the
+# point: a reviewer is told to read the path, so the diff never passes
+# through the dispatching context. Piping it into a prompt would move the
+# cost rather than remove it, which is why the stdout version went unused
+# the one time there was an opportunity.
+#
+#   sh tools/review-pack.sh            -> writes .reviews/packet-<id>.md
+#   sh tools/review-pack.sh - [base]   -> stdout instead
 set -eu
+OUT=''
+if [ "${1:-}" = "-" ]; then shift; else OUT=auto; fi
 BASE=${1:-$(git rev-parse --verify --quiet '@{u}' 2>/dev/null \
             || git rev-parse --verify --quiet origin/main 2>/dev/null \
             || git rev-parse HEAD)}
+
+if [ -n "$OUT" ]; then
+    mkdir -p .reviews
+    OUT=".reviews/packet-$(git rev-parse --short HEAD)-$(date +%H%M%S).md"
+    exec 3>&1 >"$OUT"
+fi
 
 echo "# Review packet"
 echo
@@ -46,3 +61,8 @@ echo "Read your brief in \`.claude/agents/\` and apply it to the diff above."
 echo "Do not re-derive the repository; everything you need to review is here."
 echo "Every finding must carry the command that shows it and that command's"
 echo "verbatim output, or be labelled HYPOTHESIS."
+
+if [ -n "$OUT" ]; then
+    exec 1>&3 3>&-
+    echo "$OUT"
+fi

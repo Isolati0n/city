@@ -80,6 +80,7 @@ case "${1:---check}" in
 --check)
     if [ -n "$owed" ]; then
         echo "review-gate: REVIEW OWED BEFORE PUSH:$owed" >&2
+        echo "  build the packet first: sh tools/review-pack.sh" >&2
         echo "  dispatch them, then: sh tools/review-gate.sh --record <agent>..." >&2
         exit 1
     fi

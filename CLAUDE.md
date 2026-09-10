@@ -193,11 +193,16 @@ count. Record a completed review with `--record <agent>`.
 | a brief, this file, or an environment claim changed | `claims` | kind-1 statements rot silently |
 | a speed or scale claim was made | `measurement` | never report a single sample |
 
-`sh tools/review-pack.sh > packet.md` builds what a reviewer is dispatched
-with — the diff, the TCB files it touched, the suite's environment block.
-Reviewers cost roughly 90k tokens each and most of it used to go on
-rediscovering the repository; handing over the packet turns a search into a
-read.
+**Always build the packet first: `sh tools/review-pack.sh`.** It writes a
+file and prints the path; the dispatch prompt tells the reviewer to read that
+path. Not optional — a reviewer sent to "go and look" spends most of ~90k
+tokens rediscovering the repository, and the packet is the diff, the TCB
+files it touched and the suite's environment block, already assembled.
+
+Give the reviewer the *path*, never the packet's contents: piping it into the
+prompt moves the cost into this context instead of removing it. That is
+exactly why the first version of this script went unused the one time there
+was an opportunity to use it.
 
 **Every reviewer shares one reporting contract:** a finding carries the
 command that shows it and that command's verbatim output, or it is labelled
