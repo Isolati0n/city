@@ -15,6 +15,18 @@
 _Static_assert(NW_MAX_UNITS * 2 + NW_FD_RESERVED <= NW_MAX_FDS,
                "derived fd budget");
 
+/* How far nwspawn.c's close_others must sweep, and how many descriptors it
+ * must be able to hold while doing it. Derived here, beside the budget it
+ * follows from, because that is where a reader looks for a limit: the sweep
+ * has to cover every descriptor the budget above permits, or it silently
+ * leaves some open. It was a bare 512 in three places in nwspawn.c until
+ * 2026-09-10 -- a fifth undeclared fd limit that first bit at roughly 254
+ * units, inside the range the budget allows. Limits are derived, never
+ * declared twice (invariant 3). */
+#define NW_FD_SWEEP     NW_MAX_FDS
+_Static_assert(NW_MAX_UNITS * 2 + NW_FD_RESERVED <= NW_FD_SWEEP,
+               "sweep must cover the whole legal descriptor range");
+
 /* There is one seccomp filter and a house does not choose. A second profile
  * (NW_PROF_BUILD, for a toolchain) existed briefly on 2026-09-10 and was
  * removed the same day: its allow-list was written from a table rather than

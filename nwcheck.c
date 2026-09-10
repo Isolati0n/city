@@ -103,10 +103,17 @@ int nw_check(const void *blob, uint32_t len)
 {
     if (len < sizeof(struct nw_hdr)) return NW_E_SIZE;
     const struct nw_hdr *h = nw_hdr(blob);
-    if (h->magic[0] != 'N' || h->magic[1] != 'W' || h->magic[2] != 'P'
-        || h->magic[3] != 'L' || h->magic[4] != 'A' || h->magic[5] != 'N'
-        || h->magic[6] != '0' || h->magic[7] != '5')
-        return NW_E_MAGIC;
+    /* Compare against NW_MAGIC itself. These were eight byte literals until
+     * 2026-09-10, so NW_MAGIC was defined and used nowhere: changing the
+     * constant changed nothing, and a format bump could have moved the
+     * definition while leaving the check behind. The _Static_assert pins the
+     * width so the loop and the constant cannot disagree either. */
+    {
+        static const char want[] = NW_MAGIC;
+        _Static_assert(sizeof want == sizeof h->magic + 1, "magic width");
+        for (size_t i = 0; i < sizeof h->magic; i++)
+            if (h->magic[i] != want[i]) return NW_E_MAGIC;
+    }
     if (h->n_units < 1 || h->n_units > NW_MAX_UNITS) return NW_E_UNITS;
     if (h->n_binds > NW_MAX_BINDS) return NW_E_BINDS;
     uint32_t need = (uint32_t)NW_BLOB_SIZE(h->n_units, h->n_binds);

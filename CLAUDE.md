@@ -91,6 +91,16 @@ sections after this one and are deliberately not numbered here.
    There is **one** allow-list and a house does not choose it; the second
    profile that briefly existed is `HISTORY.md` §23.
 
+   **Lids are not advisory.** If a declared lid cannot be applied, that house
+   does not start: every lid path in `nwsup.c` ends in `die()`, never in a log
+   line and a return. A house that runs unconfined while the plan says it is
+   confined is the plan lying, which is worse than a house that does not run,
+   and it is the same defect as a brick that roots on the machine while
+   logging `lid brick`. The house then burns its restart budget and stays
+   down — deliberately, because a do-not-restart signal would be a second
+   meaning on the exit-status channel (bug 9). Everything else boots normally;
+   nothing a house does halts the city. `HISTORY.md` §25.
+
    The honest consequence, recorded because it is load-bearing: **reachability
    has moved out of the sealed plan and into the lid set.** A `lids=none` house
    can open its own socket — nothing structural stops it. `__NR_socket` is

@@ -22,6 +22,17 @@ os.makedirs(WORK, exist_ok=True)
 CC = os.path.join(ROOT, "bakery", "nw-cc.py")
 
 
+def blob_h(name):
+    """Read a #define out of blob.h. Limits are derived, never declared
+    twice -- that includes here: a test that hardcodes NW_MAX_UNITS stops
+    testing the maximum the day the maximum moves."""
+    for line in open(os.path.join(ROOT, "blob.h")):
+        f = line.split()
+        if len(f) >= 3 and f[0] == "#define" and f[1] == name:
+            return f[2]
+    raise SystemExit(f"blob.h has no {name}")
+
+
 def run(cmd, **kw):
     p = subprocess.run(cmd, capture_output=True, **kw)
     p.out = (p.stdout or b"").decode("utf-8", "replace")
@@ -133,9 +144,24 @@ def test_fuzz_checker():
 
 
 def test_difftest():
-    """Baker output must be accepted by C nw-check; flipped crc must not."""
+    """Baker output must be accepted by C nw-check; flipped crc must not.
+
+    Also pins the magic across the two implementations. NW_MAGIC in blob.h is
+    now what nw_check compares against, but the baker has its own literal and
+    cannot include the header -- so the two are a place that must agree, and
+    this is what makes disagreeing fail rather than produce a confusing
+    NW_E_MAGIC at boot."""
     r = run([f"{BIN}/nw-check", f"{SLOTS}/A/plan.blob"])
     expect(r.returncode == 0, "difftest good")
+
+    want = blob_h("NW_MAGIC").strip('"')
+    src = open(CC).read()
+    lit = re.findall(r'b"(NWPLAN\d\d)"', src)
+    expect(lit, "no magic literal found in the baker")
+    expect(all(m == want for m in lit),
+           f"blob.h NW_MAGIC is {want!r}, baker emits {set(lit)!r}")
+    expect(open(f"{SLOTS}/A/plan.blob", "rb").read(8) == want.encode(),
+           "the staged blob does not carry NW_MAGIC")
     print("ok difftest")
 
 
@@ -549,6 +575,88 @@ def test_brick_needs_newns():
     print("ok brick-needs-newns")
 
 
+def test_lids_are_not_advisory():
+    """A declared lid that cannot be applied must stop that house starting.
+
+    lid_landlock used to say-and-continue on three paths -- Landlock absent,
+    ruleset creation failed, restrict_self failed. On each, the house ran with
+    no file restriction while the plan said it was confined, the boot
+    succeeded, and nothing noticed. Invariant 6 says a lid decides what a
+    house can do; a lid that decides nothing while claiming to is the same
+    defect as a brick that roots on the machine while logging `lid brick`.
+
+    Written to assert the *rule*, not this container: Landlock is compiled out
+    here, but the target kernel has it. Either the lid goes on and the house
+    runs, or it does not and the house does not -- and never a third outcome."""
+    probe = f"{BIN}/unit-probe"
+    city = f"{WORK}/lid-advisory.city"
+    open(city, "w").write(
+        f"house locked {probe} kind=oneshot lids=landlock\n"
+        f"house plain {probe} kind=oneshot budget=0 lids=none\n"
+    )
+    blob = f"{WORK}/lid-advisory.blob"
+    b = run(["python3", CC, "--city", city, "--out", blob])
+    expect(b.returncode == 0, f"bake\n{b.out}{b.err}")
+    rc, out = boot(plan=blob, hold=1500)
+
+    # The say-and-continue form was "[nw-sup] landlock ..."; the fatal form is
+    # "[nw-sup] FAIL landlock ...". If a soft line ever comes back, so does
+    # the defect.
+    expect("[nw-sup] landlock" not in out,
+           f"a declared lid was skipped with a log line\n{out}")
+
+    applied = "lid landlock" in out
+    refused = "FAIL landlock" in out
+    expect(applied != refused,
+           f"exactly one of applied/refused must happen\n{out}")
+
+    if refused:
+        expect("house=locked" not in out,
+               f"lid could not be applied and the house ran anyway\n{out}")
+    else:
+        expect("house=locked" in out,
+               f"lid was applied but the house did not run\n{out}")
+
+    # Nothing a house does halts the city: the other house boots either way.
+    expect("house=plain" in out, f"an unrelated house must still run\n{out}")
+    expect(rc == 0 and "HALT" not in out,
+           f"a house that cannot wear its lid must not halt the city\n{out}")
+    print("ok lids-not-advisory" + (" (landlock absent here)" if refused else ""))
+
+
+def test_non_provision_at_max():
+    """Non-provision, asserted at NW_MAX_UNITS rather than at four.
+
+    unit-probe scanned fd 3..63 and unit i's log pipe lands on fd 5 + 2i, so
+    it went blind at unit index 30 and reported fds_ge3=0 for every unit above
+    it while they held whatever they held. The probe sweeps /proc/self/fd now;
+    this is the test that exercises the range the fix exists to cover, since
+    a leak that only appears at high unit indices is invisible to a 4-unit
+    city by construction."""
+    n = int(blob_h("NW_MAX_UNITS"))
+    probe = f"{BIN}/unit-probe"
+    city = f"{WORK}/maxunits.city"
+    open(city, "w").write("".join(
+        f"house u{i:02d} {probe} kind=oneshot lids=none\n" for i in range(n)))
+    blob = f"{WORK}/maxunits.blob"
+    b = run(["python3", CC, "--city", city, "--out", blob])
+    expect(b.returncode == 0, f"bake\n{b.out}{b.err}")
+
+    rc, out = boot(plan=blob, hold=3000)
+    expect(rc == 0, f"max-unit city rc={rc}\n{out[-3000:]}")
+    expect(f"houses={n}" in out, f"expected {n} units\n{out[-3000:]}")
+
+    reported = dict(re.findall(r"house=(\S+) fds_ge3=(-?\d+)", out))
+    expect(len(reported) == n,
+           f"only {len(reported)} of {n} units reported\n{out[-3000:]}")
+    dirty = {h: v for h, v in reported.items() if v != "0"}
+    expect(not dirty,
+           f"units hold descriptors they were not granted: "
+           f"{sorted(dirty.items())[:8]}")
+    expect(f"houses_reaped={n}" in out, f"reap\n{out[-2000:]}")
+    print(f"ok non-provision-at-max ({n} units)")
+
+
 def test_hash_pin():
     h = open(f"{SLOTS}/A/plan.blob.sha256").read().strip()
     expect(len(h) == 64, "sha256 len")
@@ -563,6 +671,7 @@ def main():
     print("== city suite ==")
     test_hash_pin()
     test_difftest()
+    test_lids_are_not_advisory()
     test_baker_rejects()
     test_fuzz_checker()
     test_happy()
@@ -579,6 +688,7 @@ def main():
     test_brick_is_a_root()
     test_brick_needs_newns()
     test_path_traversal_refused()
+    test_non_provision_at_max()
     print("ALL TESTS PASSED")
 
 

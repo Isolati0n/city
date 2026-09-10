@@ -149,18 +149,61 @@ not expose PKU (`pkey_alloc` returns `EINVAL`).
 
 ## 6. The code
 
+> **AUDITED 2026-09-10 — this section mixes what was built with what was only
+> specified, and nothing marked which.**
+>
+> That cost real time twice. The "ring of timestamps" line below was repeated
+> into `CLAUDE.md` as an enforced invariant and into an agent brief, and
+> believed by two readers, because it sits in a file called `HISTORY.md` and
+> history reads like a record of what happened. It was never built. This is
+> the characteristic failure (see `CLAUDE.md`) one layer up: an aspirational
+> sentence in a document whose title implies it is a record.
+>
+> The original text is left exactly as written — a record is not improved by
+> editing it — and every claim is marked in place:
+>
+> - **[BUILT]** — was true then and is checkable now.
+> - **[BUILT, SINCE REMOVED]** — was true then; a later section removed it.
+> - **[NEVER BUILT]** — specified here and never implemented. Do not repeat
+>   it without checking the code.
+> - **[RUN RECORD]** — a figure from one run on one machine, not re-derivable
+>   and not a standing result.
+
 ### PID 1 (`pid1.c`)
 
 Blocks signals before the first fork, gates on `nw-check`, loads its table
 from the validated plan, creates one private log pipe per unit, forks the
 broker and loggers, reaps forever, shuts down in reverse.
 
+> **[BUILT]** for all of it except the broker. Signals blocked before the
+> first fork (`sigprocmask(SIG_BLOCK, ...)` in `pid1.c`); reverse-order
+> shutdown is the `for (i = n_houses; i-- > 0; )` loop in `shutdown_city`.
+> **The broker is [NEVER BUILT] under this name** — `nwbroker.c` has never
+> existed in this repository. The thing described was `electrician.c`, which
+> was **[BUILT, SINCE REMOVED]** (§17). PID 1 now forks `nw-spawn`.
+
 No allocation after start. No parsing. Restart budget is a ring of timestamps,
 not a counter — nothing to overflow.
+
+> **[BUILT]** — no allocation, no parsing.
+> **[NEVER BUILT]** — the ring. `grep` for `ring` across the C sources returns
+> nothing and always has. The budget is `int deaths`, a counter over a sliding
+> window, reset when the window expires. It is also **not in PID 1 at all**:
+> it lives in `nwsup.c`, and PID 1 has no respawn path. So this sentence was
+> wrong twice over, and was quoted as an invariant until 2026-09-10.
+> The property it claimed — nothing to overflow — happens to hold anyway,
+> which is why nobody noticed: the description was false while the behaviour
+> was fine.
 
 Booted as **genuine PID 1** via `unshare --pid --fork --mount-proc`, which
 exercised orphan reaping for the first time: 9 orphans reaped across three
 restarts, all correctly ignored.
+
+> **[BUILT]** — the suite still boots under `unshare --pid --fork
+> --mount-proc`.
+> **[RUN RECORD]** for the figure. Nothing today drives orphans through a
+> restart cycle; `test_happy` asserts `orphans=0`, which is the happy path.
+> Recorded as a known-open item in `.claude/agents/runtime.md`.
 
 ### The validator (`nwcheck.c`)
 
@@ -169,7 +212,24 @@ restarts, all correctly ignored.
 open-addressed hash and cycle detection with a counting-sort adjacency index:
 **0.10 s at 200,000 units**.
 
+> **[BUILT]** — no malloc, no recursion, bounded loops; the open-addressed
+> duplicate-name table is the `slot[128]` scan in `nw_check`.
+> **[NEVER BUILT]** — cycle detection, and the counting-sort adjacency index
+> with it. There has never been a graph in a plan to have a cycle in. This
+> claim survived into `baker.md` as a capability the baker had; see §16 and
+> §17.
+> **[RUN RECORD]** — the timings. Note 200,000 units is far outside
+> `NW_MAX_UNITS`, so it measured the routine and not a legal plan.
+> The count "14" is the kind of number `CLAUDE.md` now bans from briefs; it is
+> left here because this is a dated record, not a brief.
+
 ### The broker (`nwbroker.c`)
+
+> **[NEVER BUILT]** under this name; **[BUILT, SINCE REMOVED]** as
+> `electrician.c`. Everything in this subsection describes the edge-era
+> design, which §17 removed permanently — there are no socketpairs, no
+> declared edges and no readiness observation in the tree. It is kept because
+> §17's reasoning is only legible against what it removed.
 
 Owns every edge. Creates a socketpair per declared edge and forks each
 supervisor with exactly its own descriptors.
@@ -1704,3 +1764,96 @@ an enumerated set of bind kinds rather than arbitrary source strings.
 resolved after the pivot, which is a small surface with an owner, and `..`
 rejection is the right answer there rather than a stopgap. Nothing in that doc
 should be built before the brick builder settles what a brick identity is.
+
+## 25. Lids are not advisory — 2026-09-10
+
+A house declaring `lids=landlock` on a kernel without Landlock ran with **no
+file restriction at all**. `lid_landlock` logged `landlock unavailable` and
+returned, the supervisor carried on, the house started, the boot succeeded and
+the city exited 0. Three paths did this: Landlock absent, ruleset creation
+failed, `restrict_self` failed. Two more discarded the return of
+`landlock_add_rule` outright.
+
+Every other lid was already fatal — `unshare` for both namespaces, every step
+of the brick pivot, seccomp. Only this one said and continued.
+
+**The decision is that a declared lid that cannot be applied stops that house
+starting.** All of `lid_landlock` now ends in `die()`, including the two
+`add_rule` calls: a ruleset missing a rule is not the confinement the plan
+asked for, even when the omission happens to fail closed.
+
+This is worse than the documentation cases in `CLAUDE.md`'s characteristic-
+failure list, and worth separating from them. Those misled a *reader*. This
+one misled the *plan*: invariant 6 says a lid is the thing that decides what a
+house can do, and here a lid decided nothing while claiming to. It is the same
+shape as the brick that rooted on the machine while logging `lid brick` (§24)
+— a mechanism reporting success for work it did not do.
+
+**Why `die()` and not a do-not-restart signal.** `die()` exits the
+supervisor's child, so `nw-sup` applies the ordinary restart budget and the
+house stays down once it is spent. A distinct exit code meaning
+"do-not-restart-because-the-lid-failed" would be a second meaning on the
+exit-status channel — one channel, two meanings, separated only by which
+integer, which is bug 9 exactly (see `blob.h`). The budget is the existing
+mechanism for "this house cannot run" and it is used as-is.
+
+**Consequence worth knowing:** Landlock is applied after the brick pivot, so a
+brick house wearing `landlock` must now carry `/dev/null` inside its brick or
+bind it in. That was previously skipped in silence.
+
+**Where this bites.** The target kernel is 6.18 and has Landlock, so on the
+real machine this changes nothing. It bites in containers and test
+environments — which is precisely where it was hiding, and precisely where a
+house wearing a lid that does nothing would be mistaken for a house that is
+confined.
+
+`test_lids_are_not_advisory` asserts the rule rather than the environment:
+either the lid goes on and the house runs, or it does not and the house does
+not, and never a third outcome. Negative control: restoring say-and-continue
+fails it with `a declared lid was skipped with a log line`.
+
+### Three instruments repaired in the same pass
+
+**`unit_probe.c` scanned fd 3 to 63.** Unit *i*'s log pipe lands on fd
+`5 + 2i` — measured, `u00` at 5 through `u63` at 131 — so the probe went blind
+at unit index 30, silently, reporting `fds_ge3=0` for every unit above it
+whatever they held. This is the suite's only general non-provision assertion,
+and non-provision is what invariant 5 rests on. It was logged as a defect
+against the 2026-09-06 sources and survived every rebuild since, for the
+reason that makes this class expensive: **an instrument that undercounts reads
+exactly like a passing test.**
+
+It sweeps `/proc/self/fd` now and returns -1 rather than 0 when it cannot
+look, so "I could not look" and "I found none" are different answers.
+`test_non_provision_at_max` exercises it at `NW_MAX_UNITS`, read from
+`blob.h` rather than typed into the test.
+
+Measured control, with one descriptor leaked into every house at 64 units:
+
+```
+old fd 3..63 scan:  reports the leak : 30   u00 .. u29
+                    reports CLEAN    : 34   u30 .. u63
+                    first blind unit : u30
+```
+
+Every one of those 34 units held the leaked descriptor. A leak confined to
+high-index units — which is bug 13's shape exactly, 32 of 33 units at 46
+edges — would have been invisible.
+
+**`NW_MAGIC` was defined and used nowhere.** `nw_check` compared eight byte
+literals, so changing the constant changed nothing: a format bump could move
+the definition and leave the check behind. The comparison now reads
+`NW_MAGIC`, with a `_Static_assert` pinning the width, and `test_difftest`
+asserts the constant and the baker's own literal agree — the baker cannot
+include the header, so that is a place that must agree. Control: changing
+`NW_MAGIC` to `NWPLAN99` makes `nw-check` reject the staged blob and fails the
+difftest.
+
+**`close_others` carried a bare `512` in three places.** A fifth undeclared
+descriptor limit, first biting at roughly 254 units — inside the range the
+declared budget permits — and the `nd < 512` collection bound dropped
+descriptors on the floor with no error. `NW_FD_SWEEP` is now derived in
+`blob.h` beside the budget it follows from, with a `_Static_assert` that it
+covers the whole legal range, and overflowing the collection is a `die()`
+rather than a silent drop. Limits are derived, never declared twice
+(invariant 3); this class has now been killed five times.

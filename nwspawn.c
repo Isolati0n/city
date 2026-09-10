@@ -58,7 +58,7 @@ static void close_others(const int *keep, int nkeep)
 {
     int dfd = open("/proc/self/fd", O_RDONLY | O_DIRECTORY);
     if (dfd < 0) {
-        for (int fd = 0; fd < 512; fd++)
+        for (int fd = 0; fd < NW_FD_SWEEP; fd++)
             if (!kept(fd, keep, nkeep)) close(fd);
         return;
     }
@@ -68,15 +68,20 @@ static void close_others(const int *keep, int nkeep)
         die("fdopendir");
     }
     int dirfd_n = dirfd(d);
-    int doomed[512];
+    int doomed[NW_FD_SWEEP];
     int nd = 0;
     struct dirent *e;
     while ((e = readdir(d))) {
         if (e->d_name[0] == '.') continue;
         int fd = atoi(e->d_name);
         if (fd == dirfd_n) continue;
-        if (!kept(fd, keep, nkeep) && nd < 512)
+        if (!kept(fd, keep, nkeep)) {
+            /* Never drop one on the floor. The old bound was a bare literal
+             * and silently stopped collecting past it, which would have left
+             * descriptors open in a house with no error anywhere. */
+            if (nd >= NW_FD_SWEEP) { closedir(d); die("fd sweep overflow"); }
             doomed[nd++] = fd;
+        }
     }
     closedir(d);
     for (int i = 0; i < nd; i++)

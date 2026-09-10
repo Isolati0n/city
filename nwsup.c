@@ -121,6 +121,32 @@ static void lid_brick(const char *brick, char *const *binds, int nbinds)
     say("lid brick");
 }
 
+/* LIDS ARE NOT ADVISORY. If a declared lid cannot be applied, this house does
+ * not start.
+ *
+ * This function used to say-and-continue on three paths -- Landlock absent
+ * from the kernel, ruleset creation failed, restrict_self failed -- and on
+ * each of them the house ran with no file restriction at all while the plan
+ * said it was confined. The boot succeeded, the log mentioned it in passing,
+ * and no test noticed. That is worse than a comment that lies to a reader:
+ * it lies to the plan, and invariant 6 says a lid is the thing that decides
+ * what a house can do. A lid that decides nothing while claiming to is the
+ * same defect as a brick that roots on the machine while logging `lid brick`.
+ *
+ * Every other lid was already fatal (`unshare`, the brick pivot, seccomp).
+ * This one is now too, including the two add_rule calls whose returns were
+ * discarded: a ruleset missing a rule is not the confinement the plan asked
+ * for, even when the omission happens to fail closed.
+ *
+ * die() exits the supervisor's *child*, so nw-sup applies the ordinary
+ * restart budget and the house stays down once it is spent. That is
+ * deliberate. A do-not-restart signal would be a second meaning on the
+ * exit-status channel, which is bug 9's shape -- see blob.h. Nothing a house
+ * does halts the city, so every other house boots normally.
+ *
+ * Consequence worth knowing: this runs after the brick pivot, so a brick
+ * house wearing landlock must carry /dev/null inside its brick or bind it in.
+ * Previously that was silently skipped. */
 static void lid_landlock(const char *exec_path)
 {
     struct landlock_ruleset_attr attr = {
@@ -129,41 +155,38 @@ static void lid_landlock(const char *exec_path)
             LANDLOCK_ACCESS_FS_READ_FILE |
             LANDLOCK_ACCESS_FS_READ_DIR
     };
-    int abi = sys_landlock_create_ruleset(NULL, 0, LANDLOCK_CREATE_RULESET_VERSION);
-    if (abi < 0) {
-        say("landlock unavailable");
-        return;
-    }
+    if (sys_landlock_create_ruleset(NULL, 0, LANDLOCK_CREATE_RULESET_VERSION) < 0)
+        die("landlock unavailable");
     int rfd = sys_landlock_create_ruleset(&attr, sizeof attr, 0);
-    if (rfd < 0) {
-        say("landlock ruleset skipped");
-        return;
-    }
+    if (rfd < 0)
+        die("landlock ruleset");
+
     int pathfd = open(exec_path, O_PATH | O_CLOEXEC);
-    if (pathfd >= 0) {
-        struct landlock_path_beneath_attr pb = {
-            .allowed_access = LANDLOCK_ACCESS_FS_EXECUTE | LANDLOCK_ACCESS_FS_READ_FILE,
-            .parent_fd = pathfd
-        };
-        sys_landlock_add_rule(rfd, LANDLOCK_RULE_PATH_BENEATH, &pb, 0);
-        close(pathfd);
-    }
+    if (pathfd < 0) die("landlock open exec_path");
+    struct landlock_path_beneath_attr pe = {
+        .allowed_access = LANDLOCK_ACCESS_FS_EXECUTE | LANDLOCK_ACCESS_FS_READ_FILE,
+        .parent_fd = pathfd
+    };
+    if (sys_landlock_add_rule(rfd, LANDLOCK_RULE_PATH_BENEATH, &pe, 0) < 0)
+        die("landlock rule exec_path");
+    close(pathfd);
+
     int devnull = open("/dev/null", O_PATH | O_CLOEXEC);
-    if (devnull >= 0) {
-        struct landlock_path_beneath_attr pb = {
-            .allowed_access = LANDLOCK_ACCESS_FS_READ_FILE,
-            .parent_fd = devnull
-        };
-        sys_landlock_add_rule(rfd, LANDLOCK_RULE_PATH_BENEATH, &pb, 0);
-        close(devnull);
-    }
+    if (devnull < 0) die("landlock open /dev/null");
+    struct landlock_path_beneath_attr pn = {
+        .allowed_access = LANDLOCK_ACCESS_FS_READ_FILE,
+        .parent_fd = devnull
+    };
+    if (sys_landlock_add_rule(rfd, LANDLOCK_RULE_PATH_BENEATH, &pn, 0) < 0)
+        die("landlock rule /dev/null");
+    close(devnull);
+
     if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) < 0)
         die("nnp landlock");
     if (sys_landlock_restrict_self(rfd, 0) < 0)
-        say("landlock restrict skipped");
-    else
-        say("lid landlock");
+        die("landlock restrict");
     close(rfd);
+    say("lid landlock");
 }
 
 static long long now_ms(void)
