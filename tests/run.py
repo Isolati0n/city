@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import struct
 import subprocess
 import sys
@@ -340,6 +341,160 @@ def test_seccomp_kills():
     print("ok seccomp-kill")
 
 
+def make_brick(ident, mirrors=()):
+    """Build a content-addressed brick under {STAGE}/nw/bricks and return its
+    path. The name is the sha256 of the tree's contents, so two bricks that
+    differ only in the text of /id land at different paths on their own --
+    nothing assigns them.
+
+    `mirrors` are machine paths the brick must have mount points for. nw-sup
+    will not mkdir into a brick, so the empty directories have to be baked in
+    here, which is exactly the constraint a real baker works under."""
+    import hashlib, shutil
+    files = {"id": ident.encode() + b"\n"}
+    tmp = tempfile.mkdtemp(dir=WORK)
+    os.makedirs(f"{tmp}/bin")
+    shutil.copy(f"{BIN}/unit-brick", f"{tmp}/bin/brick")
+    os.chmod(f"{tmp}/bin/brick", 0o755)
+    for rel, data in files.items():
+        open(f"{tmp}/{rel}", "wb").write(data)
+    for m in mirrors:
+        os.makedirs(f"{tmp}{m}", exist_ok=True)
+
+    h = hashlib.sha256()
+    for base, dnames, fnames in os.walk(tmp):
+        dnames.sort()
+        rel = os.path.relpath(base, tmp)
+        h.update(b"D" + rel.encode() + b"\0")
+        for f in sorted(fnames):
+            full = os.path.join(base, f)
+            h.update(b"F" + os.path.relpath(full, tmp).encode() + b"\0")
+            h.update(str(os.stat(full).st_mode).encode() + b"\0")
+            h.update(open(full, "rb").read())
+    brick = f"{STAGE}/nw/bricks/{h.hexdigest()}"
+    subprocess.run(["rm", "-rf", brick], check=False)
+    os.rename(tmp, brick)
+    return brick
+
+
+def test_brick_is_a_root():
+    """Two houses, two bricks, one path. Each house pivot_roots into its own
+    brick and reads /id; the contents differ, so neither is reading the
+    other's and neither is reading the machine's -- the machine has no /id at
+    all. The root listing is printed rather than probed one path at a time,
+    so a failure shows which root the house actually landed in.
+
+    A declared bind is checked in the same boot: the same path inside and
+    out, and the mount point already present in the brick."""
+    shared = f"{WORK}/shared"
+    os.makedirs(shared, exist_ok=True)
+    open(f"{shared}/token", "w").write("token-from-the-machine\n")
+
+    # /proc is bound into house one only, so it can count its own
+    # descriptors: nw-sup opens two directory fds to pivot and both must be
+    # gone by execv. House two has no /proc and reports fds=noproc, which is
+    # the honest answer rather than a zero nobody measured.
+    one = make_brick("brick-one", mirrors=(shared, "/proc"))
+    two = make_brick("brick-two")
+    expect(one != two, "two different bricks must content-address differently")
+
+    city = f"{WORK}/brick.city"
+    open(city, "w").write(
+        f"house one /bin/brick kind=oneshot lids=newns,seccomp "
+        f"brick={one} bind={shared} bind=/proc\n"
+        f"house two /bin/brick kind=oneshot lids=newns,seccomp brick={two}\n"
+    )
+    blob = f"{WORK}/brick.blob"
+    b = run(["python3", CC, "--city", city, "--out", blob])
+    expect(b.returncode == 0, f"bake\n{b.out}{b.err}")
+    expect("binds=2" in b.out, f"bind table not emitted\n{b.out}")
+    chk = run([f"{BIN}/nw-check", blob])
+    expect(chk.returncode == 0, f"nw-check\n{chk.out}{chk.err}")
+
+    rc, out = boot(plan=blob, hold=1200)
+    expect(rc == 0, f"brick city rc={rc}\n{out}")
+    expect("lid brick" in out, f"no pivot happened\n{out}")
+
+    # Each house tags its own lines: the logger prefixes a write chunk, not
+    # every line inside one, and the fixture flushes all four at once.
+    def field(k):
+        return dict(re.findall(r"(\w+) " + k + r"=(\S+)", out))
+    ids, roots, binds = field("id"), field("root"), field("bind")
+    fds = field("fds_ge3")
+    expect(ids.get("one") == "brick-one", f"house one id\n{out}")
+    expect(ids.get("two") == "brick-two", f"house two id\n{out}")
+    expect(ids["one"] != ids["two"],
+           f"same path, same contents: the pivot did nothing\n{out}")
+
+    # Nothing of the machine's root is reachable except what the plan asked
+    # for. These exist on the machine and in no brick, so seeing one that was
+    # not declared means the house never left. House one declared /proc and a
+    # bind under /tmp, so those two are its to have; house two declared
+    # nothing and must see neither.
+    machine_only = {"etc", "usr", "proc", "root", "var", "tmp"}
+    declared = {"one": {"proc", "tmp"}, "two": set()}
+    for h in ("one", "two"):
+        entries = set(roots[h].split(","))
+        expect("id" in entries and "bin" in entries,
+               f"house {h} is not in a brick: root={roots[h]}")
+        leaked = entries & (machine_only - declared[h])
+        expect(not leaked,
+               f"house {h} can still see the machine root: {sorted(leaked)}")
+
+    # Invariant 2's live check inside a brick: the two directory descriptors
+    # nw-sup opens to pivot are O_CLOEXEC and closed before execv.
+    expect(fds.get("one") == "0",
+           f"the pivot leaked a descriptor into the house\n{out}")
+
+    expect(binds.get("one") == "token-from-the-machine",
+           f"declared bind did not land\n{out}")
+    expect(binds.get("two") == "none",
+           f"house two was given a bind it never declared\n{out}")
+    print("ok brick-is-a-root")
+
+
+def test_brick_needs_newns():
+    """A brick is a root, and pivoting into one without a private mount
+    namespace would repoint the machine's. The baker refuses rather than
+    adding the lid on the plan's behalf, and nw-check refuses independently
+    -- checked here against a blob the baker would never emit."""
+    city = f"{WORK}/brick-nons.city"
+    open(city, "w").write(
+        f"house solo /bin/brick kind=oneshot lids=seccomp brick=/nw/bricks/x\n")
+    p = run(["python3", CC, "--city", city, "--out", f"{WORK}/nope.blob"])
+    expect(p.returncode != 0, "brick without newns should fail the bake")
+    expect("needs lids=...,newns" in (p.out + p.err), f"reason\n{p.out}{p.err}")
+
+    # Same rule, enforced independently in the TCB: clear the NEWNS bit in a
+    # sealed blob and repair the crc, exactly as a hand-rolled baker would.
+    good = f"{WORK}/brick-ok.blob"
+    open(city, "w").write(
+        f"house solo /bin/brick kind=oneshot lids=newns,seccomp "
+        f"brick=/nw/bricks/x\n")
+    p = run(["python3", CC, "--city", city, "--out", good])
+    expect(p.returncode == 0, f"bake\n{p.out}{p.err}")
+    d = bytearray(open(good, "rb").read())
+    lids_off = 20 + 32 + 128 + 96 + 4          # hdr + name + exec + brick + kind/budget/window
+    expect(d[lids_off] & 4, "expected the NEWNS bit where the layout says")
+    d[lids_off] &= ~4
+    d[16:20] = b"\x00\x00\x00\x00"
+    crc = zlib.crc32(bytes(d)) & 0xFFFFFFFF
+    d[16:20] = struct.pack("<I", crc)
+    bad = f"{WORK}/brick-nons.blob"
+    open(bad, "wb").write(bytes(d))
+    r = run([f"{BIN}/nw-check", bad])
+    expect(r.returncode != 0, "nw-check must reject a brick without NEWNS")
+    expect("brick without NEWNS" in (r.out + r.err), f"reason\n{r.out}{r.err}")
+
+    # And a profile nobody wears: build without the seccomp lid.
+    open(city, "w").write("house solo /bin/true kind=oneshot lids=none "
+                          "profile=build\n")
+    p = run(["python3", CC, "--city", city, "--out", f"{WORK}/nope.blob"])
+    expect(p.returncode != 0, "profile=build without seccomp should fail")
+    expect("needs lids=...,seccomp" in (p.out + p.err), f"reason\n{p.out}{p.err}")
+    print("ok brick-needs-newns")
+
+
 def test_hash_pin():
     h = open(f"{SLOTS}/A/plan.blob.sha256").read().strip()
     expect(len(h) == 64, "sha256 len")
@@ -367,6 +522,8 @@ def main():
     test_kind_required()
     test_kind_exit0()
     test_seccomp_kills()
+    test_brick_is_a_root()
+    test_brick_needs_newns()
     print("ALL TESTS PASSED")
 
 

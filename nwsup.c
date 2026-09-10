@@ -14,6 +14,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <signal.h>
+#include <sys/mount.h>
 #include <sys/prctl.h>
 #include <sys/syscall.h>
 #include <sys/wait.h>
@@ -62,6 +63,62 @@ static void lid_newns(void)
     if (unshare(CLONE_NEWNS) < 0)
         die("unshare ns");
     say("lid newns");
+}
+
+/* Pivot into the house's brick: its own root, its own libraries, its own
+ * toolchain. The same move dawn makes at the system level, one layer down.
+ *
+ * Runs after the NEWNS unshare (it needs the private mount namespace) and
+ * before Landlock and seccomp: the strict filter has no mount, no unshare
+ * and no pivot_root, so a house sealed first could not pivot at all.
+ */
+static void lid_brick(const char *brick, char *const *binds, int nbinds)
+{
+    /* Without this the mounts below propagate back to the machine and every
+     * house sees every other house's binds. A brick that is visible outside
+     * the house is not a root, it is a directory. */
+    if (mount(NULL, "/", NULL, MS_REC | MS_PRIVATE, NULL) < 0)
+        die("make rprivate");
+
+    /* pivot_root requires the new root to be a mount point, and a brick is a
+     * plain directory. Binding it onto itself mounts *at* the brick; it does
+     * not write into it, so the seal is untouched. */
+    if (mount(brick, brick, NULL, MS_BIND | MS_REC, NULL) < 0)
+        die("bind brick");
+
+    for (int i = 0; i < nbinds; i++) {
+        char tgt[NW_BRICK_LEN + NW_PATH_LEN];
+        int n = snprintf(tgt, sizeof tgt, "%s%s", brick, binds[i]);
+        if (n < 0 || (size_t)n >= sizeof tgt)
+            die("bind target too long");
+        /* The mount point must already exist inside the brick. nw-sup will
+         * not mkdir into a sealed content-addressed tree to make room for a
+         * mount: a missing target is a bake error and fails loudly here
+         * rather than being created behind the baker's back. */
+        if (mount(binds[i], tgt, NULL, MS_BIND | MS_REC, NULL) < 0)
+            die("bind");
+    }
+
+    /* pivot_root(".", ".") -- new_root and put_old are the same directory.
+     * The old root is left stacked on top of the new one and detached
+     * through a descriptor opened beforehand. The ordinary form needs a
+     * put_old directory inside the new root, which here would mean either
+     * baking an empty /oldroot into every brick or mkdir'ing into a sealed
+     * tree. This form needs neither. */
+    int oldroot = open("/", O_DIRECTORY | O_RDONLY | O_CLOEXEC);
+    if (oldroot < 0) die("open oldroot");
+    int newroot = open(brick, O_DIRECTORY | O_RDONLY | O_CLOEXEC);
+    if (newroot < 0) die("open brick");
+    if (fchdir(newroot) < 0) die("fchdir brick");
+    if (syscall(SYS_pivot_root, ".", ".") < 0) die("pivot_root");
+    if (fchdir(oldroot) < 0) die("fchdir oldroot");
+    if (mount(NULL, ".", NULL, MS_REC | MS_PRIVATE, NULL) < 0)
+        die("oldroot rprivate");
+    if (umount2(".", MNT_DETACH) < 0) die("detach oldroot");
+    close(oldroot);
+    close(newroot);
+    if (chdir("/") < 0) die("chdir new root");
+    say("lid brick");
 }
 
 static void lid_landlock(const char *exec_path)
@@ -136,6 +193,29 @@ int main(int argc, char **argv)
     if ((e = getenv("NW_BUDGET"))) budget = (unsigned)atoi(e);
     if ((e = getenv("NW_WINDOW"))) window_s = (unsigned)atoi(e);
     if ((e = getenv("NW_KIND"))) kind = (unsigned)atoi(e);
+    unsigned profile = NW_PROF_STRICT;
+    if ((e = getenv("NW_PROFILE"))) profile = (unsigned)atoi(e);
+
+    const char *brick = getenv("NW_BRICK");
+    if (brick && !brick[0]) brick = NULL;
+    char *binds[NW_MAX_BINDS];
+    int nbinds = 0;
+    if (brick) {
+        /* nw-check rejects a brick house without NEWNS (NW_E_BRICKNS), so
+         * this cannot happen from a sealed plan. It is checked anyway
+         * because nw-sup reads its unit from the environment, and pivoting
+         * without a private namespace would repoint the machine's root. */
+        if (!(lids & NW_LID_NEWNS)) die("brick without newns");
+        if ((e = getenv("NW_NBINDS"))) nbinds = atoi(e);
+        if (nbinds < 0 || nbinds > NW_MAX_BINDS) die("nbinds");
+        for (int i = 0; i < nbinds; i++) {
+            char k[24];
+            snprintf(k, sizeof k, "NW_BIND_%d", i);
+            char *v = getenv(k);
+            if (!v || !v[0]) die("missing bind");
+            binds[i] = v;
+        }
+    }
 
     /* nw-spawn blocks every signal before its first fork, and a signal mask
      * survives both fork and exec -- so without this the supervisor and every
@@ -161,9 +241,10 @@ int main(int argc, char **argv)
         if (p == 0) {
             if (lids & NW_LID_NEWNET) lid_netns();
             if (lids & NW_LID_NEWNS) lid_newns();
+            if (brick) lid_brick(brick, binds, nbinds);
             if (lids & NW_LID_LANDLOCK) lid_landlock(path);
             if (lids & NW_LID_SECCOMP) {
-                if (nw_apply_house_seccomp() < 0) die("house seccomp");
+                if (nw_apply_house_seccomp(profile) < 0) die("house seccomp");
                 say("lid seccomp");
             }
             char *av[] = { (char *)name, NULL };

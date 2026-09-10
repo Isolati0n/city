@@ -14,12 +14,18 @@ static const char *errs[] = {
     "exec_path",
     "reserved byte nonzero",
     "lids",
-    "kind"
+    "kind",
+    "brick path",
+    "brick without NEWNS lid",
+    "bind count",
+    "bind unit index",
+    "bind path",
+    "seccomp profile"
 };
 
 const char *nw_errstr(int e)
 {
-    if (e < 0 || e > NW_E_KIND) return "unknown";
+    if (e < 0 || e > NW_E_PROFILE) return "unknown";
     return errs[e];
 }
 
@@ -51,19 +57,21 @@ static int name_ok(const char *s, int max)
     return 1;
 }
 
-static int path_ok(const char *s)
+static int path_ok_len(const char *s, int max)
 {
     if (s[0] != '/') return 0;
     int n = 0;
-    for (; n < NW_PATH_LEN && s[n]; n++) {
+    for (; n < max && s[n]; n++) {
         unsigned char c = (unsigned char)s[n];
         if (c < 32 || c == 127) return 0;
     }
-    if (n < 2 || n >= NW_PATH_LEN) return 0;
-    for (int i = n; i < NW_PATH_LEN; i++)
+    if (n < 2 || n >= max) return 0;
+    for (int i = n; i < max; i++)
         if (s[i] != 0) return 0;
     return 1;
 }
+
+static int path_ok(const char *s) { return path_ok_len(s, NW_PATH_LEN); }
 
 static uint32_t hash_name(const char *s)
 {
@@ -81,10 +89,11 @@ int nw_check(const void *blob, uint32_t len)
     const struct nw_hdr *h = nw_hdr(blob);
     if (h->magic[0] != 'N' || h->magic[1] != 'W' || h->magic[2] != 'P'
         || h->magic[3] != 'L' || h->magic[4] != 'A' || h->magic[5] != 'N'
-        || h->magic[6] != '0' || h->magic[7] != '3')
+        || h->magic[6] != '0' || h->magic[7] != '4')
         return NW_E_MAGIC;
     if (h->n_units < 1 || h->n_units > NW_MAX_UNITS) return NW_E_UNITS;
-    uint32_t need = (uint32_t)NW_BLOB_SIZE(h->n_units);
+    if (h->n_binds > NW_MAX_BINDS) return NW_E_BINDS;
+    uint32_t need = (uint32_t)NW_BLOB_SIZE(h->n_units, h->n_binds);
     if (len != need) return NW_E_SIZE;
 
     unsigned char tmp_hdr[sizeof(struct nw_hdr)];
@@ -120,6 +129,23 @@ int nw_check(const void *blob, uint32_t len)
         if (!path_ok(u[i].exec_path)) return NW_E_PATH;
         if (u[i].kind != NW_KIND_ONESHOT && u[i].kind != NW_KIND_LONGRUN)
             return NW_E_KIND;
+        if (u[i].profile != NW_PROF_STRICT && u[i].profile != NW_PROF_BUILD)
+            return NW_E_PROFILE;
+        /* A profile you would not actually wear is a silent wrong answer:
+         * without the seccomp lid no filter is applied at all. */
+        if (u[i].profile == NW_PROF_BUILD && !(u[i].lids & NW_LID_SECCOMP))
+            return NW_E_PROFILE;
+        /* brick is optional; when present it must be a well-formed absolute
+         * path, and it forces NEWNS -- a house cannot pivot into its own root
+         * without a private mount namespace, and nw-sup must not quietly
+         * supply the lid the plan failed to declare. */
+        if (u[i].brick[0]) {
+            if (!path_ok_len(u[i].brick, NW_BRICK_LEN)) return NW_E_BRICK;
+            if (!(u[i].lids & NW_LID_NEWNS)) return NW_E_BRICKNS;
+        } else {
+            for (int k = 0; k < NW_BRICK_LEN; k++)
+                if (u[i].brick[k] != 0) return NW_E_BRICK;
+        }
         /* The remaining spare byte must be zero. An unvalidated spare cannot
          * be given meaning later: an old blob carrying garbage would be
          * accepted by a new checker that reads it. */
@@ -141,6 +167,14 @@ int nw_check(const void *blob, uint32_t len)
             }
             if (same) return NW_E_DUPNAME;
         }
+    }
+
+    const struct nw_bind *b = nw_binds(blob);
+    for (uint32_t i = 0; i < h->n_binds; i++) {
+        if (b[i].unit >= h->n_units) return NW_E_BINDIDX;
+        if (!path_ok(b[i].path)) return NW_E_BINDPATH;
+        /* A bind only means anything for a house that has its own root. */
+        if (!u[b[i].unit].brick[0]) return NW_E_BINDIDX;
     }
 
     /* The runtime fd-budget check was retired on 2026-09-10. With edges gone

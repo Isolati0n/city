@@ -61,9 +61,26 @@ sections after this one and are deliberately not numbered here.
    thing, and no mechanism for granting one. (This replaces the pre-2026-09-10
    statement "wiring is non-provision, not enforcement", which concerned
    declared edges. Edges are erased permanently — `HISTORY.md` §17.)
-6. **Lids are the only thing that decides what a house can touch.** Seccomp,
-   Landlock and namespaces are applied per unit by `nw-sup` before `execv`.
-   Cybersecurity is not a goal; containerization applies to apps.
+
+   **A declared bind is not a third thing.** `bind=` makes a path *visible*
+   inside a house's brick; the house then opens it itself, with the name it
+   would have used anyway, because a bind is the same path inside and out.
+   Nothing is handed over. The invariant is about the descriptor table a house
+   is born with, and that is still exactly three descriptors.
+6. **Lids are the only thing that decides what a house can *do*; a brick
+   decides what it can *see*.** Seccomp, Landlock and namespaces are applied
+   per unit by `nw-sup` before `execv`. A unit with `brick=` also
+   `pivot_root`s into it first, so its `/` is its own tree — its own
+   libraries and toolchain, at the same paths, invisible to every other house
+   and to the machine. `brick=` forces `NW_LID_NEWNS`; `nwcheck.c` returns
+   `NW_E_BRICKNS` otherwise, because pivoting outside a private mount
+   namespace repoints the machine's root. Cybersecurity is not a goal;
+   containerization applies to apps.
+
+   Order is fixed and is not a style choice: namespaces, then the brick pivot,
+   then Landlock, then seccomp. The strict allow-list has no `mount`, no
+   `unshare` and no `pivot_root`, so a house sealed first could not enter its
+   own root.
 
    The honest consequence, recorded because it is load-bearing: **reachability
    has moved out of the sealed plan and into the lid set.** A `lids=none` house

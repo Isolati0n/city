@@ -8,7 +8,7 @@ CC = gcc
 CFLAGS = -Wall -Wextra -O2 -g -std=gnu11
 STAGE = /tmp/nw-init-run
 
-all: nw-dawn nw-root nw-spawn nw-check nw-sup nw-rescue unit-probe unit-boom unit-badcall unit-term
+all: nw-dawn nw-root nw-spawn nw-check nw-sup nw-rescue unit-probe unit-boom unit-badcall unit-term unit-brick
 
 nw-dawn: dawn.c
 	$(CC) $(CFLAGS) -o $@ dawn.c
@@ -43,12 +43,18 @@ unit-badcall: houses/badcall.c
 unit-term: houses/term.c
 	$(CC) $(CFLAGS) -o $@ houses/term.c
 
+# Static: this one is copied *into* a brick, and a brick carries its own
+# libraries. A dynamic build would resolve its loader outside the brick and
+# the root test would pass for the wrong reason.
+unit-brick: houses/brick.c
+	$(CC) $(CFLAGS) -static -o $@ houses/brick.c
+
 stage: all
 	rm -rf $(STAGE)
 	mkdir -p $(STAGE)/nw/bin $(STAGE)/nw/bricks $(STAGE)/nw/stores
 	mkdir -p $(STAGE)/efi/slots/A $(STAGE)/efi/slots/B $(STAGE)/work
 	cp -f nw-dawn nw-root nw-spawn nw-check nw-sup nw-rescue \
-	      unit-probe unit-boom unit-badcall unit-term $(STAGE)/nw/bin/
+	      unit-probe unit-boom unit-badcall unit-term unit-brick $(STAGE)/nw/bin/
 	chmod +x $(STAGE)/nw/bin/*
 	python3 bakery/nw-cc.py --probe $(STAGE)/nw/bin/unit-probe \
 	    --out $(STAGE)/efi/slots/A/plan.blob --lids seccomp
@@ -64,5 +70,5 @@ test: stage
 
 clean:
 	rm -f lids.o nw-dawn nw-root nw-spawn nw-check nw-sup nw-rescue \
-	      unit-probe unit-boom unit-badcall unit-term
+	      unit-probe unit-boom unit-badcall unit-term unit-brick
 	rm -rf $(STAGE)

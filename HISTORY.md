@@ -1435,3 +1435,160 @@ execute bit, ownership and 4 GiB cap are untested assumptions, not verified
 ones. And no firmware is involved: the test starts at dawn, not at a
 bootloader, so the UKI and the kernel command line that would really supply
 `NW_ROOT` are stubbed by `env`.
+
+## 22. Bricks as roots — 2026-09-10
+
+A house no longer runs in the machine's filesystem. A unit may declare
+`brick=/nw/bricks/<hash>`, and `nw-sup` `pivot_root`s into it before `execv`.
+After that the house's `/` **is** the brick: its own libraries, its own
+toolchain, at the same paths, invisible to every other house and to the
+machine.
+
+This is the same move `dawn` already makes at the system level, one layer
+down. `dawn` mounts the real root and pivots into it so PID 1 never learns
+what a filesystem is; `nw-sup` mounts a brick and pivots into it so a house
+never learns what the machine's root looks like. Nothing new was invented for
+it and no new mechanism entered PID 1 — `grep` for `mount` in `pid1.c` still
+returns zero.
+
+### What went into the plan
+
+`struct nw_unit` grew `brick[96]` (`"/nw/bricks/" + 64 hex + NUL`) and
+`profile`, which was the spare byte. A second array joined the blob:
+
+```c
+struct nw_bind { uint16_t unit; char path[128]; };
+```
+
+so the format is `NWPLAN04` and the header carries `n_binds`. `NW_BLOB_SIZE`
+derives the length from both counts and `nw_binds()` locates the second array
+from `n_units`, so nothing computes an offset by hand.
+
+Six error codes came with it: `NW_E_BRICK`, `NW_E_BRICKNS`, `NW_E_BINDS`,
+`NW_E_BINDIDX`, `NW_E_BINDPATH`, `NW_E_PROFILE`.
+
+### Three rules, each enforced in two places
+
+The baker refuses each of these, and `nwcheck.c` refuses each of them
+independently. The baker is not in the TCB and a blob can arrive from
+anywhere, so the checker cannot rely on it.
+
+1. **A brick forces `NW_LID_NEWNS`.** Pivoting outside a private mount
+   namespace repoints the *machine's* root. `nw-sup` re-checks it a third
+   time, because it reads its unit from the environment rather than from the
+   sealed blob.
+2. **A bind requires a brick.** A bind is a path made visible inside a root;
+   without a root there is nothing to make it visible in.
+3. **`profile=build` requires `NW_LID_SECCOMP`.** A profile you will not
+   actually wear applies no filter at all — the silent kind of wrong this
+   project keeps designing out.
+
+The baker **refuses rather than repairs**. A brick house that forgot `newns`
+is a bake error, not a plan to quietly add a lid to: a lid nobody asked for is
+a lid nobody reviewed.
+
+### `pivot_root(".", ".")`
+
+The textbook form needs a `put_old` directory *inside* the new root. A brick
+is sealed and content-addressed, so that would mean either baking an empty
+`/oldroot` into every brick or having `nw-sup` `mkdir` into a sealed tree to
+make room for a mount. Both are worse than the alternative, so new root and
+`put_old` are the same directory: the old root ends up stacked on top of the
+new one and is detached through a descriptor opened beforehand.
+
+The same reasoning settles bind targets. **`nw-sup` never creates a directory
+inside a brick.** A bind target that does not exist is a bake error and fails
+loudly at `mount(2)`; creating it would break the seal to save a decision that
+belongs at bake time.
+
+### Invariant 5 still holds, and it is worth saying why
+
+A bind is a **path made visible**, not a descriptor handed over, and it is the
+same path inside and out — so the house opens it itself, with the name it
+would have used anyway. The init still gives every house exactly `/dev/null`
+on 0 and a log pipe on 1 and 2, and `close_others` still sweeps the rest.
+Invariant 5 is about the descriptor table a house is born with. Invariant 6
+grew instead: **lids decide what a house can do, a brick decides what it can
+see.**
+
+### Two profiles, and a filter that could not run a static binary
+
+`lids.c` now takes `NW_PROF_STRICT` or `NW_PROF_BUILD`. BUILD is assembled as
+**STRICT plus `build_extra[]`** — a superset built from the same table at
+filter-build time — so a syscall added to the application filter is
+automatically in the build one and the two cannot drift the way the two copies
+of the table did before 2026-09-09.
+
+Building the brick test found a real gap in STRICT, and found it the only way
+this project ever finds anything. A brick carries its own libraries, so a
+binary inside one is usually linked static — and glibc's *static* startup path
+calls `readlinkat` on `/proc/self/exe` and `getrandom` for the stack guard
+before `main`. Neither was in STRICT. The result was that `brick + seccomp`
+killed every house before it executed a line, with no diagnostic beyond
+`status=18176`. Both are now in STRICT and out of `build_extra`: both are
+read-only, and neither grants a house anything it could not already do —
+`readlinkat` resolves a path it can already `stat`, `getrandom` reads entropy.
+
+Reading the allow-list would never have found this. Running it did.
+
+### The test, and the two controls that make it mean something
+
+`brick-is-a-root` boots two houses with two different bricks. Each reads `/id`
+— the same path in both bricks, different contents — and prints the top-level
+entries of its own `/`:
+
+```
+[one] one id=brick-one
+one root=bin,id,proc,tmp
+one fds_ge3=0
+one bind=token-from-the-machine
+[two] two id=brick-two
+two root=bin,id
+two fds=noproc
+two bind=none
+```
+
+(Two houses write concurrently, so which one appears first varies between
+runs; the suite matches on the tag, not on order. Each line carries its own
+unit name because PID 1's logger prefixes the start of a *write chunk*, not
+every line inside one, and the fixture flushes them all at once.)
+
+Neither house can see anything of the machine's root it did not ask for —
+`etc`, `usr`, `root`, `var` and, for house two, `proc` and `tmp`. House two
+was declared without a bind and does not get house one's. The bricks are named
+by the sha256 of their own contents, so two bricks differing only in the text
+of `/id` land at different paths without anything assigning them.
+
+`/proc` is bound into house one for one reason: to check invariant 2 from
+*inside* the brick. `lid_brick()` opens two directory descriptors to perform
+the pivot, and `fds_ge3=0` is the house saying by running that both were gone
+before `execv` — they are `O_CLOEXEC` and closed explicitly, but that was an
+argument until something measured it. House two has no `/proc` and reports
+`fds=noproc`, which is the honest answer rather than a zero nobody measured.
+
+The fixture is built static for the same reason the profile gap mattered: a
+dynamically linked fixture would resolve its loader outside the brick, and a
+test that passes for that reason proves nothing.
+
+Two negative controls were run before the test was believed:
+
+- Remove the `lid_brick()` call → `FAIL: no pivot happened`.
+- Keep the `say("lid brick")` but skip the `pivot_root` syscall →
+  `FAIL: house one id`.
+
+The first control initially *passed*, which was the harness lying rather than
+the code working: `make` had rebuilt `nw-sup` but the suite runs the **staged**
+copy, so the control needed `make stage`, not `make`. Worth remembering — a
+control that passes is either a bad test or a bad control, never good news.
+
+`brick-needs-newns` covers the refusals, including one blob the baker would
+never emit: bake a valid brick house, clear the `NEWNS` bit by hand, repair
+the CRC, and confirm `nw-check` still returns `brick without NEWNS lid`.
+
+### Not done here, deliberately
+
+No cgroups, no `promote`, no storage. `/sys/fs/cgroup` is still mounted by
+`dawn` and used by nothing, and nothing under `/nw/stores` is created. A brick
+is content-addressed by whoever builds it; **there is no brick builder in this
+tree** — the test computes a hash over the tree it just assembled, which is
+enough to prove the runtime treats the path as opaque and is not a store.

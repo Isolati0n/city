@@ -8,6 +8,10 @@
  * agreed, but nothing kept them in step. Declaring it here means a signature
  * change cannot pass the compiler unnoticed.
  *
+ * Two profiles: NW_PROF_STRICT is the application filter, NW_PROF_BUILD is
+ * STRICT plus what a toolchain needs. BUILD is a superset built from the
+ * same table, so the two cannot drift apart.
+ *
  * Returns 0 on success, -1 if PR_SET_NO_NEW_PRIVS or PR_SET_SECCOMP failed.
  * The caller decides what a failure means; this does not exit.
  *
@@ -17,6 +21,6 @@
  * non-C caller is ever reintroduced it declares this signature independently
  * and the compiler cannot check it, so change both in the same commit.
  */
-int nw_apply_house_seccomp(void);
+int nw_apply_house_seccomp(unsigned profile);   /* NW_PROF_* */
 
 #endif

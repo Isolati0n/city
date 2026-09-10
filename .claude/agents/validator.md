@@ -47,6 +47,22 @@ Undefined, not deferred, and not a regression to fix. See `HISTORY.md` §16 and
   stable — read the enum.
 - The lid set is closed: `SECCOMP | LANDLOCK | NEWNS | NEWNET`. Unknown bits
   are `NW_E_LIDS`.
+- **Cross-field rules belong here, not only in the baker.** Three exist:
+  a `brick` forces `NW_LID_NEWNS` (`NW_E_BRICKNS`), a bind row must name a
+  unit that has a brick (`NW_E_BINDIDX`), and `NW_PROF_BUILD` requires
+  `NW_LID_SECCOMP` (`NW_E_PROFILE`). The baker refuses each of these too, but
+  the baker is not in the TCB and a blob can arrive from anywhere; the
+  `brick-needs-newns` test crafts a blob the baker would never emit, clears
+  the bit and repairs the CRC, and asserts `nw-check` still rejects it.
+- **A field that may be empty must be checked when it is empty.** `brick` is
+  optional, so a blank `brick` has every byte verified zero (`NW_E_BRICK`)
+  rather than being skipped — an unvalidated field cannot be given meaning
+  later, which is the same reason `_pad` is checked.
+- **The blob has two arrays now.** `NW_BLOB_SIZE(n_units, n_binds)` derives the
+  length and the size check uses it; `nw_binds()` locates the second array from
+  `n_units`, so nothing computes an offset by hand. `NW_MAX_BINDS` is a limit
+  like any other and lives in four places: `blob.h`, `bakery/nw-cc.py`,
+  `bindNeed` in `plan.als`, and `MaxBinds` in `Plan.tla`.
 
 ## Definition of done
 
