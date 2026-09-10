@@ -512,3 +512,191 @@ Honest accounting: each fix left something the pattern would want closed.
 The shape worth keeping: two faithful fixes, each leaving a smaller instance of
 the class it removed. Consistent with section 13 — the architecture holds, and
 the next change is still likely to find something.
+
+---
+
+## 16. Design note — two planes, app broker, KEEP (2026-09-10)
+
+Proposal under evaluation, not adopted. System plane unchanged: validated plan,
+static for the boot, `NoLiveRewrite` absolute. On top, an app plane wiring GUI
+apps live on a canvas, with a KEEP artifact holding edges plus layout, restored
+after reboot. Saving is a bake into a new slot. Grant model: **permit-live,
+warn-continuously, refuse-at-save** — the app broker grants on a local check,
+the baker re-validates in the background and marks the canvas when the
+arrangement becomes unsaveable, naming the edge responsible.
+
+Objections are recorded in full below because the conclusions are weaker than
+the objections and the next reader needs both.
+
+### 1. Where the two-plane split leaks
+
+**`NoLiveRewrite` is not violated, and that fact is worth nothing.** The
+predicate is literally `UNCHANGED <<n, e, crit, lids>>` over plan variables. An
+app broker touches none of them, so formally the split is clean. But `Plan.tla`
+has no next-state relation and no temporal formula, so `NoLiveRewrite` is never
+checked against any behaviour. It passed identically while the wire-order bug
+was live. Anyone citing it as evidence the split is safe is citing a predicate
+no behaviour is evaluated against.
+
+**In substance the property is not preserved, it is scoped away.** Invariant 8
+exists so the running system cannot acquire new capability-granting operations.
+The app plane is exactly such an operation. "The live city does not grow verbs"
+becomes true of the plane where nothing interesting changes and silent about the
+plane where the user works. That is a weaker claim wearing the same words.
+
+**The real leak is invariant 5.** Non-provision says a unit with no declared
+edges holds no descriptors, so there is no doorman and nothing to bypass. An app
+broker that manufactures socketpairs on request *is* a doorman. App-plane
+isolation becomes enforcement — the broker decides — rather than structural.
+Invariant 5 does not say "prefer non-provision"; it says do not add a doorman.
+And a doorman granting on a *local check* is a checkable property substituted
+for a structural one, which is the specific move `electrician.md` forbids.
+
+The system plane statically grants a dynamic authority: the app broker is a unit
+started at boot, and its authority to create arbitrary app edges is conferred
+there. The split does not dodge this. It relocates it.
+
+**"Only copy of the connection graph" survives only in a weakened form.** Each
+broker would hold the only copy of *its own* graph. Two consequences:
+
+- Invariant 4 cannot apply to both. If app-broker death is fatal, one crashed
+  desktop component halts the machine. If it is not fatal, the app graph must be
+  reconstructible, so a second copy exists — and the KEEP *is* that second copy.
+  The single-point-of-failure reasoning that justifies halt-on-death therefore
+  does not transfer, and the two brokers need explicitly different death
+  semantics. Recorded because `electrician.md` says "do not add self-restart",
+  and someone will apply that to the app broker by analogy and be wrong.
+- **Split-brain is the harder half.** `electrician.md` rejects electrician
+  restart because a replacement makes socketpairs live units do not hold —
+  silent, undetectable from inside. A restarted app broker re-reading the KEEP
+  has precisely this: surviving app units hold descriptors minted by its
+  predecessor, while its own table says the edge exists. Unless it can re-adopt
+  descriptors or the apps restart with it, the app plane reproduces the exact
+  failure the halt rule exists to prevent, in the plane where halting is least
+  acceptable. **No mechanism in the current design addresses this.**
+
+### 2. Reporting which edge failed
+
+Mechanically trivial; the interesting costs are elsewhere.
+
+`int nw_check(const void *, uint32_t)` has three call sites — `pid1.c:239`,
+`electrician.c:172`, `nwcheck_main.c:26` — plus the `blob.h:68` declaration. Add
+`nw_check_at(blob, len, uint32_t *where)` and make `nw_check` a wrapper passing
+NULL: all three sites stay untouched.
+
+**No effect on the no-allocation or bounded-loop constraints.** The index is
+already live at every failure point (`i` in the edge loop; `i` and `j` for
+`NW_E_DUPEDGE`). Writing it through a caller-supplied pointer allocates nothing,
+adds no recursion, changes no loop bound.
+
+Four real costs:
+
+- `NW_E_DUPEDGE`'s culprit is a *pair*. Reporting only `i` names the second
+  occurrence, which need not be the edge the user just drew. The out-param wants
+  to be a small struct, not a scalar.
+- **Blob edge index is the wrong identity for a canvas.** The UI needs "the edge
+  between Editor and Shell". Edge indices are unstable across bakes — inserting
+  an edge shifts every later index. That is the ordering hazard fixed in section
+  15 reappearing in the error path. Report the two *unit names*, which are
+  stable and already duplicate-checked.
+- `nw_check` returns on first failure; a canvas wants all bad edges marked.
+  Accumulating results needs somewhere to put them, which is the first pressure
+  toward allocation in a no-malloc file. Correct split: the baker reports every
+  failure (Python, unconstrained); `nwcheck.c` keeps first-failure-plus-location
+  as the boot gate. Re-running the checker per edge is not an option — the
+  duplicate-edge scan is O(n²) (`nwcheck.c:154-160`), so that is O(n³).
+- Any new code or field moves `errs[]` and the `nw_errstr` bound with it.
+
+### 3. `NW_MAX_UNITS = 64` and the fd budget
+
+The app plane needs its own limits, for a stronger reason than 64 being small.
+
+The `_Static_assert` bounds *the electrician's* descriptor table: two fds per
+unit and two per edge held simultaneously in one process. An app broker is a
+different process with a different table and its own `RLIMIT_NOFILE`. Reusing
+`NW_MAX_UNITS` would make one name mean two things in two processes — a second
+limit to drift, in the exact sense of section 14.
+
+Raising the system-plane constants instead is worse than it looks. At `u=200,
+e=300` the assert yields `8 + 400 + 600 = 1008 <= 1024`: it passes with 16 to
+spare, and nothing marks that margin. Measured ceilings put `pid_max` as the
+real binding constraint at ~16,000 units (`fs.nr_open` allows ~500,000), at
+~326 kB per unit including its supervisor — so the system-plane process count is
+not what limits a desktop; one broker's fd table is.
+
+**Ordering dependency with a recorded open item.** Section 12 notes the budget
+formula omits the `parked[]` term and fits only by slack in `NW_FD_RESERVED`.
+Any new limits consume exactly that slack. The app plane must not reuse the
+formula until that item is fixed, or the two defects compound and the
+`_Static_assert` keeps passing while the property fails.
+
+### 4. What the baker can check that a live broker cannot
+
+**First, a correction that undercuts the usual example.** Section 6 states the
+validator does cycle detection and describes optimising it with a counting-sort
+adjacency index. A search for `cycle|acyclic|topolog` across every `.c`, `.h`,
+`.py`, `.als` and `.tla` in the tree returns **nothing**. Cycle detection exists
+in neither the checker nor the baker. Section 6 should not be cited as
+precedent until that discrepancy is resolved — either it was removed, or the
+claim was never accurate.
+
+**Second, the structural blocker.** `struct nw_edge` is `{uint16_t a; uint16_t
+b;}` — no direction, no capability label. Duplicate detection normalises to
+`lo/hi` (`nwcheck.c:155-159`) and the electrician treats `a` and `b`
+symmetrically (`electrician.c:191-192`). Edges are undirected. So "multi-hop
+capability flow" has nothing to flow along: reachability in an undirected graph
+is connected-components, and on a desktop canvas nearly everything is in one
+component. **Any multi-hop policy requires adding direction and probably
+capability labels to the edge record** — a blob format change, new `NW_E_*`
+codes, and all four fd-budget sites revisited. This is the largest cost in the
+proposal and it is not in the proposal.
+
+Granting that direction is added, the genuinely baker-only checks are:
+
+- **Global acyclicity.** Local view answers "may A connect to B"; a cycle
+  A→B→C→A is visible only whole.
+- **Transitive confinement** — "this app is never transitively connected to the
+  network unit". B may already reach Net via C. The broker would need an
+  incrementally maintained transitive closure over a graph it is mutating, in a
+  latency-critical path. That is a graph engine in the runtime, which inverts
+  the table-interpreter principle the architecture rests on.
+- **Non-existence properties.** "No path from A to Net" quantifies over all
+  paths. A grant check answers a question about one edge. Non-existence over a
+  mutating graph is not establishable locally at all; it needs a quiescent
+  snapshot, which is what a bake is. This is the strongest argument for the
+  two-phase model and should be the one cited.
+- **Aggregates** — budget, degree, totals. A broker can keep counters, but a
+  counter is a second copy of a fact derived from the graph. Section 14: no
+  counter to overflow.
+- **Saveability itself.** Only the baker produces the artifact, so only the
+  baker knows whether the arrangement is expressible.
+
+### Objections to permit-live / warn / refuse-at-save specifically
+
+- **It inverts the stated preference.** `baker.md`: "prefer rejecting at bake
+  time over checking at boot time — a plan that cannot be expressed cannot be
+  mis-executed." This permits constructing the inexpressible and reports later.
+- **"The specific edge responsible" is often not well defined.** When an
+  arrangement becomes unsaveable the fix is frequently a choice among several
+  edges — a minimal-cut question. Naming one edge names an arbitrary member of a
+  set, and the user may remove the wrong one.
+- **The proposal does not say what happens to live edges when a save is
+  refused.** Three options, each bad: they keep running and the KEEP silently
+  omits them, so the restored desktop differs from the running one; they are
+  torn down at save time, so saving mutates the working arrangement; or saving
+  is blocked until manual repair, which is least bad but admits a canvas state
+  with no exit.
+- **Layout and edges in one artifact is a rate mismatch.** Layout is cosmetic
+  and changes on every window drag; edges are semantic. One artifact means
+  either baking a new slot at UI rates or letting layout lag. Two artifacts —
+  a KEEP referencing a layout blob by hash — keeps the blob CRC meaningful.
+
+### If it proceeds
+
+Narrow the broker's local check to exactly the subset that *guarantees*
+single-edge saveability: name validity, self-edge, duplicate, degree and budget
+headroom. Then only genuinely multi-hop properties can fail late, the warn path
+covers a small well-defined set, and "the edge responsible" is usually
+meaningful because it is the edge that closed a cycle or crossed a confinement
+boundary. Settle app-broker death semantics and the restart split-brain question
+before any of it, because that one has no answer in the current design.
