@@ -1,9 +1,12 @@
 # 08 — The brick builder
 
-Status: **options, not a decision.** Written 2026-09-10.
+Status: **decided 2026-09-10 — a brick is a read-only image.** The options
+below are kept because the reasoning is the record; the decision and its
+consequences are at the end, and the build sequence is
+`docs/plans/01-brick-images.md`.
 Upstream of `07-identifiers-not-paths.md`: that doc proposes the plan carry a
 brick's hash instead of its path, and a hash is not an identity until
-something defines what it is computed over. Nothing here is implemented.
+something defines what it is computed over. **Nothing here is implemented.**
 
 ## What exists today
 
@@ -80,10 +83,16 @@ plan names a hash, the runtime mounts it, the house starts and cannot compile.
 
 **Storage support, this kernel:** `/proc/filesystems` lists `ext4`,
 `squashfs`, `erofs`, `overlay`, `tmpfs`. It lists no FAT of any kind.
-`mksquashfs` and `mkfs.erofs` are **not installed here**, though `tar` is.
-So this box can mount a read-only image and cannot build one — which is
-consistent with the bakery being somewhere else, and is a thing to check on
-whatever machine the bakery actually runs on.
+Neither packer was installed; both were installed for the measurement below,
+which is itself the point — the bakery is not this box, and needing to obtain
+a packer is not a cost that distinguishes the options.
+
+**A note on where the evidence comes from.** Landlock runs at ABI 7 on the
+operator's clone and returns `ENOSYS` here; neither environment has a FAT
+driver. So the suite is fully exercised only as the **union of two machines**,
+and that is a property of the pair rather than of either one. No single
+environment has ever run every test in this project, and `vfat-esp` has now
+run in none — it stays untested until something boots on hardware.
 
 ## Q1 — What is a brick on disk?
 
@@ -108,12 +117,23 @@ file, so it can be copied, verified and deleted atomically, and its hash is
 the hash of the file — no tree walk, no manifest, no question about what the
 hash covers, because the image encodes mode and symlink target inside itself.
 
-Cost, and it is the real one: **`nw-sup` grows a loop mount.** That is a
-`losetup`-equivalent ioctl sequence plus a `mount(2)` with a filesystem type,
-in the TCB, per house, with a loop device to allocate and fail to allocate.
-Today `nw-sup`'s entire filesystem vocabulary is bind and pivot. It also puts
-a filesystem *type* constant into the supervisor, which is the thing `dawn`
-exists to keep out of everything below it (`docs/options/06`, option E).
+Cost: **`nw-sup` grows a loop mount** — a `losetup`-equivalent ioctl sequence
+plus a `mount(2)` with a filesystem type, per house, with a loop device to
+allocate and to fail to allocate. Today `nw-sup`'s entire filesystem
+vocabulary is bind and pivot.
+
+**Correction, 2026-09-10.** An earlier draft of this doc called that
+"`06`'s rejected option E arriving by another door". That is wrong and the
+error is worth keeping visible. E was rejected because **PID 1 cannot read a
+plan before mounting the thing the plan is on**, which forces a hardcoded
+device into the un-restartable process where a fault does not crash a program
+but fails to boot a machine. None of that applies here: brick mounting happens
+in `nw-sup`, per house, *after* the plan is read and validated, and a fault
+there kills one house while the city keeps running — which is invariant 6's
+own posture. `dawn` already takes `NW_ROOT_FSTYPE`, so a filesystem type in
+the TCB is not a new precedent either. The honest cost is **one mount call and
+one constant in a restartable process**, and it should be costed as that
+rather than as a rejected decision returning.
 
 Also: erofs and squashfs are mountable on the target kernel today, and that
 is a property of a kernel build, not of this design. It becomes a boot
@@ -222,10 +242,32 @@ two runs of a *build* produce identical trees is the build's problem, and the
 derivation option (Q3 C) is where it would be addressed.
 
 An image format adds one more: the packer itself must be deterministic.
-`mksquashfs` is not, by default — it records timestamps and can vary block
-ordering — and would need its reproducible flags pinned and tested. Neither
-packer is installed here, so this is **unverified** and is a real check to
-run before choosing images.
+**Measured 2026-09-10, both packers installed for the purpose.**
+
+With default flags, *neither* is deterministic — not even packing the same
+tree twice in a row:
+
+```
+mksquashfs, default:   same tree twice  fb5e834d33d96d0d  b84c435b60b0ff29
+mkfs.erofs, default:   same tree twice  6b6948a35276212d  4195a7de27421cce
+```
+
+Note that `mksquashfs -help` says `-reproducible` is **the default**, and it
+still differs. A tool's claim about itself is not evidence, which is this
+project's whole thesis restated by a third party.
+
+With the flags below, both become exactly reproducible — same tree twice, and
+a copy of the tree at a different path with every mtime rewritten:
+
+```
+mksquashfs:  a08054996275b8d7   a08054996275b8d7   a08054996275b8d7
+mkfs.erofs:  f70e013790e3159b   f70e013790e3159b   f70e013790e3159b
+```
+
+Both mount, and a compiler works inside each as a read-only image with a
+tmpfs where a declared bind would go. Both refuse writes at the storage layer
+with no lid involved. **Determinism therefore does not decide it** — the
+deciding measurement is below.
 
 ## Q5 — Does a brick declare what it needs bound in?
 
@@ -272,23 +314,87 @@ hashing a brick at boot to verify its name is affordable, and at a realistic
 multi-language toolchain it is not. That asymmetry is an argument for the
 image format, where verification is one hash of one file.
 
-## The question that decides it
+## Decision — 2026-09-10: a brick is a read-only erofs image
 
-**Is a brick a directory or an image?** Everything else follows.
+Taken by the operator. There is no time pressure on this project, so the two
+problems images close are worth their cost, and directory-first would mean
+writing a canonical serialization spec in order to delete it later.
 
-If **directory**: the hash must be a defined tree walk covering mode and link
-text (Q2), the bakery seals a handed-over tree (Q3 A), nothing in the TCB
-changes, and the seal remains a property of the Landlock lid rather than of
-storage.
+**Why images, in the operator's words and this doc's evidence:**
 
-If **image**: the hash question disappears, the seal becomes real, and
-`nw-sup` or `dawn` grows loop-mounting — a filesystem type constant in the
-TCB, which is the thing `06` rejected as option E, arriving by another door.
+- A content-only hash names a working brick and a broken one identically
+  (measured above). Fixing that for a *directory* means inventing a canonical
+  serialization — ordering, modes, link text, hardlinks, device nodes,
+  xattrs — with every edge case sitting in the TCB's input path. An image
+  makes the problem **vanish rather than solving it**, because modes and link
+  targets are inside the file's bytes by construction. That is this project's
+  own method: design the problem out rather than check for it.
+- The brick is currently sealed **by the lid, not by storage**. A `lids=none`
+  house can write into its own content-addressed image. An image makes the
+  seal structural and independent of lids entirely — demonstrated above:
+  both formats refused a write with no lid involved.
 
-The measurement leans toward **directory first**: it is what the runtime
-already does, it needs no TCB change, and it can carry a working compiler
-today. Images are the better end state and should not be built until
-something needs the seal to be structural rather than enforced by a lid — and
-until `mksquashfs` reproducibility is verified rather than assumed.
+**Which packer: erofs, with `lz4hc`.** Determinism did not decide it — both
+are exactly reproducible once forced. The deciding measurement is mount cost,
+which is paid once per house per boot:
 
-Nothing here should be built before the operator picks between those two.
+```
+mount + read cc1 (ms, 7 runs sorted, median = 4th)
+  squashfs gzip   184 187 196 [196] 259 286 382     image 20 MB
+  erofs lz4hc      19  20  27  [27]  33  34  98     image 28 MB
+  erofs uncompr    13  13  14  [14]  14  15  22     image 46 MB
+```
+
+~7× faster to mount and first-read, and the spread is far below the effect,
+so this is a real difference and not scheduler noise. At `NW_MAX_UNITS` that
+is roughly 1.7 s of boot against 12.5 s. The 8 MB the compression costs is
+cheap; the boot latency is not. Compression stays on because uncompressed
+buys ~13 ms and costs 18 MB per brick.
+
+### Reproducibility is required, and this list is the spec
+
+A brick's name must mean *this exact content*, not *this particular build*,
+or two bricks cannot be compared and a brick cannot be rebuilt and confirmed.
+Anyone reproducing a brick must force exactly these, and a bake that omits
+one produces a different name for identical content:
+
+```
+mkfs.erofs -T 0 \
+           -U 00000000-0000-0000-0000-000000000000 \
+           --force-uid=0 --force-gid=0 \
+           -zlz4hc \
+           <image> <tree>
+```
+
+- `-T 0` — every file timestamp. Without it, mtimes leak into the image.
+- `-U <fixed>` — the filesystem UUID is **random by default**. This is the
+  single largest source of nondeterminism and the easiest to miss, because it
+  changes every byte-compare while nothing about the content moved.
+- `--force-uid=0 --force-gid=0` — ownership, which Q2 excludes from identity.
+- `-zlz4hc` — the compressor is part of the output, so it is part of the name.
+
+Verified reproducible across: the same tree packed twice; a copy of that tree
+at a different path with every mtime rewritten to a fixed date; and with
+compression on. For the record, `mksquashfs` needs a longer list
+(`-noappend -reproducible -mkfs-time 0 -all-time 0 -force-uid 0 -force-gid 0
+-no-exports`) and its `-help` claims `-reproducible` is already the default
+while producing different bytes on consecutive runs — a tool's claim about
+itself is not evidence.
+
+### Bootstrap: a permanent property, no decision attached
+
+The first compiler brick cannot be built by a compiler brick. Something
+outside this system must hand over the first tree, and Q3 A — the bakery
+seals a tree it is given — is therefore **permanent rather than a stepping
+stone**. Recorded so nobody deletes it as scaffolding later. Not designed for
+now: no derivation, no manifest, no blob store until something needs one.
+
+### What this decides for `07`
+
+`07`'s brick half is now concrete: the plan carries the hash, and `nw-sup`
+builds `/nw/bricks/<hex>.img`. Traversal stops being representable in the
+brick field because a hash cannot contain a separator — the `..` guard stays
+for `exec_path` and for binds, where it is the right answer rather than a
+stopgap. The bind half of `07` is untouched and still open.
+
+The build sequence is `docs/plans/01-brick-images.md`.
