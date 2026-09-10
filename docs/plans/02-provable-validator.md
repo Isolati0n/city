@@ -16,8 +16,9 @@ Four different things get called proof, and conflating them would be this
 project's characteristic failure applied to its own verification story.
 
 1. **Machine-checked, all inputs.** A solver explores every input up to a
-   bound and reports no counterexample exists. Available for `nwcheck.c`,
-   and demonstrated below.
+   bound and reports no counterexample exists. **Demonstrated for the leaf
+   validators; not yet achieved for `nw_check` as a whole** — see the three
+   failed runs below.
 2. **Exhaustive.** The input space is small enough to enumerate, so testing
    *is* proof for that component. Available for the small validators.
 3. **Differential.** Two independent implementations agree on every input
@@ -82,10 +83,46 @@ minutes. The inlined CRC loop runs `8 × (len − 20)` times, about 2,100
 iterations for a one-unit blob, and unrolling it symbolically swamps the
 solver.
 
-With the CRC behind a function call and stubbed as nondeterministic, **the
-same proof completes in minutes**.
+**CORRECTION — this section previously said that with the CRC abstracted
+"the same proof completes in minutes". That was false, and it was committed.**
+Three runs, none of which proved anything:
 
-That abstraction is not a cheat, and it is worth being precise about why:
+| run | configuration | outcome |
+|---|---|---|
+| 1 | CRC stubbed, `--unwind 200`, blob filled by a loop | "1 of 354 failed" — but the failure was the harness's own 282-iteration fill loop hitting the bound, so the last 82 bytes stayed **concrete zeros**. The unwinding assertion was CBMC saying the exploration was incomplete. Not a proof; I read it as an artefact. |
+| 2 | fill loop replaced by `__CPROVER_havoc_object`, so every byte truly free | **timeout at 13 min**, still unwinding the duplicate-name probe loop at iteration 27 of 128 |
+| 3 | as 2, probe loop bounded to 3 with justification | **timeout at 25 min**, still in symbolic execution — `path_ok_len` unwound over 3,000 times across its call sites |
+
+Run 1 is the instructive one: an unwinding-assertion failure is not a
+harness nuisance, it is the tool reporting that the input space was
+silently narrowed. Reading it as noise is how a bounded proof becomes a
+claim it cannot support.
+
+**What does verify, measured:** the leaf validators, in seconds.
+
+```
+path_ok_len   0 of 68 failed   VERIFICATION SUCCESSFUL    6.0s
+name_ok       0 of 32 failed   VERIFICATION SUCCESSFUL    0.8s
+```
+
+Over *all* inputs of the field width, with bounds, pointer validity, signed
+overflow and unwinding completeness — plus the post-conditions that an
+accepted path is absolute and NUL-terminated within the field. That
+includes the `s[i+3]` reads in the `..` guard, which had only ever been
+argued safe by hand.
+
+So the shape of a proof here is **compositional**: prove the leaves, then
+prove `nw_check` with the leaves abstracted, exactly as the CRC is
+abstracted. That is now evidenced at the leaf level and **untried at the
+caller level** — it is the next thing to run, not a claim.
+
+One note so it is not re-reported as a defect: with `--conversion-check`,
+`path_ok_len` fails on `(unsigned char)s[n]`, a value-changing signed-to-
+unsigned conversion. That is well-defined in C and deliberate here — it is
+how bytes ≥ 0x80 are accepted. The check is a lint, not a soundness
+property, and it is left off.
+
+The CRC abstraction is still right, and it is worth being precise about why:
 invariant 8 already says the CRC is diagnostic and the structural checks are
 the safety property. Proving the structural guarantees hold *for an arbitrary
 checksum result* is **stronger** than proving them for one particular
@@ -113,6 +150,12 @@ say what the runtime is entitled to assume when the answer is `NW_OK`:
 - an accepted spare byte is zero
 - a brick implies the `NEWNS` lid
 - landlock implies a brick
+
+**Compositional, because monolithic does not work.** Prove each leaf over
+all inputs of its field (done, seconds), then prove `nw_check` with the
+leaves and the CRC stubbed as nondeterministic — so the caller's proof must
+hold for *any* answer a leaf could give, which is stronger than proving it
+against the real one. Untried at the caller level.
 
 **Bounded, and the bound must be stated.** The proof runs per `(n_units,
 n_binds)` shape. One unit is tractable; the plan is to prove a ladder — 1, 2
