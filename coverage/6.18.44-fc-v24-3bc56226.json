@@ -1,0 +1,36 @@
+{
+ "capabilities": {
+  "erofs": true,
+  "landlock": false,
+  "loop": true,
+  "squashfs": true,
+  "vfat": false
+ },
+ "kernel": "6.18.44-fc-v24",
+ "passed": [
+  "bad-crc",
+  "baker-rejects",
+  "brick-is-a-root",
+  "brick-needs-newns",
+  "crash-does-not-halt",
+  "dawn-real-boot",
+  "difftest",
+  "fuzz-checker",
+  "halt-spawner",
+  "happy",
+  "hash-pin",
+  "kind-exit0",
+  "kind-required",
+  "lids-are-not-advisory",
+  "non-provision-at-max",
+  "path-traversal-refused",
+  "rescue",
+  "seccomp-kills",
+  "slot-b",
+  "term-signal"
+ ],
+ "skipped": {
+  "dawn-real-boot:vfat-esp": "kernel has no FAT driver (/proc/filesystems lists none), so the ESP is ext4 and FAT's execute bit, ownership and 4 GiB cap stay untested -- which is what docs/options/06 reasons from",
+  "landlock-confines": "kernel has no Landlock (landlock_create_ruleset -> ENOSYS); the lid cannot be exercised here at all"
+ }
+}

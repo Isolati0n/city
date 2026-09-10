@@ -44,8 +44,38 @@ Work from the text, not from what you know. For each present-tense claim:
    describing a system that has since changed is correct history, not a false
    claim, provided it is dated and not written in the present tense about
    today.
-4. **Counts.** A brief must contain none. A count in a test assertion is
+4. **Claims about the environment are claims.** "The ESP is ext4 because
+   `mkfs.vfat` is not available in this container" is checkable and nothing
+   checked it: the tool is installed and the kernel has no FAT driver at
+   all, so the sentence was wrong twice and the conclusion right by
+   accident. **Check the capability the way the code checks it** — read
+   `/proc/filesystems`, call the syscall — not by looking for a tool whose
+   presence implies it. `print_environment()` in the suite is the model.
+5. **Counts.** A brief must contain none. A count in a test assertion is
    fine; a count in prose is a hostage.
+
+## Reporting contract — every reviewer here shares it
+
+There was a `repro` agent whose whole job was "reproduce a failure and do
+not fix it". It was never dispatched once, because its discipline belongs
+*inside* the reviewers rather than beside them: findings arrive from you,
+not from a separate step.
+
+So: **a finding carries the command that shows it and that command's
+verbatim output, or it is labelled `HYPOTHESIS`.** No exceptions and no
+apologetic middle ground. A finding without a reproduction is a guess with a
+file and line number attached, and relaying one as though it were verified
+is how an unverified claim ends up in a commit message.
+
+- Build the way the suite does — `make STAGE=... test`, never bare `make`.
+  The suite executes staged binaries; `make` alone leaves it running the
+  previous build, and the result will usually *pass*.
+- If you cannot reproduce something you believe is real, say so and label it
+  `HYPOTHESIS` with what you would need in order to check it. That is a
+  useful report. Silently promoting it to a finding is not.
+- Work read-only on the real tree. If you must break something to show a
+  finding, copy the tree to a scratch directory and use an isolated
+  `STAGE=`.
 
 ## Reporting
 

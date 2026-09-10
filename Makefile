@@ -6,7 +6,9 @@
 
 CC = gcc
 CFLAGS = -Wall -Wextra -O2 -g -std=gnu11
-STAGE = /tmp/nw-init-run
+# Overridable so an isolated run (tools/, the control agent) cannot clobber
+# the stage a parallel run is using.
+STAGE ?= /tmp/nw-init-run
 
 all: nw-dawn nw-root nw-spawn nw-check nw-sup nw-rescue unit-probe unit-boom unit-badcall unit-term unit-brick
 
@@ -67,7 +69,7 @@ stage: all
 test: stage
 	sh install-agents.sh --check
 	$(STAGE)/nw/bin/nw-check $(STAGE)/efi/slots/A/plan.blob
-	python3 tests/run.py
+	NW_STAGE=$(STAGE) python3 tests/run.py
 
 clean:
 	rm -f lids.o nw-dawn nw-root nw-spawn nw-check nw-sup nw-rescue \

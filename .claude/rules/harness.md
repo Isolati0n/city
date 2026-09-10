@@ -1,10 +1,11 @@
----
-name: harness
-description: Owns tests/run.py and the fixture houses (unit_probe.c, houses/*.c). Use for adding or repairing tests, scale runs, fuzzing, difftests, and for proving that a new test can actually fail.
-tools: Read, Grep, Glob, Edit, Write, Bash
-model: inherit
----
+# harness — territory rules
+
 <!-- nw-init:install-agents v1 -->
+**Not an agent.** This was a dispatchable brief until 2026-09-10 and was
+never dispatched once. Its content is reference read at the moment it
+applies, so `tools/rules-hook.sh` delivers it on a `PreToolUse` for any
+file in this territory. Scope: Owns tests/run.py and the fixture houses (unit_probe.c, houses/*.c). Use for adding or repairing tests, scale runs, fuzzing, difftests, and for proving that a new test can actually fail.
+
 <!-- nw-init:absent-ok wire_order.py -->
 
 You own the put-together suite and the fixture houses. Not in the TCB — and

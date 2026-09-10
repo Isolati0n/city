@@ -1983,3 +1983,57 @@ proving `nw-check` accepts a good blob.
 One environment claim was itself false: §21 says the ESP is ext4 "because
 `mkfs.vfat` is not available in this container". It is available. That section
 is corrected in place, and `print_environment()` reports it every run.
+
+## 27. The agent set, second pass — 2026-09-10
+
+The 2026-09-10 reshape replaced nine file-owners with three
+territories, four reviewers and two specialists. One day of use says which
+half of that was right.
+
+**Dispatched, and paid:** `tcb-review` (two HIGH findings in pushed TCB
+code), `claims` (five false statements, including invariant 4 in
+`CLAUDE.md`), `fd-auditor` (the `fds_ge3` conjunction gap, `close_others`'
+bare 512, `unit_probe` blind above unit 30), `drift` (a seeded mismatch, and
+a stale literal in its own brief).
+
+**Never dispatched once:** `repro`, and all three territories — `plan`,
+`runtime`, `harness`. Four of the seven new briefs were dead weight.
+
+Roughly 90k tokens per dispatch, and the session got *longer*, not shorter.
+The set made the work more correct and did not make it faster. Those are
+different claims and conflating them is the move this project punishes.
+
+### What changed
+
+- **Dispatch moved before the push.** Both HIGH findings were in code already
+  pushed. `tools/review-gate.sh` keys a review record to the *content* of the
+  files it covers, so reviewing and then editing does not count.
+- **`control` is new**, and it automates the discipline `CLAUDE.md` calls
+  central: for every test added or changed, remove the mechanism the test is
+  supposed to pin and report which tests still pass. That was entirely
+  manual, and every time it was run by hand it found something — including a
+  control that *passed* because the suite runs staged binaries and `make`
+  alone had not restaged.
+- **`repro` is deleted and its contract folded into every reviewer:** a
+  finding carries the command and its verbatim output, or it is labelled
+  `HYPOTHESIS`. Findings arrive from the reviewers; a separate agent for
+  reproducing them was a step nobody took.
+- **The territories became `.claude/rules/`**, delivered by a `PreToolUse`
+  hook when a file in that territory is edited. Their text was always
+  reference; nothing was lost and nothing is dispatchable that never was.
+- **Reviewers are handed a packet, not a search.** `tools/review-pack.sh`
+  emits the diff, the TCB files touched and the environment block.
+- **`--check` refuses a brief carrying a struct format string or a magic
+  literal.** It caught one on its first run: `--force` had just reverted the
+  stale format string in `drift.md`, because the fix had been made to the
+  installed brief and not to the script that owns its text. The two-copies
+  problem, live, in the tool built to prevent it.
+- **Coverage is an artifact.** Each run writes `coverage/<env>.json`;
+  `tools/coverage-merge.sh` reports what is covered somewhere and what is
+  covered nowhere. It immediately found a defect in itself: a test that
+  skipped was being counted as passed, so `landlock-confines` read as
+  "covered somewhere" on a kernel that cannot run it. Fixed, and the record
+  now says two tests are covered in no environment either machine has.
+
+Dispatchable roster: nine down to six. The shape the evidence supports is
+read-only reviewers that fan out, plus rules that arrive when relevant.

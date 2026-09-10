@@ -11,7 +11,7 @@ import tempfile
 import zlib
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-STAGE = "/tmp/nw-init-run"
+STAGE = os.environ.get("NW_STAGE", "/tmp/nw-init-run")
 # The staged tree mirrors the production layout and differs only in prefix:
 # BIN is /nw/bin on a real machine, SLOTS is /efi/slots. Scratch files that
 # have no production counterpart live in WORK.
@@ -833,31 +833,68 @@ def test_hash_pin():
     print("ok hash-pin")
 
 
+def capabilities():
+    return {
+        "landlock": landlock_abi() is not None,
+        "vfat": fs_mountable("vfat"),
+        "erofs": fs_mountable("erofs"),
+        "squashfs": fs_mountable("squashfs"),
+        "loop": run(["sh", "-c", "command -v losetup"]).returncode == 0,
+    }
+
+
+def write_coverage(passed):
+    """Drop this environment's record so coverage can be merged across
+    machines. No single environment has ever run every test here: Landlock is
+    ABI 7 on one machine and ENOSYS on another, and neither has a FAT driver,
+    so vfat-esp runs in none. That made the coverage claim a union of machines
+    living only in prose. tools/coverage-merge.sh reads these."""
+    import hashlib, platform, json
+    caps = capabilities()
+    kern = platform.release()
+    tag = hashlib.sha256(
+        (kern + json.dumps(caps, sort_keys=True)).encode()).hexdigest()[:8]
+    label = re.sub(r"[^A-Za-z0-9._-]", "_", kern) + "-" + tag
+    os.makedirs(os.path.join(ROOT, "coverage"), exist_ok=True)
+    rec = {"kernel": kern, "capabilities": caps,
+           "passed": sorted(passed), "skipped": dict(SKIPPED)}
+    path = os.path.join(ROOT, "coverage", label + ".json")
+    with open(path, "w") as fh:
+        json.dump(rec, fh, indent=1, sort_keys=True)
+        fh.write("\n")
+    return os.path.relpath(path, ROOT)
+
+
 def main():
     os.chdir(ROOT)
     print_environment()
     print("== city suite ==")
-    test_hash_pin()
-    test_difftest()
-    test_lids_are_not_advisory()
-    test_baker_rejects()
-    test_fuzz_checker()
-    test_happy()
-    test_slot_b()
-    test_rescue()
-    test_halt_spawner()
-    test_bad_crc()
-    test_crash_does_not_halt()
-    test_term_signal()
-    test_dawn_real_boot()
-    test_kind_required()
-    test_kind_exit0()
-    test_seccomp_kills()
-    test_brick_is_a_root()
-    test_brick_needs_newns()
-    test_path_traversal_refused()
-    test_non_provision_at_max()
-    test_landlock_confines()
+    tests = [
+        test_hash_pin, test_difftest, test_lids_are_not_advisory,
+        test_baker_rejects, test_fuzz_checker, test_happy, test_slot_b,
+        test_rescue, test_halt_spawner, test_bad_crc,
+        test_crash_does_not_halt, test_term_signal, test_dawn_real_boot,
+        test_kind_required, test_kind_exit0, test_seccomp_kills,
+        test_brick_is_a_root, test_brick_needs_newns,
+        test_path_traversal_refused, test_non_provision_at_max,
+        test_landlock_confines,
+    ]
+    passed = []
+    for t in tests:
+        before = len(SKIPPED)
+        t()
+        name = t.__name__[len("test_"):].replace("_", "-")
+        # A test that skipped itself did not pass. Counting it as passed is
+        # the same defect the skip machinery exists to prevent, one layer up:
+        # tools/coverage-merge.sh reported landlock-confines as "covered
+        # somewhere" on a kernel that cannot run it. A partial skip -- a name
+        # like "dawn-real-boot:vfat-esp" -- does not disqualify the test that
+        # raised it, only the part it names.
+        if any(n == name for n, _ in SKIPPED[before:]):
+            continue
+        passed.append(name)
+
+    rec = write_coverage(passed)
     if SKIPPED:
         print("PASSED, WITH SKIPS -- this environment could not exercise:")
         for name, why in SKIPPED:
@@ -866,6 +903,8 @@ def main():
               "as evidence about the features named above.")
     else:
         print("ALL TESTS PASSED")
+    print(f"coverage record: {rec}  "
+          f"(merge across machines: sh tools/coverage-merge.sh)")
 
 
 if __name__ == "__main__":

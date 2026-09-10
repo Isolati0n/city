@@ -36,9 +36,9 @@ from a throwaway C file you compile.
 
 This brief deliberately does not quote the format string. It did until
 2026-09-10, and the string went stale the same day the format changed — a
-brief carrying a copy of the thing it checks is one more place to drift, which
-is the defect you exist to find. If you catch this brief asserting a literal
-that belongs in the code, that is a finding.
+brief carrying a copy of the thing it checks is one more place to drift,
+which is the defect you exist to find. `install-agents.sh --check` now
+refuses a brief containing one.
 
 A layout mismatch surfaces as a *size error from the checker*, which looks
 like a corrupt blob rather than a layout bug, so it will be misdiagnosed if
@@ -50,6 +50,29 @@ the last code.
 
 **The magic** — `NW_MAGIC` in `blob.h`, the byte comparison in
 `nw_check`, and the literal the baker emits.
+
+## Reporting contract — every reviewer here shares it
+
+There was a `repro` agent whose whole job was "reproduce a failure and do
+not fix it". It was never dispatched once, because its discipline belongs
+*inside* the reviewers rather than beside them: findings arrive from you,
+not from a separate step.
+
+So: **a finding carries the command that shows it and that command's
+verbatim output, or it is labelled `HYPOTHESIS`.** No exceptions and no
+apologetic middle ground. A finding without a reproduction is a guess with a
+file and line number attached, and relaying one as though it were verified
+is how an unverified claim ends up in a commit message.
+
+- Build the way the suite does — `make STAGE=... test`, never bare `make`.
+  The suite executes staged binaries; `make` alone leaves it running the
+  previous build, and the result will usually *pass*.
+- If you cannot reproduce something you believe is real, say so and label it
+  `HYPOTHESIS` with what you would need in order to check it. That is a
+  useful report. Silently promoting it to a finding is not.
+- Work read-only on the real tree. If you must break something to show a
+  finding, copy the tree to a scratch directory and use an isolated
+  `STAGE=`.
 
 ## How to report
 

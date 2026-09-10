@@ -177,33 +177,48 @@ genuine PID 1 and orphan reaping is actually exercised.
 `sh install-agents.sh --list` prints this table; it is repeated here because
 this file is always loaded and the briefs are not.
 
-The set is **territories, reviewers and specialists**, and the shape is
-deliberate. It was one agent per source file until 2026-09-10, and the
-repository shows why that was wrong: every plan-format change in
-its history touched `blob.h`, `nwcheck.c`, `bakery/nw-cc.py`, `plan.als` and
-`Plan.tla` in a single commit — invariant 3 *requires* that — so a per-file
-agent owned a fraction of every change it would ever be asked to make. D11 is
-the same argument on the other side: one cause spread across `nwspawn.c`,
-`nwsup.c` and `pid1.c`, invisible to anyone holding one of them.
+**Dispatch before you push, not after.** Both HIGH findings of 2026-09-10 —
+the `..` traversal and the profile that killed compilers — were found in code
+that was already committed and pushed, because the reviewers ran afterwards.
+Same tokens, same findings, different blast radius. `tools/review-gate.sh
+--check` makes this mechanical: it fails while a review is owed, keyed to the
+*content* of the files under review, so reviewing and then editing does not
+count. Record a completed review with `--record <agent>`.
 
 | when | dispatch | why |
 |---|---|---|
 | a TCB file changed | `tcb-review` + `fd-auditor`, in parallel | read-only, independent, cannot break anything |
+| a test was added or changed | `control` | the negative controls, run mechanically instead of by hand |
 | a limit or the blob layout changed | `drift` | invariant 3 otherwise depends on someone remembering |
-| a failure was reported | `repro`, alone, first | a fix for a bug nobody reproduced is a guess |
-| a brief or this file changed | `claims` | kind-1 statements rot silently |
+| a brief, this file, or an environment claim changed | `claims` | kind-1 statements rot silently |
 | a speed or scale claim was made | `measurement` | never report a single sample |
-| a *decided* format change | `plan` | propagation is mechanical and error-prone |
-| a *decided* boot or lid change | `runtime` | likewise |
 
-**Territories propagate a decision; they do not make one.** Decide the design
-in the main thread, where the whole picture is, then hand the territory agent
-the decided design. Handing one an open question gets a design made against
-one third of the constraints.
+`sh tools/review-pack.sh > packet.md` builds what a reviewer is dispatched
+with — the diff, the TCB files it touched, the suite's environment block.
+Reviewers cost roughly 90k tokens each and most of it used to go on
+rediscovering the repository; handing over the packet turns a search into a
+read.
 
-Reviewers are the ones that actually pay: they are read-only, they need no
-shared context, and they fan out. Authoring rarely does, because the changes
-here are cross-cutting and have to stay byte-consistent.
+**Every reviewer shares one reporting contract:** a finding carries the
+command that shows it and that command's verbatim output, or it is labelled
+`HYPOTHESIS`. There was a separate `repro` agent for this and it was never
+dispatched once, because the discipline belongs inside the reviewers rather
+than beside them.
+
+### Territories are rules, not agents
+
+`plan`, `runtime` and `harness` were dispatchable briefs until 2026-09-10 and
+were dispatched **zero times**: the changes here are cross-cutting, so the
+authoring happens in the main thread where the whole picture is. Their
+content is still load-bearing — the liveness refusal, the seal rules, the
+staging trap — so it lives in `.claude/rules/` and `tools/rules-hook.sh`
+delivers it on a `PreToolUse` for any file in that territory. Reference read
+at the moment it applies, rather than a worker spawned to do the work.
+
+What that leaves is the shape the evidence supports: **read-only reviewers
+that fan out, plus rules that arrive when they are relevant.** Reviewers are
+the part that pays — they need no shared context and they cannot break
+anything.
 
 ## How briefs are written
 
