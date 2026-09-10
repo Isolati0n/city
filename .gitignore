@@ -1,0 +1,11 @@
+# Build products. The Makefile writes binaries into the repo root and stages
+# them to /tmp/nw-init-run; none of it belongs in git.
+*.o
+nw-root
+nw-spawn
+nw-check
+nw-sup
+nw-rescue
+unit-probe
+unit-boom
+unit-badcall
