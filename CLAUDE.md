@@ -111,7 +111,8 @@ where the work would land so it cannot be undone by someone being helpful.
 - **Freeze detection.** A house that goes silent but never exits is undetected
   by anything. Every form of detection needs a guessed constant, and the rule
   was attempted and wrong three times. See the Liveness section of
-  `.claude/agents/supervisor.md`, which carries the full reasoning.
+  `.claude/agents/runtime.md`, which carries the full reasoning. (It was in
+  `supervisor.md` until 2026-09-10; that brief merged into `runtime.md`.)
 - **Nothing a house does halts the city.** Exactly two things halt it: the
   plan fails validation at boot, or PID 1 dies. The `critical` flag was
   removed rather than repaired — `HISTORY.md` §19.
@@ -142,6 +143,39 @@ make test       # stage + nw-check on the blob + python3 tests/run.py
 
 `tests/run.py` boots via `unshare --pid --fork --mount-proc` so `nw-root` is
 genuine PID 1 and orphan reaping is actually exercised.
+
+## Dispatching agents
+
+`sh install-agents.sh --list` prints this table; it is repeated here because
+this file is always loaded and the briefs are not.
+
+The set is **three territories, four reviewers, two specialists**, and the
+shape is deliberate. It was nine file-owners until 2026-09-10, one per source
+file, and the repository shows why that was wrong: every plan-format change in
+its history touched `blob.h`, `nwcheck.c`, `bakery/nw-cc.py`, `plan.als` and
+`Plan.tla` in a single commit — invariant 3 *requires* that — so a per-file
+agent owned a fraction of every change it would ever be asked to make. D11 is
+the same argument on the other side: one cause spread across `nwspawn.c`,
+`nwsup.c` and `pid1.c`, invisible to anyone holding one of them.
+
+| when | dispatch | why |
+|---|---|---|
+| a TCB file changed | `tcb-review` + `fd-auditor`, in parallel | read-only, independent, cannot break anything |
+| a limit or the blob layout changed | `drift` | invariant 3 otherwise depends on someone remembering |
+| a failure was reported | `repro`, alone, first | a fix for a bug nobody reproduced is a guess |
+| a brief or this file changed | `claims` | kind-1 statements rot silently |
+| a speed or scale claim was made | `measurement` | never report a single sample |
+| a *decided* format change | `plan` | propagation is mechanical and error-prone |
+| a *decided* boot or lid change | `runtime` | likewise |
+
+**Territories propagate a decision; they do not make one.** Decide the design
+in the main thread, where the whole picture is, then hand the territory agent
+the decided design. Handing one an open question gets a design made against
+one third of the constraints.
+
+Reviewers are the ones that actually pay: they are read-only, they need no
+shared context, and they fan out. Authoring rarely does, because the changes
+here are cross-cutting and have to stay byte-consistent.
 
 ## How briefs are written
 

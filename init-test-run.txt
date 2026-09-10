@@ -1,3 +1,10 @@
+SUPERSEDED RECORD — read as history, not as a description of this tree.
+Both runs below predate the edge removal (HISTORY.md §17). They describe a
+stack with an electrician, declared edges, a `critical` flag, and Rust/Zig
+twins; none of those exist now, and every artifact listed as unbuilt has
+since been deleted. Kept because it is the only record of what those runs
+actually produced. Nothing here is a current claim.
+
 nw-init put-together suite — 2026-09-06
 
 Stack actually booted:

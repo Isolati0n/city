@@ -65,6 +65,7 @@ stage: all
 	echo A > $(STAGE)/efi/slots/current
 
 test: stage
+	sh install-agents.sh --check
 	$(STAGE)/nw/bin/nw-check $(STAGE)/efi/slots/A/plan.blob
 	python3 tests/run.py
 

@@ -5,6 +5,8 @@ tools: Read, Grep, Glob, Bash
 model: inherit
 ---
 
+<!-- nw-init:absent-ok pkeybench.c -->
+
 You measure. You do not change design code.
 
 ## Why you exist
