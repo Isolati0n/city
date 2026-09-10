@@ -12,6 +12,30 @@ import zlib
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 STAGE = os.environ.get("NW_STAGE", "/tmp/nw-init-run")
+
+def _stage_limit():
+    """How long NW_STAGE may be, derived rather than declared.
+
+    make_brick builds "{STAGE}/nw/bricks/{64 hex}", and NW_BRICK_LEN is sized
+    for the production path "/nw/bricks/" + 64 hex + NUL. Whatever is left is
+    the slack a test stage may use. Past that, baking fails on the third test
+    with `house locked: brick= too long`, which names brick= and says nothing
+    about the stage -- so the reader looks at the plan. Stated as a
+    precondition instead: found by the control agent, whose own documented
+    recipe (mktemp -d) exceeded it."""
+    for line in open(os.path.join(ROOT, "blob.h")):
+        f = line.split()
+        if len(f) >= 3 and f[0] == "#define" and f[1] == "NW_BRICK_LEN":
+            return int(f[2]) - len("/nw/bricks/") - 64 - 1
+    raise SystemExit("blob.h has no NW_BRICK_LEN")
+
+
+if len(STAGE) > _stage_limit():
+    raise SystemExit(
+        f"NW_STAGE is {len(STAGE)} characters and the limit is "
+        f"{_stage_limit()} (derived from NW_BRICK_LEN in blob.h): {STAGE}\n"
+        f"A longer stage makes every brick path overflow brick[] and the "
+        f"suite fails at bake time naming brick=, not the stage.")
 # The staged tree mirrors the production layout and differs only in prefix:
 # BIN is /nw/bin on a real machine, SLOTS is /efi/slots. Scratch files that
 # have no production counterpart live in WORK.
@@ -824,6 +848,61 @@ def test_non_provision_at_max():
     print(f"ok non-provision-at-max ({n} units)")
 
 
+def test_harness_runs_fresh_binaries():
+    """The suite must execute what was just built.
+
+    It runs staged binaries from STAGE, not the source tree, so `make` alone
+    leaves it testing the previous build -- and a genuinely broken
+    pivot_root then goes fully green. That has happened twice: once to a
+    negative control that passed and read as success, and again when the
+    control agent showed a skipped pivot_root is invisible with either half
+    of the NW_STAGE plumbing removed. Both halves are a conjunction and
+    neither was pinned. This pins the property they exist for, without
+    caring how it is achieved."""
+    stale = []
+    for b in ("nw-root", "nw-spawn", "nw-sup", "nw-check", "nw-dawn",
+              "unit-probe", "unit-brick"):
+        src, staged = os.path.join(ROOT, b), f"{BIN}/{b}"
+        expect(os.path.exists(staged), f"{b} was never staged")
+        if open(src, "rb").read() != open(staged, "rb").read():
+            stale.append(b)
+    expect(not stale,
+           f"the suite is running binaries that are not the ones just built: "
+           f"{stale} -- run `make stage`, not `make`")
+    print("ok harness-runs-fresh-binaries")
+
+
+def test_coverage_accounting():
+    """The layer whose whole job is to stop the suite overstating what it
+    verified. It had no test until 2026-09-10, and every control on it
+    passed."""
+    expect(counts_as_passed("a", []) is True, "a clean test passes")
+    expect(counts_as_passed("landlock-confines",
+                            [("landlock-confines", "no landlock")]) is False,
+           "a test that skipped itself is not a passing test")
+    expect(counts_as_passed("dawn-real-boot",
+                            [("dawn-real-boot:vfat-esp", "no fat")]) is True,
+           "a partial skip must not disqualify the test that raised it")
+    expect(counts_as_passed("b", [("a", "x")]) is True,
+           "another test's skip must not disqualify this one")
+
+    # The record must actually be written, and its name must carry the
+    # capability tag -- two machines on one kernel with different
+    # capabilities must not collide onto one filename.
+    import json, tempfile
+    with tempfile.TemporaryDirectory(dir=WORK) as d:
+        rel = write_coverage(["alpha"], outdir=d)
+        files = os.listdir(d)
+        expect(len(files) == 1, f"write_coverage wrote {files}")
+        name = files[0][:-5]
+        expect(re.search(r"-[0-9a-f]{8}$", name),
+               f"coverage label carries no capability tag: {name}")
+        rec = json.load(open(os.path.join(d, files[0])))
+        expect(rec["passed"] == ["alpha"], f"passed not recorded: {rec}")
+        expect("capabilities" in rec and "kernel" in rec, f"thin record: {rec}")
+    print("ok coverage-accounting")
+
+
 def test_hash_pin():
     h = open(f"{SLOTS}/A/plan.blob.sha256").read().strip()
     expect(len(h) == 64, "sha256 len")
@@ -843,7 +922,22 @@ def capabilities():
     }
 
 
-def write_coverage(passed):
+def counts_as_passed(name, new_skips):
+    """Did a test that just returned actually pass?
+
+    No, if it skipped itself: a skipped test is not a passing test, and
+    counting one made coverage-merge report landlock-confines as "covered
+    somewhere" on a kernel that returns ENOSYS. Yes, if the only skip it
+    raised was a partial one -- "dawn-real-boot:vfat-esp" names a part of a
+    test that otherwise ran.
+
+    Split out so it can be tested. Both directions of this were unpinned
+    until 2026-09-10, and deleting either reproduced a defect this
+    repository had already written down."""
+    return not any(n == name for n, _ in new_skips)
+
+
+def write_coverage(passed, outdir=None):
     """Drop this environment's record so coverage can be merged across
     machines. No single environment has ever run every test here: Landlock is
     ABI 7 on one machine and ENOSYS on another, and neither has a FAT driver,
@@ -855,10 +949,11 @@ def write_coverage(passed):
     tag = hashlib.sha256(
         (kern + json.dumps(caps, sort_keys=True)).encode()).hexdigest()[:8]
     label = re.sub(r"[^A-Za-z0-9._-]", "_", kern) + "-" + tag
-    os.makedirs(os.path.join(ROOT, "coverage"), exist_ok=True)
+    outdir = outdir or os.path.join(ROOT, "coverage")
+    os.makedirs(outdir, exist_ok=True)
     rec = {"kernel": kern, "capabilities": caps,
            "passed": sorted(passed), "skipped": dict(SKIPPED)}
-    path = os.path.join(ROOT, "coverage", label + ".json")
+    path = os.path.join(outdir, label + ".json")
     with open(path, "w") as fh:
         json.dump(rec, fh, indent=1, sort_keys=True)
         fh.write("\n")
@@ -870,6 +965,7 @@ def main():
     print_environment()
     print("== city suite ==")
     tests = [
+        test_harness_runs_fresh_binaries, test_coverage_accounting,
         test_hash_pin, test_difftest, test_lids_are_not_advisory,
         test_baker_rejects, test_fuzz_checker, test_happy, test_slot_b,
         test_rescue, test_halt_spawner, test_bad_crc,
@@ -890,9 +986,19 @@ def main():
         # somewhere" on a kernel that cannot run it. A partial skip -- a name
         # like "dawn-real-boot:vfat-esp" -- does not disqualify the test that
         # raised it, only the part it names.
-        if any(n == name for n, _ in SKIPPED[before:]):
+        if not counts_as_passed(name, SKIPPED[before:]):
             continue
         passed.append(name)
+
+    # A full skip must name a test, or the guard above silently misses it:
+    # `passed` names come from function names and skip names are typed by
+    # hand, and they already disagree for several tests.
+    known = {t.__name__[len("test_"):].replace("_", "-") for t in tests}
+    stray = [n for n, _ in SKIPPED if ":" not in n and n not in known]
+    if stray:
+        raise SystemExit(
+            f"FAIL: skip name(s) {stray} match no test; a full skip must use "
+            f"the test's own name or it will be counted as passed")
 
     rec = write_coverage(passed)
     if SKIPPED:

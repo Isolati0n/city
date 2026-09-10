@@ -35,10 +35,21 @@ It is mechanical work and it is yours.
 
 ```
 W=$(mktemp -d); cp -a . "$W/tree"; cd "$W/tree"
-make STAGE="$W/stage" test        # NW_STAGE follows STAGE; the suite runs
+S=/tmp/nwc.$$                     # NOT inside $W -- see the length limit
+make STAGE="$S" test              # NW_STAGE follows STAGE; the suite runs
                                   # staged binaries, so an isolated stage is
                                   # what keeps you out of a parallel run
 ```
+
+**`STAGE` has a hard length limit and it is short** — `NW_BRICK_LEN` minus
+the production brick path, currently 20 characters. `make_brick` builds
+`{STAGE}/nw/bricks/{64 hex}` into a `brick[]` field sized for
+`"/nw/bricks/" + 64 hex + NUL`, so a longer stage overflows it. Do **not**
+put the stage inside `$(mktemp -d)`: that is 21 characters and one over.
+This brief said to do exactly that until 2026-09-10, and the recipe could
+not run the suite. `tests/run.py` now refuses an over-long `NW_STAGE` at
+startup rather than failing on the third test with `brick= too long`, which
+names the plan and not the stage.
 
 For each test added or changed in the diff:
 
