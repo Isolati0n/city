@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """nw-cc stand-in (Haskell/OCaml baker). Not in the TCB.
 
-Encodes the Alloy assertions: unique names, no self-wire, derived fd budget,
+Encodes the Alloy assertions: unique names, derived fd budget,
 closed lid set. Lockfile = the blob. Never rebuild-switch.
 """
 from __future__ import annotations
@@ -14,7 +14,7 @@ import sys
 import zlib
 
 NAME_LEN, PATH_LEN = 32, 128
-MAX_UNITS, MAX_EDGES, FD_RESERVED, MAX_FDS = 64, 128, 8, 1024
+MAX_UNITS, FD_RESERVED, MAX_FDS = 64, 8, 1024
 LID_SECCOMP, LID_LANDLOCK, LID_NEWNS, LID_NEWNET = 1, 2, 4, 8
 KNOWN_LIDS = LID_SECCOMP | LID_LANDLOCK | LID_NEWNS | LID_NEWNET
 
@@ -26,37 +26,16 @@ def pad(s: str, n: int) -> bytes:
     return b + b"\x00" * (n - len(b))
 
 
-def check(houses, wires):
+def check(houses):
     names = [h[0] for h in houses]
     if len(names) != len(set(names)):
         raise SystemExit("duplicate name")
     if not (1 <= len(houses) <= MAX_UNITS):
         raise SystemExit("unit count")
-    if len(wires) > MAX_EDGES:
-        raise SystemExit("edge count")
     idx = {n: i for i, n in enumerate(names)}
-    seen = set()
-    for a, b in wires:
-        if a not in idx or b not in idx:
-            raise SystemExit("edge index")
-        if a == b:
-            raise SystemExit("self-edge")
-        key = tuple(sorted((idx[a], idx[b])))
-        if key in seen:
-            raise SystemExit("duplicate edge")
-        seen.add(key)
-    need = FD_RESERVED + len(houses) * 2 + len(wires) * 2
+    need = FD_RESERVED + len(houses) * 2
     if need > MAX_FDS:
         raise SystemExit("fd budget")
-    # Datalog-shaped: hold(H) if incident to a wire. Isolated houses are allowed
-    # only as explicit empty kits — listed, never implicit.
-    held = set()
-    for a, b in wires:
-        held.add(a)
-        held.add(b)
-    isolated = [h[0] for h in houses if h[0] not in held]
-    if isolated:
-        print("isolated-kits", ",".join(isolated))
     for name, path, crit, budget, window, lids in houses:
         if crit not in (0, 1):
             raise SystemExit("critical")
@@ -69,23 +48,20 @@ def check(houses, wires):
     return idx
 
 
-def bake(path, houses, wires):
-    idx = check(houses, wires)
+def bake(path, houses):
+    idx = check(houses)
     unit = b""
     for name, exe, crit, budget, window, lids in houses:
         unit += pad(name, NAME_LEN) + pad(exe, PATH_LEN)
         unit += struct.pack("<BBHBB", crit, budget, window, lids, 0)
-    edge = b""
-    for a, b in wires:
-        edge += struct.pack("<HH", idx[a], idx[b])
-    prefix = b"NWPLAN02" + struct.pack("<II", len(houses), len(wires))
-    crc = zlib.crc32(prefix + struct.pack("<I", 0) + unit + edge) & 0xFFFFFFFF
-    blob = prefix + struct.pack("<I", crc) + unit + edge
+    prefix = b"NWPLAN03" + struct.pack("<I", len(houses))
+    crc = zlib.crc32(prefix + struct.pack("<I", 0) + unit) & 0xFFFFFFFF
+    blob = prefix + struct.pack("<I", crc) + unit
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     open(path, "wb").write(blob)
     digest = hashlib.sha256(blob).hexdigest()
     open(path + ".sha256", "w").write(digest + "\n")
-    print(f"wrote {path} units={len(houses)} edges={len(wires)} crc=0x{crc:08x} bytes={len(blob)} sha256={digest}")
+    print(f"wrote {path} units={len(houses)} crc=0x{crc:08x} bytes={len(blob)} sha256={digest}")
 
 
 def default_city(probe: str, lids: int):
@@ -94,7 +70,7 @@ def default_city(probe: str, lids: int):
         ("beta",  probe, 0, 3, 2, lids),
         ("gamma", probe, 0, 3, 2, lids),
         ("delta", probe, 0, 1, 2, lids),
-    ], [("alpha", "beta"), ("beta", "gamma")]
+    ]
 
 
 def parse_lids(s: str) -> int:
@@ -109,7 +85,7 @@ def parse_lids(s: str) -> int:
 
 
 def load_city(path: str):
-    houses, wires = [], []
+    houses = []
     for raw in open(path):
         line = raw.split("#", 1)[0].strip()
         if not line:
@@ -129,11 +105,9 @@ def load_city(path: str):
                 elif k == "lids":
                     lids = parse_lids(v)
             houses.append((name, os.path.abspath(exe), crit, budget, window, lids))
-        elif parts[0] == "wire":
-            wires.append((parts[1], parts[2]))
         else:
             raise SystemExit(f"bad city line: {line}")
-    return houses, wires
+    return houses
 
 
 def main():
@@ -144,12 +118,12 @@ def main():
     ap.add_argument("--lids", default="seccomp")
     args = ap.parse_args()
     if args.city:
-        houses, wires = load_city(args.city)
+        houses = load_city(args.city)
     else:
         if not args.probe:
             raise SystemExit("--probe or --city required")
-        houses, wires = default_city(os.path.abspath(args.probe), parse_lids(args.lids))
-    bake(args.out, houses, wires)
+        houses = default_city(os.path.abspath(args.probe), parse_lids(args.lids))
+    bake(args.out, houses)
 
 
 if __name__ == "__main__":

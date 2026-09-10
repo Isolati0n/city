@@ -1,6 +1,6 @@
 ---
 name: pid1
-description: Works on nw-root / PID 1 (pid1.c) — signal blocking, the unit table, per-unit log pipes, forking the electrician and loggers, reaping (including orphans), restart budget, reverse-order shutdown, and HALT paths. Use for any change to boot sequence, child reaping, or shutdown ordering.
+description: Works on nw-root / PID 1 (pid1.c) — signal blocking, the unit table, per-unit log pipes, forking nw-spawn and the loggers, reaping (including orphans), restart budget, reverse-order shutdown, and HALT paths. Use for any change to boot sequence, child reaping, or shutdown ordering.
 tools: Read, Grep, Glob, Edit, Write, Bash
 model: inherit
 ---
@@ -13,7 +13,7 @@ machine.
 
 Blocks signals before the first fork, gates on `nw-check`, loads its table from
 the validated blob, creates one private log pipe per unit, forks the
-electrician and the loggers, reaps forever, shuts down in reverse order.
+spawner and the loggers, reaps forever, shuts down in reverse order.
 State lives in `struct house houses[NW_MAX_UNITS]`.
 
 ## Hard rules
@@ -24,10 +24,13 @@ State lives in `struct house houses[NW_MAX_UNITS]`.
   nothing to overflow. Do not reintroduce one.
 - **Never nest budgets.** Bug 3: a supervisor gave up, PID 1 restarted it with
   a fresh budget, and the pair looped. One budget authority per unit.
-- **Electrician death is fatal.** Halt everything, exit 70. There is no
-  correct restart: a replacement makes socketpairs that live units do not hold,
-  which is silent split-brain and undetectable from inside.
-- **No hardcoded fd numbers.** Log pipes and edge sockets are dynamically
+- **`nw-spawn` exits, and that is success.** It forks every supervisor, reports
+  the pids and terminates. Require a complete report *and* `WIFEXITED` with
+  status 0 before the city is open; do not watch for its death. Its
+  predecessor, the electrician, was fatal on death because it held the only
+  copy of the connection graph — with edges gone there is no graph, no
+  mid-life, and no split-brain to prevent.
+- **No hardcoded fd numbers.** Log pipes are dynamically
   allocated; fixed numbers next to dynamic allocation caused bugs 5, 9 and 13.
 - Shutdown is bounded by the grace period, not `grace × units`. Do not
   serialise it.

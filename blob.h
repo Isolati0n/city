@@ -3,15 +3,14 @@
 
 #include <stdint.h>
 
-#define NW_MAGIC        "NWPLAN02"
+#define NW_MAGIC        "NWPLAN03"
 #define NW_NAME_LEN     32
 #define NW_PATH_LEN     128
 #define NW_MAX_UNITS    64
-#define NW_MAX_EDGES    128
 #define NW_FD_RESERVED  8
 #define NW_MAX_FDS      1024
 
-_Static_assert(NW_MAX_UNITS * 2 + NW_MAX_EDGES * 2 + NW_FD_RESERVED <= NW_MAX_FDS,
+_Static_assert(NW_MAX_UNITS * 2 + NW_FD_RESERVED <= NW_MAX_FDS,
                "derived fd budget");
 
 #define NW_LID_SECCOMP   0x01u
@@ -29,38 +28,28 @@ struct nw_unit {
     uint8_t  _pad;
 } __attribute__((packed));
 
-struct nw_edge {
-    uint16_t a;
-    uint16_t b;
-} __attribute__((packed));
-
 struct nw_hdr {
     char     magic[8];
     uint32_t n_units;
-    uint32_t n_edges;
     uint32_t crc32;
 } __attribute__((packed));
 
-#define NW_BLOB_SIZE(nu, ne) \
-    (sizeof(struct nw_hdr) + (nu) * sizeof(struct nw_unit) + (ne) * sizeof(struct nw_edge))
+#define NW_BLOB_SIZE(nu) \
+    (sizeof(struct nw_hdr) + (nu) * sizeof(struct nw_unit))
 
 enum {
     NW_OK = 0,
     NW_E_MAGIC = 1,
     NW_E_UNITS = 2,
-    NW_E_EDGES = 3,
-    NW_E_SIZE = 4,
-    NW_E_CRC = 5,
-    NW_E_NAME = 6,
-    NW_E_DUPNAME = 7,
-    NW_E_PATH = 8,
-    NW_E_CRIT = 9,
-    NW_E_EIDX = 10,
-    NW_E_SELF = 11,
-    NW_E_DUPEDGE = 12,
-    NW_E_FDBUDGET = 13,
-    NW_E_EMPTY = 14,
-    NW_E_LIDS = 15
+    NW_E_SIZE = 3,
+    NW_E_CRC = 4,
+    NW_E_NAME = 5,
+    NW_E_DUPNAME = 6,
+    NW_E_PATH = 7,
+    NW_E_CRIT = 8,
+    NW_E_FDBUDGET = 9,
+    NW_E_EMPTY = 10,
+    NW_E_LIDS = 11
 };
 
 const char *nw_errstr(int e);
@@ -75,13 +64,6 @@ static inline const struct nw_hdr *nw_hdr(const void *blob)
 static inline const struct nw_unit *nw_units(const void *blob)
 {
     return (const struct nw_unit *)((const char *)blob + sizeof(struct nw_hdr));
-}
-
-static inline const struct nw_edge *nw_edges(const void *blob)
-{
-    const struct nw_hdr *h = nw_hdr(blob);
-    return (const struct nw_edge *)((const char *)blob + sizeof(struct nw_hdr)
-                                    + h->n_units * sizeof(struct nw_unit));
 }
 
 #endif

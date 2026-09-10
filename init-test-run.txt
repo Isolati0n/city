@@ -123,3 +123,54 @@ Divergence, sharpened (supersedes the open-ended reading of the note above):
   it is now a scoped, verified-in-principle task rather than an open question.
   Zig is not in the same position: electrician.zig:308 needs the same block, but
   nothing has ever established that the Zig spelling agrees with C at all.
+
+---
+
+Edges removed — 2026-09-10
+
+Every entry above this line describes a system with a connection graph, an
+electrician holding it, and wired units. That system no longer exists. The
+entries are left as written: they are the record of runs that actually
+happened, and rewriting them would destroy the evidence rather than update it.
+See HISTORY.md section 17.
+
+What replaced it:
+  nw-spawn   forks one supervisor per unit, double-forked so PID 1 adopts the
+             houses, reports the pids, and EXITS. Boot-time only.
+  PID 1      requires a complete pid report AND WIFEXITED with status 0.
+             Successful exit is the completion signal; there is no death to
+             watch for and no HALT-on-broker-death path.
+
+New baseline, this container, from a clean build:
+  11 tests, all passing, all in tests/run.py, make test exit 0.
+    hash-pin, difftest, baker-reject-dupname, fuzz-200, happy, slot-B,
+    rescue, halt-spawner, bad-crc, critical-halt, seccomp-kill
+
+  Was 12 passing plus tests/wire_order.py as an expected-to-fail thirteenth.
+  Delta, stated so the count is auditable:
+    lost outright        wire-talk (no wires to talk across)
+    deleted standalone   tests/wire_order.py (guarded edge ordering)
+    replaced, new code   halt-electrician -> halt-spawner (tests the new
+                         completion check: kill the spawner before it reports,
+                         boot must fail)
+    replaced, old check  baker-reject-self-wire -> baker-reject-dupname
+                         (duplicate-name rejection existed and had no test)
+  Tests surviving unchanged: 9. The suite shrank by three and two replacements
+  went back in. Do not quote 11 as though nothing was lost.
+
+Also gone with the edges, and worth noting because it closes a recorded item:
+  The section 12 parked[] open item is RESOLVED BY DELETION. parked[] existed
+  only to hold wire descriptors before dup2. There are no wires, so there is
+  no parked[] and no missing term in the fd budget. The budget is now
+  8 + 2u in all four places.
+
+  The other section 12 item -- 512 hardcoded in close_others against
+  NW_MAX_FDS = 1024, with silent truncation at nd < 512 -- SURVIVES.
+  close_others survives, now in nwspawn.c. Still unreachable, still unstated.
+
+Rust and Zig twins: deleted. electrician.rs and electrician.zig were the only
+  non-C spellings and had no counterpart to compare against once the
+  electrician was gone. tests/bakeoff.py deleted with them; it existed solely
+  to compare the three. The 2026-09-09 entry above records that C and Rust
+  were verified to agree in another container -- that verification stands as
+  history and now has no subject.

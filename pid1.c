@@ -55,7 +55,7 @@ struct house {
 
 static struct house houses[NW_MAX_UNITS];
 static uint32_t n_houses;
-static pid_t electrician;
+static pid_t spawner;
 static int orphans_reaped;
 static int houses_reaped;
 static int shutting_down;
@@ -68,12 +68,6 @@ static void reap_all(int block)
         pid_t p = waitpid(-1, &st, flags);
         if (p <= 0) break;
         int known = 0;
-        if (electrician && p == electrician) {
-            known = 1;
-            say("electrician died", 0);
-            electrician = 0;
-            halt_now("electrician");
-        }
         for (uint32_t i = 0; i < n_houses; i++) {
             if (houses[i].pid == p) {
                 houses[i].pid = 0;
@@ -119,11 +113,11 @@ static void shutdown_city(void)
     for (uint32_t i = 0; i < n_houses; i++) {
         if (houses[i].pid > 0) kill(houses[i].pid, SIGKILL);
     }
-    if (electrician > 0) {
-        say("shutdown", "KILL electrician (city closing)");
-        kill(electrician, SIGKILL);
-        pid_t p = electrician;
-        electrician = 0;
+    if (spawner > 0) {
+        /* Only reachable if boot aborted before the spawner was reaped. */
+        kill(spawner, SIGKILL);
+        pid_t p = spawner;
+        spawner = 0;
         int st;
         waitpid(p, &st, 0);
     }
@@ -189,13 +183,13 @@ int main(int argc, char **argv)
     const char *plan = NULL;
     const char *slot = NULL;
     const char *rescue = NULL;
-    int kill_elec_test = 0;
+    int kill_spawner_test = 0;
 
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--hold-ms") && i + 1 < argc)
             hold_ms = atoi(argv[++i]);
-        else if (!strcmp(argv[i], "--kill-electrician"))
-            kill_elec_test = 1;
+        else if (!strcmp(argv[i], "--kill-spawner"))
+            kill_spawner_test = 1;
         else if (!strcmp(argv[i], "--slot") && i + 1 < argc)
             slot = argv[++i];
         else if (!strcmp(argv[i], "--rescue") && i + 1 < argc)
@@ -262,12 +256,12 @@ int main(int argc, char **argv)
     int report[2];
     if (pipe2(report, O_CLOEXEC) < 0) halt_now("report pipe");
 
-    electrician = fork();
-    if (electrician < 0) halt_now("fork electrician");
-    if (electrician == 0) {
+    spawner = fork();
+    if (spawner < 0) halt_now("fork spawner");
+    if (spawner == 0) {
         char *dir = dir_of_self();
         char elec[520], sup[520];
-        if (snprintf(elec, sizeof elec, "%s/nw-electrician", dir) >= (int)sizeof elec)
+        if (snprintf(elec, sizeof elec, "%s/nw-spawn", dir) >= (int)sizeof elec)
             halt_now("path");
         if (snprintf(sup, sizeof sup, "%s/nw-sup", dir) >= (int)sizeof sup)
             halt_now("path");
@@ -279,7 +273,7 @@ int main(int argc, char **argv)
         char *av[8 + NW_MAX_UNITS];
         char logstr[NW_MAX_UNITS][16];
         int a = 0;
-        av[a++] = "nw-electrician";
+        av[a++] = "nw-spawn";
         av[a++] = (char *)plan;
         av[a++] = rbuf;
         av[a++] = nbuf;
@@ -300,9 +294,13 @@ int main(int argc, char **argv)
             }
         }
         execv(elec, av);
-        halt_now("exec electrician");
+        halt_now("exec spawner");
     }
     close(report[1]);
+    if (kill_spawner_test) {
+        say("test", "killing spawner before it reports");
+        kill(spawner, SIGKILL);
+    }
     for (uint32_t i = 0; i < n_houses; i++) {
         close(houses[i].log_w);
         houses[i].log_w = -1;
@@ -310,25 +308,30 @@ int main(int argc, char **argv)
 
     uint32_t nu = 0;
     if (read(report[0], &nu, sizeof nu) != (ssize_t)sizeof nu)
-        halt_now("electrician report");
+        halt_now("spawn report");
     if (nu != n_houses) halt_now("report count");
     pid_t pids[NW_MAX_UNITS];
     if (read(report[0], pids, sizeof(pid_t) * nu) != (ssize_t)(sizeof(pid_t) * nu))
-        halt_now("electrician pids");
+        halt_now("spawn pids");
     close(report[0]);
     for (uint32_t i = 0; i < nu; i++)
         houses[i].pid = pids[i];
 
+    /* The spawner is expected to exit. Reap it here, before the poll loop can
+     * see it, and require a clean exit: a non-zero status or a signal means
+     * boot did not complete, even though the report arrived. */
     {
-        char b[96];
-        snprintf(b, sizeof b, "houses=%u electrician=%d slot=%s",
-                 n_houses, (int)electrician, slot ? slot : "-");
-        say("city open", b);
+        int st = 0;
+        if (waitpid(spawner, &st, 0) < 0) halt_now("reap spawner");
+        spawner = 0;
+        if (!WIFEXITED(st) || WEXITSTATUS(st) != 0) halt_now("spawner exit");
     }
 
-    if (kill_elec_test) {
-        say("test", "killing electrician");
-        kill(electrician, SIGKILL);
+    {
+        char b[96];
+        snprintf(b, sizeof b, "houses=%u slot=%s",
+                 n_houses, slot ? slot : "-");
+        say("city open", b);
     }
 
     long long t_end = now_ms() + hold_ms;
@@ -348,7 +351,6 @@ int main(int argc, char **argv)
         } else {
             reap_all(0);
         }
-        if (!electrician) break;
     }
 
     shutdown_city();

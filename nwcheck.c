@@ -7,16 +7,12 @@ static const char *errs[] = {
     "ok",
     "bad magic",
     "unit count",
-    "edge count",
     "size",
     "crc32",
     "name",
     "duplicate name",
     "exec_path",
     "critical",
-    "edge index",
-    "self-edge",
-    "duplicate edge",
     "fd budget",
     "empty name",
     "lids"
@@ -86,11 +82,10 @@ int nw_check(const void *blob, uint32_t len)
     const struct nw_hdr *h = nw_hdr(blob);
     if (h->magic[0] != 'N' || h->magic[1] != 'W' || h->magic[2] != 'P'
         || h->magic[3] != 'L' || h->magic[4] != 'A' || h->magic[5] != 'N'
-        || h->magic[6] != '0' || h->magic[7] != '2')
+        || h->magic[6] != '0' || h->magic[7] != '3')
         return NW_E_MAGIC;
     if (h->n_units < 1 || h->n_units > NW_MAX_UNITS) return NW_E_UNITS;
-    if (h->n_edges > NW_MAX_EDGES) return NW_E_EDGES;
-    uint32_t need = (uint32_t)NW_BLOB_SIZE(h->n_units, h->n_edges);
+    uint32_t need = (uint32_t)NW_BLOB_SIZE(h->n_units);
     if (len != need) return NW_E_SIZE;
 
     unsigned char tmp_hdr[sizeof(struct nw_hdr)];
@@ -117,7 +112,6 @@ int nw_check(const void *blob, uint32_t len)
     if (c != h->crc32) return NW_E_CRC;
 
     const struct nw_unit *u = nw_units(blob);
-    const struct nw_edge *e = nw_edges(blob);
 
     int slot[128];
     for (int i = 0; i < 128; i++) slot[i] = -1;
@@ -145,19 +139,8 @@ int nw_check(const void *blob, uint32_t len)
         }
     }
 
-    uint32_t fdneed = NW_FD_RESERVED + h->n_units * 2u + h->n_edges * 2u;
+    uint32_t fdneed = NW_FD_RESERVED + h->n_units * 2u;
     if (fdneed > NW_MAX_FDS) return NW_E_FDBUDGET;
 
-    for (uint32_t i = 0; i < h->n_edges; i++) {
-        if (e[i].a >= h->n_units || e[i].b >= h->n_units) return NW_E_EIDX;
-        if (e[i].a == e[i].b) return NW_E_SELF;
-        uint16_t lo = e[i].a < e[i].b ? e[i].a : e[i].b;
-        uint16_t hi = e[i].a < e[i].b ? e[i].b : e[i].a;
-        for (uint32_t j = 0; j < i; j++) {
-            uint16_t lo2 = e[j].a < e[j].b ? e[j].a : e[j].b;
-            uint16_t hi2 = e[j].a < e[j].b ? e[j].b : e[j].a;
-            if (lo == lo2 && hi == hi2) return NW_E_DUPEDGE;
-        }
-    }
     return NW_OK;
 }

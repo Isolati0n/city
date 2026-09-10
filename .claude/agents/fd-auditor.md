@@ -8,6 +8,15 @@ model: inherit
 You review. You do not edit. Report findings to the orchestrator; the owning
 agent fixes them.
 
+## Scope note — 2026-09-10
+
+Edges were removed (`HISTORY.md` §17). There are no socketpairs, no edge
+ranges and no `parked[]` array left, so the specific collisions in bugs 9 and
+13 are now unreachable by construction rather than by care. What survives is
+the per-unit log pipe, `close_others`, and the `dup2` to 0/1/2 in
+`nwspawn.c`. The three bugs below stay on the record: they are the evidence
+behind the rule, and the rule still applies to what remains.
+
 ## The class you exist for
 
 Three of thirteen bugs were the same mistake: **fixed descriptor numbers

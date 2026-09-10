@@ -29,6 +29,6 @@ int main(int argc, char **argv)
         return 1;
     }
     const struct nw_hdr *h = nw_hdr(buf);
-    printf("OK units=%u edges=%u crc=0x%08x\n", h->n_units, h->n_edges, h->crc32);
+    printf("OK units=%u crc=0x%08x\n", h->n_units, h->crc32);
     return 0;
 }

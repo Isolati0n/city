@@ -1,21 +1,20 @@
 # Linux city TCB:
-#   PID 1, electrician, nw-check, rescue = C
+#   PID 1, nw-spawn, nw-check, rescue = C
 #   nw-sup = Rust + lids.c (optional twin: nwsup.c)
 #   baker = Python, offline
 # artifacts/ is noexec. `make test` stages to /tmp/nw-init-run.
 
 CC = gcc
 CFLAGS = -Wall -Wextra -O2 -g -std=gnu11
-ZIG = /tmp/zig/zig
 STAGE = /tmp/nw-init-run
 
-all: nw-root nw-electrician nw-check nw-sup nw-rescue unit-probe unit-talk unit-listen unit-boom unit-badcall unit-hub unit-ident
+all: nw-root nw-spawn nw-check nw-sup nw-rescue unit-probe unit-boom unit-badcall
 
 nw-root: pid1.c nwcheck.c blob.h
 	$(CC) $(CFLAGS) -o $@ pid1.c nwcheck.c
 
-nw-electrician: electrician.c nwcheck.c blob.h
-	$(CC) $(CFLAGS) -o $@ electrician.c nwcheck.c
+nw-spawn: nwspawn.c nwcheck.c blob.h
+	$(CC) $(CFLAGS) -o $@ nwspawn.c nwcheck.c
 
 nw-check: nwcheck_main.c nwcheck.c blob.h
 	$(CC) $(CFLAGS) -o $@ nwcheck_main.c nwcheck.c
@@ -32,29 +31,16 @@ nw-rescue: rescue.c
 unit-probe: unit_probe.c
 	$(CC) $(CFLAGS) -o $@ unit_probe.c
 
-unit-talk: houses/talk.c
-	$(CC) $(CFLAGS) -o $@ houses/talk.c
-
-unit-listen: houses/listen.c
-	$(CC) $(CFLAGS) -o $@ houses/listen.c
-
 unit-boom: houses/boom.c
 	$(CC) $(CFLAGS) -o $@ houses/boom.c
 
 unit-badcall: houses/badcall.c
 	$(CC) $(CFLAGS) -o $@ houses/badcall.c
 
-unit-hub: houses/hub.c
-	$(CC) $(CFLAGS) -o $@ houses/hub.c
-
-unit-ident: houses/ident.c
-	$(CC) $(CFLAGS) -o $@ houses/ident.c
-
 stage: all
 	mkdir -p $(STAGE)/slots/A $(STAGE)/slots/B $(STAGE)/slots/rescue
-	cp -f nw-root nw-electrician nw-check nw-sup nw-rescue \
-	      unit-probe unit-talk unit-listen unit-boom unit-badcall \
-	      unit-hub unit-ident $(STAGE)/
+	cp -f nw-root nw-spawn nw-check nw-sup nw-rescue \
+	      unit-probe unit-boom unit-badcall $(STAGE)/
 	chmod +x $(STAGE)/*
 	python3 bakery/nw-cc.py --probe $(STAGE)/unit-probe --out $(STAGE)/slots/A/plan.blob --lids seccomp
 	cp -f $(STAGE)/slots/A/plan.blob $(STAGE)/slots/B/plan.blob
@@ -69,7 +55,6 @@ test: stage
 	python3 tests/run.py
 
 clean:
-	rm -f lids.o nw-root nw-electrician nw-check nw-sup nw-rescue \
-	      unit-probe unit-talk unit-listen unit-boom unit-badcall \
-	      unit-hub unit-ident
+	rm -f lids.o nw-root nw-spawn nw-check nw-sup nw-rescue \
+	      unit-probe unit-boom unit-badcall
 	rm -rf $(STAGE)

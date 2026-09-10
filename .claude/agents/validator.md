@@ -6,7 +6,7 @@ model: inherit
 ---
 
 You own `nwcheck.c` (the boot-time blob validator, linked into `nw-root`,
-`nw-electrician` and `nw-check`), `nwcheck_main.c`, and the shared `blob.h`.
+`nw-spawn` and `nw-check`), `nwcheck_main.c`, and the shared `blob.h`.
 This is TCB code that runs before anything else is trusted.
 
 ## Constraints on the code itself
@@ -32,7 +32,7 @@ not reintroduce a nested scan.
 - **Trailing bytes must be zero.** `name_ok` checks the whole padded field, not
   just up to the NUL.
 - **Limits are derived.** `blob.h` carries
-  `_Static_assert(NW_MAX_UNITS*2 + NW_MAX_EDGES*2 + NW_FD_RESERVED <= NW_MAX_FDS)`.
+  `_Static_assert(NW_MAX_UNITS*2 + NW_FD_RESERVED <= NW_MAX_FDS)`.
   Any limit change must be mirrored in `bakery/nw-cc.py`, `fdNeed` in
   `plan.als`, and `FdNeed` in `Plan.tla`. Bugs 2 and 11 were both drift between
   two places that had to agree.

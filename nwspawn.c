@@ -1,27 +1,40 @@
+/* nw-spawn — boot-time unit spawner.
+ *
+ * Forks one supervisor per unit, double-forked so PID 1 adopts the houses,
+ * reports their pids, and EXITS.
+ *
+ * It exists only during boot. PID 1 has no respawn path (see reap_all in
+ * pid1.c: a house exit is recorded, and halts the city if critical, but is
+ * never re-execed), and restart budgets live in nw-sup, one authority per
+ * unit. So spawning happens exactly once per unit and a process whose
+ * lifetime is exactly boot matches that need.
+ *
+ * Its predecessor, the electrician, stayed alive and inert because it held
+ * the only copy of the connection graph; its death mid-life was unrecoverable
+ * and PID 1 halted on it. With edges removed there is no graph to hold, so
+ * this process has no mid-life and normal exit is the success path. PID 1
+ * waits for exit 0 rather than watching for death.
+ *
+ * TCB.
+ */
 #define _GNU_SOURCE
 #include "blob.h"
 
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
-#include <linux/filter.h>
-#include <linux/seccomp.h>
 #include <signal.h>
-#include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/prctl.h>
-#include <sys/socket.h>
-#include <sys/syscall.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
 static void die(const char *s)
 {
     char b[160];
-    int n = snprintf(b, sizeof b, "[electrician] FAIL %s errno=%d\n", s, errno);
+    int n = snprintf(b, sizeof b, "[nw-spawn] FAIL %s errno=%d\n", s, errno);
     if (n > 0) { ssize_t r = write(2, b, (size_t)n); (void)r; }
     _exit(71);
 }
@@ -29,7 +42,7 @@ static void die(const char *s)
 static void say(const char *s)
 {
     char b[160];
-    int n = snprintf(b, sizeof b, "[electrician] %s\n", s);
+    int n = snprintf(b, sizeof b, "[nw-spawn] %s\n", s);
     if (n > 0) { ssize_t r = write(2, b, (size_t)n); (void)r; }
 }
 
@@ -77,64 +90,26 @@ static int clear_cloexec(int fd)
     return fcntl(fd, F_SETFD, fl & ~FD_CLOEXEC);
 }
 
-/* Inert filter as a table of allowed nrs, not scattered immediates. */
-static void go_inert(void)
-{
-    static const int allow[] = {
-        __NR_pause, __NR_rt_sigreturn, __NR_exit_group, __NR_exit
-    };
-    struct sock_filter f[2 + 4 + 2];
-    unsigned n = 0;
-    f[n++] = (struct sock_filter)BPF_STMT(BPF_LD | BPF_W | BPF_ABS,
-                                          offsetof(struct seccomp_data, nr));
-    for (unsigned i = 0; i < 4; i++)
-        f[n++] = (struct sock_filter)BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K,
-                                              (unsigned)allow[i], 4 - i, 0);
-    f[n++] = (struct sock_filter)BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_KILL_PROCESS);
-    f[n++] = (struct sock_filter)BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW);
-    struct sock_fprog prog = { .len = (unsigned short)n, .filter = f };
-    say("inert");
-    if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) < 0)
-        die("no_new_privs");
-    if (prctl(PR_SET_SECCOMP, SECCOMP_MODE_FILTER, &prog) < 0)
-        die("seccomp");
-    for (;;)
-        pause();
-}
-
-static int pack_kit(int log_w, const int *wires, int nw)
+/* A unit's descriptors: /dev/null on 0, its own log pipe on 1 and 2, nothing
+ * else. With edges gone there is no BASE + i arithmetic left here at all --
+ * the class behind bugs 5, 9 and 13 went out with the wiring. */
+static int pack_kit(int log_w)
 {
     int nullfd = open("/dev/null", O_RDONLY | O_CLOEXEC);
     if (nullfd < 0) return -1;
     int logn = fcntl(log_w, F_DUPFD_CLOEXEC, 3);
     if (logn < 0) return -1;
-    int parked[NW_MAX_EDGES];
-    for (int i = 0; i < nw; i++) {
-        parked[i] = fcntl(wires[i], F_DUPFD_CLOEXEC, 3);
-        if (parked[i] < 0) return -1;
-    }
-    int keep[3 + NW_MAX_EDGES];
-    int nk = 0;
-    keep[nk++] = nullfd;
-    keep[nk++] = logn;
-    for (int i = 0; i < nw; i++)
-        keep[nk++] = parked[i];
-    close_others(keep, nk);
+
+    int keep[2];
+    keep[0] = nullfd;
+    keep[1] = logn;
+    close_others(keep, 2);
 
     if (dup2(nullfd, 0) < 0) return -1;
     if (dup2(logn, 1) < 0) return -1;
     if (dup2(logn, 2) < 0) return -1;
     if (nullfd > 2) close(nullfd);
     if (logn > 2) close(logn);
-
-    for (int i = 0; i < nw; i++) {
-        int dest = 3 + i;
-        if (parked[i] != dest) {
-            if (dup2(parked[i], dest) < 0) return -1;
-            if (parked[i] != dest) close(parked[i]);
-        }
-        if (clear_cloexec(dest) < 0) return -1;
-    }
     if (clear_cloexec(0) < 0 || clear_cloexec(1) < 0 || clear_cloexec(2) < 0)
         return -1;
     return 0;
@@ -173,24 +148,10 @@ int main(int argc, char **argv)
 
     const struct nw_hdr *h = nw_hdr(blob);
     const struct nw_unit *u = nw_units(blob);
-    const struct nw_edge *ed = nw_edges(blob);
     if ((int)h->n_units != nlogs) die("log/unit mismatch");
-
-    int pair[NW_MAX_EDGES][2];
-    for (uint32_t i = 0; i < h->n_edges; i++) {
-        if (socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, pair[i]) < 0)
-            die("socketpair");
-    }
 
     pid_t pids[NW_MAX_UNITS];
     for (uint32_t i = 0; i < h->n_units; i++) {
-        int wires[NW_MAX_EDGES];
-        uint32_t peer[NW_MAX_EDGES];
-        int nw = 0;
-        for (uint32_t e = 0; e < h->n_edges; e++) {
-            if (ed[e].a == i)      { peer[nw] = ed[e].b; wires[nw++] = pair[e][0]; }
-            else if (ed[e].b == i) { peer[nw] = ed[e].a; wires[nw++] = pair[e][1]; }
-        }
         int pp[2];
         if (pipe2(pp, O_CLOEXEC) < 0) die("pid pipe");
         pid_t mid = fork();
@@ -205,29 +166,18 @@ int main(int argc, char **argv)
                 _exit(0);
             }
             close(pp[1]);
-            if (pack_kit(logw[i], wires, nw) < 0) die("pack kit");
-            char nbuf[8], lbuf[8], bbuf[8], wbuf[8], cbuf[8];
-            snprintf(nbuf, sizeof nbuf, "%d", nw);
+            if (pack_kit(logw[i]) < 0) die("pack kit");
+            char lbuf[8], bbuf[8], wbuf[8], cbuf[8];
             snprintf(lbuf, sizeof lbuf, "%u", (unsigned)u[i].lids);
             snprintf(bbuf, sizeof bbuf, "%u", (unsigned)u[i].budget);
             snprintf(wbuf, sizeof wbuf, "%u", (unsigned)u[i].window_s);
             snprintf(cbuf, sizeof cbuf, "%u", (unsigned)u[i].critical);
             setenv("NW_UNIT", u[i].name, 1);
             setenv("NW_HOUSE", u[i].name, 1);
-            setenv("NW_WIRES", nbuf, 1);
-            setenv("NW_KIT", nbuf, 1);
             setenv("NW_LIDS", lbuf, 1);
             setenv("NW_BUDGET", bbuf, 1);
             setenv("NW_WINDOW", wbuf, 1);
             setenv("NW_CRITICAL", cbuf, 1);
-            /* Wire position carries no meaning: a unit looks up the peer it
-             * wants and gets a descriptor. pack_kit placed wire k at 3+k by
-             * dup2 construction, so the suffix is not a guess. */
-            for (int k = 0; k < nw; k++) {
-                char kbuf[24];
-                snprintf(kbuf, sizeof kbuf, "NW_WIRE_%d", 3 + k);
-                setenv(kbuf, u[peer[k]].name, 1);
-            }
             execl(sup, "nw-sup", u[i].exec_path, u[i].name, (char *)0);
             die("exec nw-sup");
         }
@@ -239,15 +189,11 @@ int main(int argc, char **argv)
         if (waitpid(mid, NULL, 0) < 0) die("reap mid");
         pids[i] = house;
         char line[96];
-        snprintf(line, sizeof line, "spawned %.31s pid=%d kit=%d lids=%u",
-                 u[i].name, (int)house, nw, (unsigned)u[i].lids);
+        snprintf(line, sizeof line, "spawned %.31s pid=%d lids=%u",
+                 u[i].name, (int)house, (unsigned)u[i].lids);
         say(line);
     }
 
-    for (uint32_t i = 0; i < h->n_edges; i++) {
-        close(pair[i][0]);
-        close(pair[i][1]);
-    }
     for (int i = 0; i < nlogs; i++)
         close(logw[i]);
 
@@ -257,7 +203,6 @@ int main(int argc, char **argv)
         die("report pids");
     close(report_fd);
 
-    say("kits filled");
-    go_inert();
+    say("units spawned");
     return 0;
 }

@@ -813,3 +813,153 @@ headroom. Then only genuinely multi-hop properties can fail late, the warn path
 covers a small well-defined set, and "the edge responsible" is usually
 meaningful because it is the edge that closed a cycle or crossed a confinement
 boundary.
+## 17. Edges removed — 2026-09-10
+
+Edges are gone from the system. Every section above this one is left exactly
+as written, including the thirteen bugs, section 15 and section 16 — which
+argue at length about a component that no longer exists. That is deliberate,
+and the reasoning is at the end of this section.
+
+### Why
+
+Edges were justified by isolation and capability discipline: non-provision,
+the connection graph as the security model, capability flow as the thing the
+baker validates. **Cybersecurity is not a goal of this system.** Containerization
+applies to apps, not to the init's own units. Once that premise is withdrawn,
+the entire apparatus — a broker holding the only copy of a graph, socketpairs
+per declared edge, four structural checks about edge validity, a `2e` term in
+five copies of an fd budget, and three of thirteen bugs — was paying for a
+property nobody wanted.
+
+Section 16 had already concluded that the edge model could not support the one
+thing anybody wanted to build on it: edges are undirected, so the baker could
+check connectivity and nothing else. The choice was to add direction as its own
+piece of work, or to stop paying for edges. This is the second.
+
+### What was deleted
+
+Files: `electrician.c`, `electrician.rs`, `electrician.zig`, `houses/talk.c`,
+`houses/listen.c`, `houses/hub.c`, `houses/ident.c`, `tests/wire_order.py`,
+`tests/bakeoff.py`, `.claude/agents/electrician.md`.
+
+Format: `struct nw_edge`, `nw_edges()`, `n_edges`, `NW_MAX_EDGES`, the `ne`
+argument to `NW_BLOB_SIZE`. Magic bumped `NWPLAN02` → `NWPLAN03`, so an old
+blob is rejected as `NW_E_MAGIC` rather than confusingly as a size error.
+
+Checks: `NW_E_EDGES`, `NW_E_EIDX`, `NW_E_SELF`, `NW_E_DUPEDGE`, and the O(n²)
+duplicate-edge scan. Remaining codes renumbered contiguously with `errs[]` and
+the `nw_errstr` bound moved together.
+
+Budget: the `2e` term in all five places — the `_Static_assert` in `blob.h`,
+`nwcheck.c`, `bakery/nw-cc.py`, `fdNeed` in `plan.als`, `FdNeed` in
+`Plan.tla`. It is now `8 + 2u` everywhere.
+
+Specs: `sig Wire`, `noSelfWire`, `undirectedUnique` from `plan.als`; `MaxEdges`
+and `e` from `Plan.tla`.
+
+### What replaced the electrician — and why it is not a rename
+
+The removal exposed something the plan for it did not anticipate: **PID 1 does
+not fork units.** It forks loggers, rescue, and the electrician; the
+electrician double-forked every supervisor so PID 1 adopted the houses. Deleting
+it would have meant nothing starts. This was a rewrite, not a deletion.
+
+Two candidates: fold spawning into `pid1.c`, or keep a stripped spawner. The
+second won on a premise check, and the argument is worth keeping.
+
+The electrician *earned* halt-on-death by being **inert after startup** —
+seccomp'd to `pause`, `rt_sigreturn`, `exit_group`. Its death was nearly
+impossible, so treating it as fatal cost nothing. Folding its work into PID 1
+would have put the descriptor-hygiene code — historically the buggiest in the
+project, source of bugs 5, 6, 9 and 13 — inside the process where a fault does
+not crash a program, it fails to boot a machine.
+
+`nw-spawn` instead does the work and **exits**. PID 1 has no respawn path
+(`reap_all` records a house exit and halts if critical; it never re-execs) and
+restart budgets live in `nw-sup`, so spawning is boot-time only and a process
+whose lifetime is exactly boot fits the need exactly. Its normal termination is
+the success path, so **invariant 4 is not answered, it is dissolved** — there
+is no mid-life in which death could be unrecoverable, and no split-brain to
+prevent because there is no graph to hold.
+
+PID 1 gained one small thing in exchange: it must now treat *successful exit*
+as the completion signal rather than watching for death. It requires a complete
+pid report **and** `WIFEXITED` with status 0. That is new logic, so it has a new
+test (`halt-spawner`) rather than an assumption.
+
+`pack_kit` collapsed with the wiring. A unit now gets `/dev/null` on 0, its log
+pipe on 1 and 2, and `close_others` for the rest. **No `BASE + i` arithmetic
+survives anywhere in the spawn path** — the specific class behind bugs 5, 9 and
+13 is now unreachable by construction rather than by care.
+
+### Does `NoLiveRewrite` still mean anything?
+
+Owed from the section 16 discussion, and the answer is two-part.
+
+**Its policy content survives intact, and is now the whole of it.** "A new plan
+is a new slot, never an in-place rewrite" is an operational rule about how the
+system is changed. Changing a lid, adding a unit, or altering a budget still
+requires a bake, a slot, and a reboot. Nothing about that depended on edges. It
+is retained as invariant 8 in `CLAUDE.md`.
+
+**Its formal content, always thin, is now nil — so the predicate was
+withdrawn.** `NoLiveRewrite` was `UNCHANGED <<n, e, crit, lids>>`, and it was
+never checked against anything: `Plan.tla` has no next-state relation and no
+temporal formula. It passed identically while the wire-order bug of section 15
+was live. Of its four variables, `e` was the only one with a plausible runtime
+mutation path — a broker *could* have made a socketpair after boot, which is
+exactly what section 16's app plane proposed. Nothing can add a unit, change a
+critical flag, or alter a lid while the city runs; there is no code path.
+
+So `UNCHANGED <<n, crit, lids>>` would be trivially true, evaluated by nothing,
+and sitting in a file people cite as assurance. That is worse than absent: a
+vacuous predicate in a spec is a claim that looks checked. It was removed and
+replaced with a comment saying why. `HaltOnElectricianDeath == TRUE` went with
+it, having been a placeholder for a property that no longer has a subject.
+
+The general form, worth keeping: **when the thing an invariant constrained is
+deleted, the invariant does not become safer, it becomes vacuous.** Withdraw it
+or restate what it now actually forbids. Do not leave it standing because it
+still passes.
+
+### Test baseline — honestly
+
+**11 passing, from a clean clone, `make test` exit 0.** Previously 12 passing
+plus `tests/wire_order.py` as an expected-to-fail thirteenth.
+
+- Lost outright (1): `wire-talk`.
+- Deleted (1): `tests/wire_order.py`.
+- Replaced, testing new code (1): `halt-electrician` → `halt-spawner`.
+- Replaced, testing a different surviving check (1): `baker-reject-self-wire`
+  → `baker-reject-dupname`. Duplicate-name rejection was a real baker check
+  with no test; this is new coverage of an old check, not a rename.
+
+**Tests surviving unchanged: 9.** The suite shrank by three and two
+replacements went back in. Quote 11 only alongside that breakdown; quoting it
+bare would make the old number appear to hold.
+
+One recorded open item closed itself: the section 12 `parked[]` omission is
+**resolved by deletion**. `parked[]` existed only to hold wire descriptors, so
+there is no missing term left in the fd budget. The other section 12 item — 512
+hardcoded in `close_others` against `NW_MAX_FDS = 1024`, with silent truncation
+— **survives**, now in `nwspawn.c`, still unreachable and still unstated.
+
+### Why the history stays
+
+The thirteen bugs, section 15 and section 16 all describe machinery that has
+been deleted. They are kept, and not as sentiment.
+
+The bugs are the **evidence** behind rules that still apply. "No compile-time
+fd numbers alongside dynamic allocation" is not justified by the existence of
+edges; it is justified by bugs 5, 9 and 13 having happened. `close_others`, log
+pipes and the `dup2` to 0/1/2 remain, and the rule still governs them. Delete
+the evidence and the rule becomes an assertion someone will eventually talk
+their way out of. The same holds for "never test at 4 units only" — five bugs
+were correct at 4 and wrong at 4,000, and that is a fact about this project's
+testing, not about wiring.
+
+Section 15 and section 16 are kept for a second reason: they record reasoning
+that was correct and still led somewhere that got deleted. Section 16 concluded
+that undirected edges could not support the app plane, and that conclusion is
+part of why edges are gone. A record that only contains decisions which
+survived is not a history, it is a brochure.

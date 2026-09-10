@@ -9,12 +9,12 @@ offline, then a runtime table interpreter executes it. Robustness comes from
 | component | file(s) | language | in TCB |
 |---|---|---|---|
 | `nw-root` (PID 1) | `pid1.c` + `nwcheck.c` | C | **yes** |
-| `nw-electrician` (broker) | `electrician.c` + `nwcheck.c` | C | **yes** |
+| `nw-spawn` (boot spawner) | `nwspawn.c` + `nwcheck.c` | C | **yes** |
 | `nw-check` | `nwcheck_main.c` + `nwcheck.c` | C | **yes** |
 | `nw-sup` | `nwsup.c` / `nwsup.rs` + `lids.c` | C / Rust | **yes** |
 | `nw-rescue` | `rescue.c` | C | yes |
 | baker (`nw-cc`) | `bakery/nw-cc.py` | Python | **no** |
-| test suite | `tests/run.py`, `tests/bakeoff.py` | Python | **no** |
+| test suite | `tests/run.py` | Python | **no** |
 | spec | `plan.als`, `Plan.tla` | Alloy / TLA+ | **no** |
 
 Anything added to a TCB file needs a stated justification. Anything that can
@@ -26,19 +26,31 @@ live in the baker instead, does.
    budget is a ring of timestamps, not a counter.
 2. **No compile-time file descriptor numbers alongside dynamic allocation.**
    This produced bugs 5, 9 and 13. Sweep `/proc/self/fd`; do not hardcode.
-3. **Limits are derived, never declared twice.** `NW_MAX_UNITS` and
-   `NW_MAX_EDGES` feed the `_Static_assert` fd budget in `blob.h`. The same
-   arithmetic appears in `bakery/nw-cc.py`, `plan.als` (`fdNeed`) and
-   `Plan.tla` (`FdNeed`). Change one, change all four, or they drift.
-4. **Electrician death is fatal.** It holds the only copy of the connection
-   graph. PID 1 halts everything (exit 70). Never add a broker restart path.
-5. **Wiring is non-provision, not enforcement.** A unit with no declared edges
-   receives zero descriptors. There is no doorman to bypass. Do not add one.
-6. **Readiness is observed by the electrician, never reported by the unit.**
+3. **Limits are derived, never declared twice.** `NW_MAX_UNITS` feeds the
+   `_Static_assert` fd budget in `blob.h`. The same arithmetic appears in
+   `bakery/nw-cc.py`, `plan.als` (`fdNeed`) and `Plan.tla` (`FdNeed`). Change
+   one, change all four, or they drift.
+4. **`nw-spawn` exits; its death is not a failure mode.** It forks one
+   supervisor per unit, double-forked so PID 1 adopts the houses, reports the
+   pids and exits 0. PID 1 requires a complete report *and* a clean exit —
+   successful termination is the completion signal, not something to watch
+   for. Spawning is boot-time only: PID 1 has no respawn path and restart
+   budgets live in `nw-sup`. Do not give the spawner a mid-life.
+5. **A unit holds nothing above stderr.** `/dev/null` on 0, its own log pipe on
+   1 and 2, and `close_others` sweeps the rest. There is nothing a unit is
+   supposed to be handed beyond those. (Until 2026-09-10 this read "wiring is
+   non-provision, not enforcement" and concerned declared edges; edges were
+   removed — see `HISTORY.md` §17.)
+6. **Isolation of units is by lids, not by topology.** Seccomp, Landlock and
+   namespaces are applied per unit by `nw-sup` before `execv`. Cybersecurity is
+   not a goal of this system; containerization applies to apps.
 7. **Authoritative state never auto-restarts on an integrity fault.**
 8. **The live city does not grow verbs.** A new plan is a new slot (A/B), never
-   an in-place rewrite. See `NoLiveRewrite` in `Plan.tla`.
-9. **CRC32 is diagnostic** (threat model is corruption, not tampering). The 14
+   an in-place rewrite. This is now an operational rule only: `NoLiveRewrite`
+   was withdrawn from `Plan.tla` when edges were removed, because the
+   remaining variables have no runtime mutation path and the predicate would
+   have been vacuous. See `HISTORY.md` §17.
+9. **CRC32 is diagnostic** (threat model is corruption, not tampering). The
    structural checks in `nwcheck.c` are the actual safety property. The seal
    must be *verified*, not merely read — that was bug 1.
 

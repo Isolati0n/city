@@ -72,7 +72,7 @@ as a detection guarantee.
 ## Open
 
 Namespaces, seccomp and cgroups on units all belong here, not in PID 1 or the
-electrician. Cgroups are not started.
+spawner. Cgroups are not started.
 
 ## Definition of done
 

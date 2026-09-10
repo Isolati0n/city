@@ -42,9 +42,10 @@ def expect(cond, msg):
 def test_happy():
     rc, out = boot(slot=f"{STAGE}/slots/A", hold=900)
     expect(rc == 0, f"happy rc={rc}\n{out}")
-    expect("kit_env=1" in out and "kit_env=2" in out and "kit_env=0" in out, "kits")
-    expect("socket_wires=0" in out, "delta empty")
-    expect("electrician] inert" in out, "inert")
+    # No edges: a unit holds nothing above stderr. This is what is left of the
+    # descriptor assertion after wiring was removed.
+    expect(out.count("fds_ge3=0") == 4, f"every unit holds no extra fds\n{out}")
+    expect("units spawned" in out, "spawner completed")
     expect("houses_reaped=4" in out, "reap")
     expect("orphans=0" in out, "orphans")
     print("ok happy")
@@ -65,11 +66,14 @@ def test_rescue():
     print("ok rescue")
 
 
-def test_halt_electrician():
-    rc, out = boot(slot=f"{STAGE}/slots/A", extra=["--kill-electrician"], hold=400)
+def test_halt_spawner():
+    """nw-spawn exits as its success path, so PID 1 cannot watch for its death.
+    It requires a complete pid report and a clean exit instead. Kill it before
+    it reports and boot must fail rather than come up short-staffed."""
+    rc, out = boot(slot=f"{STAGE}/slots/A", extra=["--kill-spawner"], hold=400)
     expect(rc == 70, f"halt rc={rc}\n{out}")
-    expect("HALT: electrician" in out, "halt text")
-    print("ok halt-electrician")
+    expect("HALT: spawn report" in out, f"halt text\n{out}")
+    print("ok halt-spawner")
 
 
 def test_bad_crc():
@@ -86,10 +90,11 @@ def test_bad_crc():
 
 def test_baker_rejects():
     city = f"{STAGE}/bad-city.txt"
-    open(city, "w").write("house a /bin/true\nwire a a\n")
+    open(city, "w").write("house a /bin/true\nhouse a /bin/true\n")
     p = run(["python3", CC, "--city", city, "--out", f"{STAGE}/nope.blob"])
-    expect(p.returncode != 0, "self-wire should fail bake")
-    print("ok baker-reject-self-wire")
+    expect(p.returncode != 0, "duplicate name should fail bake")
+    expect("duplicate name" in (p.out + p.err), f"reason\n{p.out}{p.err}")
+    print("ok baker-reject-dupname")
 
 
 def test_fuzz_checker():
@@ -113,25 +118,6 @@ def test_difftest():
     r = run([f"{STAGE}/nw-check", f"{STAGE}/plan.blob"])
     expect(r.returncode == 0, "difftest good")
     print("ok difftest")
-
-
-def test_wire_talk():
-    talk = f"{STAGE}/unit-talk"
-    listen = f"{STAGE}/unit-listen"
-    city = f"{STAGE}/talk.city"
-    open(city, "w").write(
-        f"house talk {talk} lids=none\n"
-        f"house listen {listen} lids=none\n"
-        f"wire talk listen\n"
-    )
-    blob = f"{STAGE}/talk.blob"
-    b = run(["python3", CC, "--city", city, "--out", blob])
-    expect(b.returncode == 0, b.err + b.out)
-    rc, out = boot(plan=blob, hold=700)
-    expect(rc == 0, f"talk rc={rc}\n{out}")
-    expect("talk sent" in out, "talk")
-    expect("listen got ping" in out, f"listen\n{out}")
-    print("ok wire-talk")
 
 
 def test_critical_halt():
@@ -182,9 +168,8 @@ def main():
     test_happy()
     test_slot_b()
     test_rescue()
-    test_halt_electrician()
+    test_halt_spawner()
     test_bad_crc()
-    test_wire_talk()
     test_critical_halt()
     test_seccomp_kills()
     print("ALL TESTS PASSED")

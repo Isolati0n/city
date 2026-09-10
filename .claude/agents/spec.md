@@ -10,14 +10,16 @@ TCB.
 
 ## What they currently assert
 
-`plan.als`: no self-wire; wires unique up to direction; at least one house;
-`critical` is 0 or 1; `fdNeed = 8 + 2×#House + 2×#Wire` and `sealed` requires
-`fdNeed <= 1024`. Scope `for 8 House, 16 Wire`.
+`plan.als`: at least one house; `critical` is 0 or 1;
+`fdNeed = 8 + 2×#House` and `sealed` requires `fdNeed <= 1024`. Scope
+`for 8 House`. (`sig Wire` and its facts were removed with edges — §17.)
 
-`Plan.tla`: `MaxUnits = 64`, `MaxEdges = 128`, `MaxFds = 1024`, `Reserved = 8`;
+`Plan.tla`: `MaxUnits = 64`, `MaxFds = 1024`, `Reserved = 8`;
 `FdNeed == Reserved + 2*n + 2*e`; `TypeOK` bounds `n`, `e`, `crit` and requires
 `FdNeed <= MaxFds`; `NoLiveRewrite` (a new plan is a new slot, the live city
-does not grow verbs); `HaltOnElectricianDeath`.
+does not grow verbs) and `HaltOnElectricianDeath` were both withdrawn when
+edges were removed — see `HISTORY.md` §17 for why restating NoLiveRewrite
+would have been vacuous rather than reassuring.
 
 ## Your job
 
@@ -32,7 +34,7 @@ manufacture an objection.
 
 Be honest about the limits of these files. They are small, the Alloy scope is
 8 houses and 16 wires, `Plan.tla` has no real next-state relation, and
-`HaltOnElectricianDeath == TRUE` is a placeholder rather than a proof. If
+what remains is a type predicate no behaviour is checked against. If
 someone treats a passing check here as evidence the implementation is correct,
 correct them. The specs constrain the *plan format*; they say nothing about
 descriptor handling at runtime, which is where every real bug has been.
