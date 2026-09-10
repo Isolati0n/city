@@ -13,6 +13,14 @@
 _Static_assert(NW_MAX_UNITS * 2 + NW_FD_RESERVED <= NW_MAX_FDS,
                "derived fd budget");
 
+/* Whether a clean exit means "done" or "unexpected". Explicit in the plan:
+ * there is no default and no inference. Exit 0 used to mean do-not-restart
+ * unconditionally, which collided with a reserved fault code meaning
+ * do-not-restart-because-something-is-wrong. One channel, two opposite
+ * meanings, separated only by which integer — the shape of bug 9. */
+#define NW_KIND_ONESHOT  0u   /* exit 0 completes; never restarted */
+#define NW_KIND_LONGRUN  1u   /* any exit is unexpected, incl. 0 */
+
 #define NW_LID_SECCOMP   0x01u
 #define NW_LID_LANDLOCK  0x02u
 #define NW_LID_NEWNS     0x04u
@@ -21,7 +29,7 @@ _Static_assert(NW_MAX_UNITS * 2 + NW_FD_RESERVED <= NW_MAX_FDS,
 struct nw_unit {
     char     name[NW_NAME_LEN];
     char     exec_path[NW_PATH_LEN];
-    uint8_t  _rsv0;      /* was 'critical', removed 2026-09-10; must be 0 */
+    uint8_t  kind;       /* NW_KIND_* — was 'critical' until 2026-09-10 */
     uint8_t  budget;
     uint16_t window_s;
     uint8_t  lids;
@@ -47,7 +55,8 @@ enum {
     NW_E_DUPNAME = 6,
     NW_E_PATH = 7,
     NW_E_RSV = 8,
-    NW_E_LIDS = 9
+    NW_E_LIDS = 9,
+    NW_E_KIND = 10
 };
 
 const char *nw_errstr(int e);

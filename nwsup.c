@@ -130,11 +130,12 @@ int main(int argc, char **argv)
     if (argc < 3) die("argv");
     const char *path = argv[1];
     const char *name = argv[2];
-    unsigned lids = 0, budget = 0, window_s = 2;
+    unsigned lids = 0, budget = 0, window_s = 2, kind = NW_KIND_LONGRUN;
     const char *e;
     if ((e = getenv("NW_LIDS"))) lids = (unsigned)atoi(e);
     if ((e = getenv("NW_BUDGET"))) budget = (unsigned)atoi(e);
     if ((e = getenv("NW_WINDOW"))) window_s = (unsigned)atoi(e);
+    if ((e = getenv("NW_KIND"))) kind = (unsigned)atoi(e);
 
     /* nw-spawn blocks every signal before its first fork, and a signal mask
      * survives both fork and exec -- so without this the supervisor and every
@@ -174,7 +175,11 @@ int main(int argc, char **argv)
         if (waitpid(p, &st, 0) < 0) die("wait house");
         child = 0;
 
-        if (WIFEXITED(st) && WEXITSTATUS(st) == 0)
+        /* Only a oneshot is finished by a clean exit. For a longrun, exit 0
+         * is as unexpected as any other exit and goes to the budget: a
+         * compositor that quits or a daemon that reloads itself should come
+         * back, not vanish silently. (D12) */
+        if (kind == NW_KIND_ONESHOT && WIFEXITED(st) && WEXITSTATUS(st) == 0)
             _exit(0);
 
         long long t = now_ms();

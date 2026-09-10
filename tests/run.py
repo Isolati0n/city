@@ -90,7 +90,8 @@ def test_bad_crc():
 
 def test_baker_rejects():
     city = f"{STAGE}/bad-city.txt"
-    open(city, "w").write("house a /bin/true\nhouse a /bin/true\n")
+    open(city, "w").write("house a /bin/true kind=oneshot\n"
+                          "house a /bin/true kind=oneshot\n")
     p = run(["python3", CC, "--city", city, "--out", f"{STAGE}/nope.blob"])
     expect(p.returncode != 0, "duplicate name should fail bake")
     expect("duplicate name" in (p.out + p.err), f"reason\n{p.out}{p.err}")
@@ -120,6 +121,53 @@ def test_difftest():
     print("ok difftest")
 
 
+def test_kind_required():
+    """kind= is explicit or it is a bake error. No default, no inference --
+    a silent default is the failure mode this project keeps designing out."""
+    city = f"{STAGE}/nokind.city"
+    open(city, "w").write("house a /bin/true lids=none\n")
+    p = run(["python3", CC, "--city", city, "--out", f"{STAGE}/nope.blob"])
+    expect(p.returncode != 0, "missing kind should fail the bake")
+    expect("kind= is required" in (p.out + p.err), f"reason\n{p.out}{p.err}")
+    open(city, "w").write("house a /bin/true kind=daemon lids=none\n")
+    p = run(["python3", CC, "--city", city, "--out", f"{STAGE}/nope.blob"])
+    expect(p.returncode != 0, "bad kind should fail the bake")
+    expect("must be oneshot or longrun" in (p.out + p.err), f"reason\n{p.out}{p.err}")
+    print("ok kind-required")
+
+
+def test_kind_exit0():
+    """D12: exit 0 no longer means do-not-restart on its own. A longrun that
+    exits 0 is restarted within budget; a oneshot that exits 0 is done. Same
+    binary, same exit code, opposite handling -- decided by the plan."""
+    probe = f"{STAGE}/unit-probe"
+    long_city = f"{STAGE}/longrun.city"
+    open(long_city, "w").write(
+        f"house quitter /bin/true kind=longrun budget=2 window=9 lids=none\n"
+        f"house idle {probe} kind=oneshot lids=none\n"
+    )
+    blob = f"{STAGE}/longrun.blob"
+    b = run(["python3", CC, "--city", long_city, "--out", blob])
+    expect(b.returncode == 0, f"bake\n{b.out}{b.err}")
+    rc, out = boot(plan=blob, hold=1200)
+    expect(rc == 0, f"city should survive, rc={rc}\n{out}")
+    expect("HALT" not in out, f"nothing may halt the city\n{out}")
+    expect("restart quitter" in out, f"longrun exit 0 must restart\n{out}")
+
+    one_city = f"{STAGE}/oneshot.city"
+    open(one_city, "w").write(
+        f"house quitter /bin/true kind=oneshot budget=2 window=9 lids=none\n"
+        f"house idle {probe} kind=oneshot lids=none\n"
+    )
+    blob2 = f"{STAGE}/oneshot.blob"
+    b = run(["python3", CC, "--city", one_city, "--out", blob2])
+    expect(b.returncode == 0, f"bake\n{b.out}{b.err}")
+    rc, out2 = boot(plan=blob2, hold=1200)
+    expect(rc == 0, f"city should survive, rc={rc}\n{out2}")
+    expect("restart quitter" not in out2, f"oneshot exit 0 must not restart\n{out2}")
+    print("ok kind-exit0")
+
+
 def test_term_signal():
     """D11: nw-spawn blocks all signals before forking and the mask survives
     fork+exec, so houses used to start fully masked and TERM handlers never
@@ -127,7 +175,7 @@ def test_term_signal():
     process is gone proves nothing, since SIGKILL would do that too."""
     term = f"{STAGE}/unit-term"
     city = f"{STAGE}/term.city"
-    open(city, "w").write(f"house term {term} lids=none\n")
+    open(city, "w").write(f"house term {term} kind=oneshot lids=none\n")
     blob = f"{STAGE}/term.blob"
     b = run(["python3", CC, "--city", city, "--out", blob])
     expect(b.returncode == 0, f"bake\n{b.out}{b.err}")
@@ -147,8 +195,8 @@ def test_crash_does_not_halt():
     probe = f"{STAGE}/unit-probe"
     city = f"{STAGE}/crash.city"
     open(city, "w").write(
-        f"house boom {boom} budget=2 window=9 lids=none\n"
-        f"house idle {probe} lids=none\n"
+        f"house boom {boom} kind=longrun budget=2 window=9 lids=none\n"
+        f"house idle {probe} kind=oneshot lids=none\n"
     )
     blob = f"{STAGE}/crash.blob"
     b = run(["python3", CC, "--city", city, "--out", blob])
@@ -163,7 +211,7 @@ def test_crash_does_not_halt():
 def test_seccomp_kills():
     bad = f"{STAGE}/unit-badcall"
     city = f"{STAGE}/sec.city"
-    open(city, "w").write(f"house bad {bad} lids=seccomp\n")
+    open(city, "w").write(f"house bad {bad} kind=oneshot lids=seccomp\n")
     blob = f"{STAGE}/sec.blob"
     b = run(["python3", CC, "--city", city, "--out", blob])
     expect(b.returncode == 0, b.err)
@@ -195,6 +243,8 @@ def main():
     test_bad_crc()
     test_crash_does_not_halt()
     test_term_signal()
+    test_kind_required()
+    test_kind_exit0()
     test_seccomp_kills()
     print("ALL TESTS PASSED")
 

@@ -13,12 +13,13 @@ static const char *errs[] = {
     "duplicate name",
     "exec_path",
     "reserved byte nonzero",
-    "lids"
+    "lids",
+    "kind"
 };
 
 const char *nw_errstr(int e)
 {
-    if (e < 0 || e > NW_E_LIDS) return "unknown";
+    if (e < 0 || e > NW_E_KIND) return "unknown";
     return errs[e];
 }
 
@@ -117,11 +118,11 @@ int nw_check(const void *blob, uint32_t len)
     for (uint32_t i = 0; i < h->n_units; i++) {
         if (!name_ok(u[i].name, NW_NAME_LEN)) return NW_E_NAME;
         if (!path_ok(u[i].exec_path)) return NW_E_PATH;
-        /* Reserved bytes must be zero. An unvalidated spare byte cannot be
-         * given meaning later: an old blob carrying garbage would be accepted
-         * by a new checker that reads it. _rsv0 held 'critical' until it was
-         * removed on 2026-09-10. */
-        if (u[i]._rsv0 != 0) return NW_E_RSV;
+        if (u[i].kind != NW_KIND_ONESHOT && u[i].kind != NW_KIND_LONGRUN)
+            return NW_E_KIND;
+        /* The remaining spare byte must be zero. An unvalidated spare cannot
+         * be given meaning later: an old blob carrying garbage would be
+         * accepted by a new checker that reads it. */
         if (u[i]._pad != 0) return NW_E_RSV;
         if (u[i].lids & ~(uint8_t)(NW_LID_SECCOMP | NW_LID_LANDLOCK
                                    | NW_LID_NEWNS | NW_LID_NEWNET))

@@ -1228,3 +1228,101 @@ This matters beyond itself: a reserved exit code meaning *do not restart* is
 under consideration for the storage work (`docs/options/05`, Q4), and there is
 already a reserved exit code in the code with the **opposite** meaning. Whatever
 is chosen there has to account for 0 already being taken.
+
+---
+
+## 20. D12 — `kind`, and freeing exit 0 — 2026-09-10
+
+### Why
+
+`nwsup.c` tested `WIFEXITED && WEXITSTATUS == 0` before any budget logic and
+`_exit(0)`d, so **exit 0 already meant "do not restart me"**. Correct for a
+oneshot. For a long-running house that quits cleanly — a compositor exiting, a
+daemon reloading itself — it meant the house stayed dead and nothing said why.
+
+That collided with the storage work. A reserved exit code meaning *do not
+restart, something is wrong* is under consideration (`docs/options/05`, Q4),
+and there was already a reserved exit code in the tree meaning *do not
+restart, this was fine*. **One channel carrying two opposite meanings,
+separated only by which integer, is the shape of bug 9.** It had to be
+resolved before the storage answer, not after, because the storage answer
+depends on the fault channel being unambiguous.
+
+### What was done
+
+`_rsv0` — the byte freed by removing `critical` in §19 — becomes `kind`.
+**`struct nw_unit` stays 166 bytes**; no format churn, and the byte earns its
+keep twice in one day.
+
+Two kinds, no third, no default:
+
+- `NW_KIND_ONESHOT` (0) — exit 0 completes the house; it is never restarted.
+  A nonzero exit still goes to the budget.
+- `NW_KIND_LONGRUN` (1) — **any** exit is unexpected, including 0, and goes to
+  the budget like anything else.
+
+The whole behavioural change in `nwsup.c` is one conjunct:
+
+```c
+if (kind == NW_KIND_ONESHOT && WIFEXITED(st) && WEXITSTATUS(st) == 0)
+    _exit(0);
+```
+
+Exit 0 now means whatever the plan says it means, and the fault code is free
+to mean exactly one thing.
+
+### Explicit, or it is a bake error
+
+`kind=` has **no default and no inference rule.** A city file that omits it
+fails the bake with a message naming both options:
+
+```
+house a: kind= is required and has no default. Use kind=oneshot (exit 0
+completes, never restarted) or kind=longrun (any exit is unexpected,
+including 0).
+```
+
+and a bad value fails too:
+
+```
+kind=daemon: must be oneshot or longrun
+```
+
+This is deliberate and worth defending, because "default to longrun" was the
+obvious shortcut. A silent default is the failure mode this project keeps
+designing out, and it would be a particularly bad one here: the wrong default
+turns a completed oneshot into a restart loop, or a crashed daemon into a
+house that quietly stays dead. Both are silent. Neither crashes.
+
+`nwcheck.c` rejects any other byte value with `NW_E_KIND` — verified by
+crafting a blob with `kind = 2` and re-CRCing:
+
+```
+kind = 2      REJECT kind (10)                   rc=1
+_pad  = 0xAB  REJECT reserved byte nonzero (8)   rc=1
+unmodified    OK units=4 crc=0x0ded2eb1          rc=0
+```
+
+The spare byte guard from §19 is unaffected: `_pad` is still the one reserved
+byte and is still validated.
+
+### Tests
+
+Two added, bringing the suite to **14**:
+
+- `kind-required` — a missing `kind=` and a bad `kind=` both fail the bake,
+  each for the stated reason rather than incidentally.
+- `kind-exit0` — the same binary (`/bin/true`, which exits 0 immediately) under
+  both kinds: as `longrun` with `budget=2` it is restarted and the log shows
+  `restart quitter`; as `oneshot` it completes and there is no restart. Same
+  exit code, opposite handling, decided by the plan. The city survives both
+  and never HALTs.
+
+### Specs
+
+`plan.als` gains `kind: one Kind` with `abstract sig Kind` and
+`one sig Oneshot, Longrun`, matching how `Lid` is modelled. `Plan.tla` gains
+`kind \in [1..n -> {0, 1}]` in `TypeOK`, occupying the slot `crit` vacated.
+
+The fd budget is untouched and all four places still agree:
+`reserved + 2 × units`, ceiling 1024.

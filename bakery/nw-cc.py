@@ -15,6 +15,8 @@ import zlib
 
 NAME_LEN, PATH_LEN = 32, 128
 MAX_UNITS, FD_RESERVED, MAX_FDS = 64, 8, 1024
+KIND_ONESHOT, KIND_LONGRUN = 0, 1
+KINDS = {"oneshot": KIND_ONESHOT, "longrun": KIND_LONGRUN}
 LID_SECCOMP, LID_LANDLOCK, LID_NEWNS, LID_NEWNET = 1, 2, 4, 8
 KNOWN_LIDS = LID_SECCOMP | LID_LANDLOCK | LID_NEWNS | LID_NEWNET
 
@@ -36,7 +38,9 @@ def check(houses):
     need = FD_RESERVED + len(houses) * 2
     if need > MAX_FDS:
         raise SystemExit("fd budget")
-    for name, path, budget, window, lids in houses:
+    for name, path, kind, budget, window, lids in houses:
+        if kind not in (KIND_ONESHOT, KIND_LONGRUN):
+            raise SystemExit("kind")
         if lids & ~KNOWN_LIDS:
             raise SystemExit("lids")
         if not path.startswith("/"):
@@ -49,11 +53,11 @@ def check(houses):
 def bake(path, houses):
     idx = check(houses)
     unit = b""
-    for name, exe, budget, window, lids in houses:
+    for name, exe, kind, budget, window, lids in houses:
         unit += pad(name, NAME_LEN) + pad(exe, PATH_LEN)
-        # _rsv0 (was "critical", removed 2026-09-10) and _pad both zero;
-        # nwcheck.c rejects either being nonzero.
-        unit += struct.pack("<BBHBB", 0, budget, window, lids, 0)
+        # kind (the byte that was "critical" until 2026-09-10), then _pad,
+        # which must stay zero -- nwcheck.c rejects a nonzero spare.
+        unit += struct.pack("<BBHBB", kind, budget, window, lids, 0)
     prefix = b"NWPLAN03" + struct.pack("<I", len(houses))
     crc = zlib.crc32(prefix + struct.pack("<I", 0) + unit) & 0xFFFFFFFF
     blob = prefix + struct.pack("<I", crc) + unit
@@ -66,10 +70,10 @@ def bake(path, houses):
 
 def default_city(probe: str, lids: int):
     return [
-        ("alpha", probe, 3, 2, lids),
-        ("beta", probe, 3, 2, lids),
-        ("gamma", probe, 3, 2, lids),
-        ("delta", probe, 1, 2, lids),
+        ("alpha", probe, KIND_ONESHOT, 3, 2, lids),
+        ("beta", probe, KIND_ONESHOT, 3, 2, lids),
+        ("gamma", probe, KIND_ONESHOT, 3, 2, lids),
+        ("delta", probe, KIND_ONESHOT, 1, 2, lids),
     ]
 
 
@@ -94,6 +98,7 @@ def load_city(path: str):
         if parts[0] == "house":
             name, exe = parts[1], parts[2]
             budget, window, lids = 3, 2, 0
+            kind = None
             for kv in parts[3:]:
                 k, _, v = kv.partition("=")
                 if k == "critical":
@@ -106,7 +111,17 @@ def load_city(path: str):
                     window = int(v)
                 elif k == "lids":
                     lids = parse_lids(v)
-            houses.append((name, os.path.abspath(exe), budget, window, lids))
+                elif k == "kind":
+                    if v not in KINDS:
+                        raise SystemExit(
+                            f"kind={v}: must be oneshot or longrun")
+                    kind = KINDS[v]
+            if kind is None:
+                raise SystemExit(
+                    f"house {name}: kind= is required and has no default. "
+                    "Use kind=oneshot (exit 0 completes, never restarted) or "
+                    "kind=longrun (any exit is unexpected, including 0).")
+            houses.append((name, os.path.abspath(exe), kind, budget, window, lids))
         else:
             raise SystemExit(f"bad city line: {line}")
     return houses

@@ -2,9 +2,14 @@
    Assertions the baker and nw-check must agree on. */
 
 sig House {
+  kind: one Kind,
   budget: one Int,
   lids: set Lid
 }
+
+/* Explicit in the plan: no default, no inference. */
+abstract sig Kind {}
+one sig Oneshot, Longrun extends Kind {}
 
 abstract sig Lid {}
 one sig Seccomp, Landlock, NewNS, NewNet extends Lid {}
