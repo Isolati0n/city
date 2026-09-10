@@ -2,7 +2,7 @@
 #   PID 1, nw-spawn, nw-check, rescue = C
 #   nw-sup = nwsup.c + lids.c
 #   baker = Python, offline
-# artifacts/ is noexec. `make test` stages to /tmp/nw-init-run.
+# `make test` stages to /tmp/nw-init-run.
 
 CC = gcc
 CFLAGS = -Wall -Wextra -O2 -g -std=gnu11

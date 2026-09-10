@@ -910,7 +910,8 @@ Owed from the section 16 discussion, and the answer is two-part.
 is a new slot, never an in-place rewrite" is an operational rule about how the
 system is changed. Changing a lid, adding a unit, or altering a budget still
 requires a bake, a slot, and a reboot. Nothing about that depended on edges. It
-is retained as invariant 8 in `CLAUDE.md`.
+is retained in `CLAUDE.md` as invariant 8, renumbered to 7 later the same
+day when the old invariant 7 left the enforced list.
 
 **Its formal content, always thin, is now nil — so the predicate was
 withdrawn.** `NoLiveRewrite` was `UNCHANGED <<n, e, crit, lids>>`, and it was
