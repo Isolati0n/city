@@ -193,9 +193,6 @@ int main(int argc, char **argv)
     if ((e = getenv("NW_BUDGET"))) budget = (unsigned)atoi(e);
     if ((e = getenv("NW_WINDOW"))) window_s = (unsigned)atoi(e);
     if ((e = getenv("NW_KIND"))) kind = (unsigned)atoi(e);
-    unsigned profile = NW_PROF_STRICT;
-    if ((e = getenv("NW_PROFILE"))) profile = (unsigned)atoi(e);
-
     const char *brick = getenv("NW_BRICK");
     if (brick && !brick[0]) brick = NULL;
     char *binds[NW_MAX_BINDS];
@@ -244,7 +241,7 @@ int main(int argc, char **argv)
             if (brick) lid_brick(brick, binds, nbinds);
             if (lids & NW_LID_LANDLOCK) lid_landlock(path);
             if (lids & NW_LID_SECCOMP) {
-                if (nw_apply_house_seccomp(profile) < 0) die("house seccomp");
+                if (nw_apply_house_seccomp() < 0) die("house seccomp");
                 say("lid seccomp");
             }
             char *av[] = { (char *)name, NULL };

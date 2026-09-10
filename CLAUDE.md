@@ -30,7 +30,8 @@ sections after this one and are deliberately not numbered here.
 
 1. **No allocation, no parsing, no recursion after start in PID 1.** The blob
    is already validated; PID 1 reads a table, it does not interpret text.
-   **PID 1 mounts nothing** — `grep` for `mount` in `pid1.c` returns zero.
+   **PID 1 mounts nothing** — `grep` for `mount` in `pid1.c` returns one hit
+   and it is a comment; there is no `mount(2)` call.
    `dawn` mounts and hands PID 1 a path; nothing in the TCB below `dawn`
    learns what a filesystem is. The one text PID 1 reads is
    `<slots>/current`, at boot, bounded to `NW_NAME_LEN` and validated to
@@ -51,11 +52,18 @@ sections after this one and are deliberately not numbered here.
    for. Spawning is boot-time only: PID 1 has no respawn path and restart
    budgets live in `nw-sup`. Do not give the spawner a mid-life.
 
-   The budget belongs to `nw-sup` and obeys two rules there: it is a **ring of
-   timestamps, never a counter**, because there is nothing to overflow; and
-   budgets are **never nested** — bug 3 was a supervisor giving up, PID 1
-   restarting it with a fresh budget, and the pair looping. One budget
-   authority per unit.
+   The budget belongs to `nw-sup`, where it is **a counter over a sliding
+   window** — `int deaths` in `nwsup.c`, reset when the window expires, so it
+   never accumulates unboundedly. Budgets are **never nested**: bug 3 was a
+   supervisor giving up, PID 1 restarting it with a fresh budget, and the pair
+   looping. One budget authority per unit, and PID 1 is not it.
+
+   *This said "a ring of timestamps, never a counter" until 2026-09-10, in the
+   present tense, as an enforced invariant. `grep` for `ring` across the C
+   sources returns nothing and never did: the ring was specified in
+   `HISTORY.md` §6 and never built. The sliding-window counter has no overflow
+   either, so the property was fine and only the description was false — which
+   is exactly the failure this file names at the end.*
 5. **The init provisions nothing.** Every house gets `/dev/null` on 0 and its
    own log pipe on 1 and 2. `close_others` sweeps the rest. There is no third
    thing, and no mechanism for granting one. (This replaces the pre-2026-09-10
@@ -78,9 +86,10 @@ sections after this one and are deliberately not numbered here.
    containerization applies to apps.
 
    Order is fixed and is not a style choice: namespaces, then the brick pivot,
-   then Landlock, then seccomp. The strict allow-list has no `mount`, no
-   `unshare` and no `pivot_root`, so a house sealed first could not enter its
-   own root.
+   then Landlock, then seccomp. The allow-list has no `mount`, no `unshare`
+   and no `pivot_root`, so a house sealed first could not enter its own root.
+   There is **one** allow-list and a house does not choose it; the second
+   profile that briefly existed is `HISTORY.md` §23.
 
    The honest consequence, recorded because it is load-bearing: **reachability
    has moved out of the sealed plan and into the lid set.** A `lids=none` house
@@ -126,7 +135,8 @@ rediscover them.
 - **Authoritative state never auto-restarts on an integrity fault.** Inherited
   from `HISTORY.md` §11 and still correct. It has no subject today: there is
   no persistent state anywhere in the design, and no integrity-fault channel —
-  `grep` for `integrity` or `authoritative` across the tree returns nothing,
+  `grep` for `integrity` or `authoritative` across the **C sources** returns
+  nothing (it appears in prose, which is why the scope matters),
   and `nw-sup` handles every nonzero exit identically. Both prerequisites are
   what `docs/options/05` Q4 exists to answer. **This becomes enforceable the
   moment storage lands**, and it belongs back in the numbered list on that
@@ -138,7 +148,7 @@ rediscover them.
 ```
 make            # all binaries
 make stage      # stages to /tmp/nw-init-run
-make test       # stage + nw-check on the blob + python3 tests/run.py
+make test       # stage + install-agents.sh --check + nw-check + tests/run.py
 ```
 
 `tests/run.py` boots via `unshare --pid --fork --mount-proc` so `nw-root` is
@@ -149,9 +159,9 @@ genuine PID 1 and orphan reaping is actually exercised.
 `sh install-agents.sh --list` prints this table; it is repeated here because
 this file is always loaded and the briefs are not.
 
-The set is **three territories, four reviewers, two specialists**, and the
-shape is deliberate. It was nine file-owners until 2026-09-10, one per source
-file, and the repository shows why that was wrong: every plan-format change in
+The set is **territories, reviewers and specialists**, and the shape is
+deliberate. It was one agent per source file until 2026-09-10, and the
+repository shows why that was wrong: every plan-format change in
 its history touched `blob.h`, `nwcheck.c`, `bakery/nw-cc.py`, `plan.als` and
 `Plan.tla` in a single commit — invariant 3 *requires* that — so a per-file
 agent owned a fraction of every change it would ever be asked to make. D11 is
@@ -213,9 +223,73 @@ Two habits follow from this:
   Move it to kind 2 or kind 3 with the reasoning intact. A rule deleted is a
   rule someone re-derives badly later.
 
+## The characteristic failure
+
+**This project does not produce crashes. It produces a true-looking sentence
+sitting next to code that does not do what it says.** Every defect found here
+so far has that shape, and knowing the shape is most of the defence.
+
+The record, which is the argument:
+
+- **Bugs 4, 9 and 13** were silent wrong routing. Not one returned an error.
+  Descriptors went to the wrong place and every process reported success.
+- **D11** was a TERM handler that could never fire, installed on a blocked
+  signal, sitting beside a comment saying the supervisor handled TERM. The
+  city shut down "gracefully" by timing out into SIGKILL.
+- **`supervisor.md`** specified a liveness rule in the present tense. Nothing
+  in the tree had ever implemented it.
+- **`baker.md`** claimed typing, ordering, cycle detection and capability-flow
+  analysis. None had ever existed, and after §17 none were even definable.
+- **`lids.c`** stated as fact that its build profile carried "what a compiler
+  and a build driver need" and that "without them any compiler dies
+  instantly". It killed `gcc` on the first `exec`. `HISTORY.md` §23.
+- **Invariant 4 in this file** said the restart budget was a ring of
+  timestamps, never a counter. It is a counter. `grep` for `ring` across the C
+  sources has always returned nothing.
+- **`path_ok_len`** validated a path that could contain `..`, under a comment
+  and an invariant both asserting that a house cannot see outside its brick.
+  A traversing brick baked clean, passed `nw-check`, booted, and logged
+  `lid brick` while rooted on the machine.
+
+Notice what is common. In every case the code was memory-safe, the tests were
+green, and the prose was confident. Nothing was reviewing the *relationship*
+between the sentence and the behaviour, because reading them together is
+exactly the thing that feels like it has already been done.
+
+**So: a sentence describing behaviour is worth nothing without a test that
+fails when the behaviour is removed.**
+
+That is the whole rule, and it applies to comments, to briefs, to this file,
+and to commit messages. Write the sentence if it helps a reader — but the
+sentence is not the evidence. The test that fails without the mechanism is the
+evidence, and until it exists, the behaviour is a hypothesis however carefully
+it is worded.
+
+The discipline already exists here and should be named as such: the negative
+controls. `brick-is-a-root` was believed only after removing `lid_brick()`
+made it fail, *and* after keeping the log line while skipping the
+`pivot_root` syscall made it fail too — the second control is the one that
+matters, because the first would pass against a supervisor that announced the
+lid and did nothing. `path-traversal-refused` was believed only after deleting
+the component check made it fail. Do that every time. A test that has never
+been seen failing is a test that has never been tested.
+
+Two corollaries worth stating, because both have been got wrong:
+
+- **A control that passes is not good news.** It means the test is bad, or the
+  control is. The first control on `brick-is-a-root` passed because the suite
+  runs staged binaries and `make` alone had not restaged — the harness was
+  lying, and the reading "it works" was available and wrong.
+- **Green does not mean covered.** A test can pin the conjunction of two
+  guards while pinning neither. `fds_ge3=0` inside a brick stays green if
+  `O_CLOEXEC` is dropped and stays green if the `close()` calls are dropped;
+  only removing both fails it. Ask what single change would still leave it
+  passing.
+
 ## The rule that matters most
 
 Every bug found in this codebase so far was found by running, and none by
-reading. Do not report a change as working until it has been built and run. Prefer designing
-the problem out over checking for it: no ordering list to get wrong, no counter
-to overflow, no second limit to drift, no channel to impersonate.
+reading. Do not report a change as working until it has been built and run.
+Prefer designing the problem out over checking for it: no ordering list to get
+wrong, no counter to overflow, no second limit to drift, no channel to
+impersonate, no path for a filesystem to reinterpret.

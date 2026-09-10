@@ -6,7 +6,6 @@ sig House {
   budget: one Int,
   lids: set Lid,
   brick: lone Brick,
-  profile: one Profile,
   binds: set Path
 }
 
@@ -23,10 +22,9 @@ one sig Oneshot, Longrun extends Kind {}
 abstract sig Lid {}
 one sig Seccomp, Landlock, NewNS, NewNet extends Lid {}
 
-/* Which seccomp allow-list the house wears. Build is Strict plus what a
-   toolchain needs; it is a superset in lids.c so the two cannot drift. */
-abstract sig Profile {}
-one sig Strict, Build extends Profile {}
+/* There is one seccomp filter and a house does not choose it. A Profile sig
+   existed on 2026-09-10 and went with NW_PROF_BUILD the same day --
+   HISTORY.md section 23. */
 
 /* Pivoting into a brick without a private mount namespace would repoint the
    machine's root, so nw-check rejects it (NW_E_BRICKNS) and the baker
@@ -36,10 +34,6 @@ fact brickNeedsNewNS { all h: House | some h.brick => NewNS in h.lids }
 /* A bind is a path made visible inside a root. Without a brick there is no
    root to bind into (NW_E_BINDIDX). */
 fact bindsNeedBrick { all h: House | some h.binds => some h.brick }
-
-/* A profile without the lid that applies it is a filter nobody wears
-   (NW_E_PROFILE). */
-fact buildNeedsSeccomp { all h: House | h.profile = Build => Seccomp in h.lids }
 
 fact namesAreHouses { #House >= 1 }
 

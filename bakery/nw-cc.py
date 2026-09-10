@@ -17,8 +17,6 @@ NAME_LEN, PATH_LEN, BRICK_LEN = 32, 128, 96
 MAX_UNITS, MAX_BINDS, FD_RESERVED, MAX_FDS = 64, 128, 8, 1024
 KIND_ONESHOT, KIND_LONGRUN = 0, 1
 KINDS = {"oneshot": KIND_ONESHOT, "longrun": KIND_LONGRUN}
-PROF_STRICT, PROF_BUILD = 0, 1
-PROFILES = {"strict": PROF_STRICT, "build": PROF_BUILD}
 LID_SECCOMP, LID_LANDLOCK, LID_NEWNS, LID_NEWNET = 1, 2, 4, 8
 KNOWN_LIDS = LID_SECCOMP | LID_LANDLOCK | LID_NEWNS | LID_NEWNET
 LID_NAMES = {
@@ -32,6 +30,13 @@ def pad(s: str, n: int) -> bytes:
     if len(b) >= n:
         raise SystemExit(f"too long: {s}")
     return b + b"\x00" * (n - len(b))
+
+
+def path_clean(p: str) -> bool:
+    """Absolute, with no '..' component. Same rule as path_ok_len in
+    nwcheck.c, which enforces it independently -- the baker is not in the
+    TCB. Closes traversal only; a symlink escapes it. See docs/options/07."""
+    return p.startswith("/") and ".." not in p.split("/")
 
 
 def check(houses, binds):
@@ -49,23 +54,20 @@ def check(houses, binds):
     for h in houses:
         if h["kind"] not in (KIND_ONESHOT, KIND_LONGRUN):
             raise SystemExit("kind")
-        if h["profile"] not in (PROF_STRICT, PROF_BUILD):
-            raise SystemExit("profile")
         if h["lids"] & ~KNOWN_LIDS:
             raise SystemExit("lids")
-        if not h["exec"].startswith("/"):
-            raise SystemExit("exec_path")
+        if not path_clean(h["exec"]):
+            raise SystemExit(
+                f"house {h['name']}: exec path must be absolute with no '..' "
+                "component")
         if not h["name"] or not h["name"].replace("-", "x").replace("_", "x").isalnum():
             raise SystemExit("name")
-        # A profile the house will not actually wear is a silent wrong
-        # answer: without the seccomp lid no filter is applied at all.
-        if h["profile"] == PROF_BUILD and not (h["lids"] & LID_SECCOMP):
-            raise SystemExit(
-                f"house {h['name']}: profile=build needs lids=...,seccomp; "
-                "a profile without the lid applies no filter at all")
         if h["brick"]:
-            if not h["brick"].startswith("/"):
-                raise SystemExit(f"house {h['name']}: brick= must be absolute")
+            if not path_clean(h["brick"]):
+                raise SystemExit(
+                    f"house {h['name']}: brick= must be absolute with no '..' "
+                    "component; a brick that traverses out is a house rooted "
+                    "on the machine")
             if len(h["brick"].encode("ascii")) >= BRICK_LEN:
                 raise SystemExit(f"house {h['name']}: brick= too long")
             # A house cannot pivot into its own root without a private mount
@@ -81,8 +83,9 @@ def check(houses, binds):
                 f"house {h['name']}: bind= without brick=; there is no root "
                 "to bind into")
     for unit, path in binds:
-        if not path.startswith("/"):
-            raise SystemExit("bind path must be absolute")
+        if not path_clean(path):
+            raise SystemExit(
+                f"bind path must be absolute with no '..' component: {path}")
         if len(path.encode("ascii")) >= PATH_LEN:
             raise SystemExit(f"bind path too long: {path}")
     return idx
@@ -95,15 +98,14 @@ def bake(path, houses):
     for h in houses:
         unit += pad(h["name"], NAME_LEN) + pad(h["exec"], PATH_LEN)
         unit += pad(h["brick"], BRICK_LEN)
-        # kind (the byte that was "critical" until 2026-09-10), then profile
-        # (the byte that was spare until 2026-09-10), then _pad, which must
-        # stay zero -- nwcheck.c rejects a nonzero spare.
-        unit += struct.pack("<BBHBBB", h["kind"], h["budget"], h["window"],
-                            h["lids"], h["profile"], 0)
+        # kind (the byte that was "critical" until 2026-09-10), then _pad,
+        # which must stay zero -- nwcheck.c rejects a nonzero spare.
+        unit += struct.pack("<BBHBB", h["kind"], h["budget"], h["window"],
+                            h["lids"], 0)
     table = b""
     for u, p in binds:
         table += struct.pack("<H", u) + pad(p, PATH_LEN)
-    prefix = b"NWPLAN04" + struct.pack("<II", len(houses), len(binds))
+    prefix = b"NWPLAN05" + struct.pack("<II", len(houses), len(binds))
     crc = zlib.crc32(prefix + struct.pack("<I", 0) + unit + table) & 0xFFFFFFFF
     blob = prefix + struct.pack("<I", crc) + unit + table
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
@@ -114,11 +116,10 @@ def bake(path, houses):
           f"crc=0x{crc:08x} bytes={len(blob)} sha256={digest}")
 
 
-def house(name, exe, kind, budget, window, lids,
-          brick="", profile=PROF_STRICT, binds=()):
+def house(name, exe, kind, budget, window, lids, brick="", binds=()):
     return {"name": name, "exec": exe, "kind": kind, "budget": budget,
             "window": window, "lids": lids, "brick": brick,
-            "profile": profile, "binds": list(binds)}
+            "binds": list(binds)}
 
 
 def default_city(probe: str, lids: int):
@@ -152,7 +153,7 @@ def load_city(path: str):
             name, exe = parts[1], parts[2]
             budget, window, lids = 3, 2, 0
             kind = None
-            brick, profile, binds = "", PROF_STRICT, []
+            brick, binds = "", []
             for kv in parts[3:]:
                 k, _, v = kv.partition("=")
                 if k == "critical":
@@ -169,11 +170,6 @@ def load_city(path: str):
                     brick = v
                 elif k == "bind":
                     binds.append(v)
-                elif k == "profile":
-                    if v not in PROFILES:
-                        raise SystemExit(
-                            f"profile={v}: must be strict or build")
-                    profile = PROFILES[v]
                 elif k == "kind":
                     if v not in KINDS:
                         raise SystemExit(
@@ -196,7 +192,7 @@ def load_city(path: str):
                     f"house {name}: exec path must be absolute inside the "
                     "brick")
             houses.append(house(name, exe, kind, budget, window, lids,
-                                brick, profile, binds))
+                                brick, binds))
         else:
             raise SystemExit(f"bad city line: {line}")
     return houses

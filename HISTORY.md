@@ -1592,3 +1592,115 @@ No cgroups, no `promote`, no storage. `/sys/fs/cgroup` is still mounted by
 is content-addressed by whoever builds it; **there is no brick builder in this
 tree** — the test computes a hash over the tree it just assembled, which is
 enough to prove the runtime treats the path as opaque and is not a store.
+
+## 23. `NW_PROF_BUILD` removed — 2026-09-10
+
+Written and removed the same day. The profile let a unit declare
+`profile=build` and wear a wider seccomp allow-list: `build_extra[]` in
+`lids.c`, forty syscall numbers, assembled as STRICT plus the extras so the
+two could not drift.
+
+**It killed compilers.** Under the shipped BUILD filter:
+
+```
+$ buildprof gcc -O0 -o hello hello.c
+Bad system call        rc=159        (128 + 31 = SIGSYS)
+$ ls hello
+ls: cannot access 'hello': No such file or directory
+$ buildprof /bin/true
+rc=0
+```
+
+The mechanism was fine — `/bin/true` runs, a bare fork/exec/wait works under
+BUILD and is correctly killed under STRICT. The **table** was wrong: `vfork`,
+`getrusage`, `ioctl`, `readlink`, `unlink` and `chmod` are used by gcc and
+appear in neither list. `make` needs `ioctl` on its own.
+
+### Why it was removed rather than repaired
+
+Three bad things were stacked, and the third is the one that decided it.
+
+1. `lids.c` asserted, in the present tense, that these were "what a compiler
+   and a build driver need" and that "without them any compiler dies
+   instantly, which is the whole reason a second profile exists". Written from
+   a table of plausible syscalls. Nothing had ever been run under it.
+2. The only test mentioning `profile=build` was a **bake-refusal** test — it
+   asserted the baker rejects `profile=build` without the seccomp lid. It
+   would have passed unchanged if `build_extra[]` had been deleted entirely.
+   That is a test of the checker wearing the appearance of a test of the
+   filter.
+3. All of it was in the TCB.
+
+Nothing in the tree used `profile=build`. An untested TCB table that claims to
+run compilers is worse than no table: absent, someone writes one and tests it;
+present, someone reads the comment and believes it.
+
+So the profile, the array, the `profile` byte in `struct nw_unit`, the
+checker's acceptance of it, `NW_E_PROFILE`, the `Profile` sig in `plan.als`,
+the `profile` variable in `Plan.tla` and the bake-refusal test are all gone.
+Format is `NWPLAN05`. The unit shrinks 263 → 262 bytes,
+verified on both sides (`struct.calcsize` and a compiled `sizeof` probe both
+report 262 / 130 / 20).
+
+**This is not a judgement that a build profile is wrong.** The toolchain house
+will need one. The judgement is about how it was arrived at. When it comes
+back it comes back **test-first** — a test that actually compiles something
+under the profile, or it does not land. Note also what the review found on the
+way past: `build_extra[]` granted `__NR_mount` and `__NR_unshare` with no
+corresponding `⇒ NEWNS` rule, so a `profile=build` house could mount over the
+brick store in the city's shared mount namespace. A rebuilt profile needs that
+fourth cross-field rule from the start.
+
+Found by `tcb-review`, the day after the reviewer agents were written, on code
+that had already been hand-reviewed, negative-controlled, committed and
+pushed.
+
+## 24. `..` in a plan path — 2026-09-10
+
+`path_ok_len` in `nwcheck.c` checked a leading `/`, printable bytes, a length
+and trailing NULs. It had no notion of a path *component*. So:
+
+```
+house one /bin/brick kind=oneshot lids=newns,seccomp brick=/nw/bricks/<hash>/../..
+```
+
+baked clean, passed `nw-check`, and booted. The house's `/` was
+`/tmp/nw-init-run/nw` — every brick on the machine and the store — and
+`nw-sup` logged `lid brick` and the city exited 0. Invariant 6 was false and
+every check passed. The bind side was the same: `bind=/etc/../etc` bakes, and
+`nw-sup` forms the target by string concatenation.
+
+`..` is now rejected inside `path_ok_len` itself, which is the single site
+every path in a plan passes through — `exec_path`, `brick` and every bind are
+covered by one check rather than three call sites nobody remembers. The baker
+refuses independently, because the baker is not in the TCB and a blob can
+arrive from anywhere. `test_path_traversal_refused` pins both halves,
+including a blob the baker would never emit: bake a clean one, write `..` into
+the brick field by hand, repair the CRC. Negative control: deleting the
+component check makes it fail with `nw-check accepted a traversing brick`.
+
+### This is a guard, and the limit is the point
+
+**Rejecting `..` closes traversal. It does not close symlinks.** A brick whose
+name resolves through a link escapes exactly as cleanly, and both `mount(2)`
+and `pivot_root(2)` follow links. Nothing in a sealed plan can tell you
+whether `/nw/bricks/<hash>` is a directory or a link to `/`.
+
+The property "this path stays inside the brick" **is not a property of the
+plan**. It is a property of the filesystem at the moment `nw-sup` runs, against
+a tree the validator never saw — possibly on another machine, possibly before
+the tree existed.
+
+That shape is familiar. A descriptor number is an integer whose meaning is
+assigned by a table this process does not control; bugs 5, 9 and 13 were all
+that, and the answer was not a better bounds check but to **stop carrying the
+number**. A path is the same class of value and has not had the same answer
+applied to it.
+
+`docs/options/07` costs the replacement: carry the brick's hash and let
+`nw-sup` build the path, so there is no path to traverse; carry store-ids and
+an enumerated set of bind kinds rather than arbitrary source strings.
+`exec_path` stays a path — it names a binary inside a sealed brick and is
+resolved after the pivot, which is a small surface with an owner, and `..`
+rejection is the right answer there rather than a stopgap. Nothing in that doc
+should be built before the brick builder settles what a brick identity is.

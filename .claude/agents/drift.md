@@ -28,17 +28,21 @@ remembering. You are the version that does not depend on that.
 | name / path / brick lengths | `NW_NAME_LEN`, `NW_PATH_LEN`, `NW_BRICK_LEN` | `NAME_LEN`, `PATH_LEN`, `BRICK_LEN` | — | — |
 
 **Struct layout** — the Python `struct.pack` format against the C structs.
-Check by size, not by reading:
+Check by size, not by reading, and **take the format from the baker rather
+than from this brief**: read the `struct.pack` calls and the `pad()` widths in
+`bake()`, run `struct.calcsize` on what is actually there, and compare against
+`sizeof(struct nw_unit)`, `sizeof(struct nw_bind)` and `sizeof(struct nw_hdr)`
+from a throwaway C file you compile.
 
-```
-python3 -c "import struct; print(struct.calcsize('<32s128s96sBBHBBB'), struct.calcsize('<H128s'), struct.calcsize('<8sIII'))"
-```
+This brief deliberately does not quote the format string. It did until
+2026-09-10, and the string went stale the same day the format changed — a
+brief carrying a copy of the thing it checks is one more place to drift, which
+is the defect you exist to find. If you catch this brief asserting a literal
+that belongs in the code, that is a finding.
 
-against `sizeof(struct nw_unit)`, `sizeof(struct nw_bind)` and
-`sizeof(struct nw_hdr)` — compile a throwaway that prints them. A mismatch
-here surfaces as a *size error from the checker*, which looks like a corrupt
-blob rather than a layout bug, so it will be misdiagnosed if you do not
-catch it.
+A layout mismatch surfaces as a *size error from the checker*, which looks
+like a corrupt blob rather than a layout bug, so it will be misdiagnosed if
+you do not catch it.
 
 **Error codes** — the `NW_E_*` enum in `blob.h` against `errs[]` in
 `nwcheck.c`: same order, same length, and the `nw_errstr` bound naming

@@ -8,7 +8,8 @@ model: inherit
 <!-- nw-init:absent-ok wire_order.py -->
 
 You own the put-together suite and the fixture houses. Not in the TCB — and
-that is exactly why the suite is the largest single file in this project.
+that is exactly why the suite is the largest source file in this project,
+larger than any file in the trusted core.
 Read `houses/` rather than any list of fixtures written down here.
 
 ## Two traps that have already caught someone

@@ -19,13 +19,12 @@ static const char *errs[] = {
     "brick without NEWNS lid",
     "bind count",
     "bind unit index",
-    "bind path",
-    "seccomp profile"
+    "bind path"
 };
 
 const char *nw_errstr(int e)
 {
-    if (e < 0 || e > NW_E_PROFILE) return "unknown";
+    if (e < 0 || e > NW_E_BINDPATH) return "unknown";
     return errs[e];
 }
 
@@ -68,6 +67,23 @@ static int path_ok_len(const char *s, int max)
     if (n < 2 || n >= max) return 0;
     for (int i = n; i < max; i++)
         if (s[i] != 0) return 0;
+    /* No ".." component. A path is a string whose meaning is assigned by a
+     * filesystem this process does not control, and nw-sup hands these
+     * strings straight to mount(2) and open(2) -- so a traversal here is a
+     * house rooted outside its brick, reported as success. Checked at the
+     * one site every path in a plan passes through: exec_path, brick and
+     * every bind.
+     *
+     * This closes traversal and does NOT close symlinks: a brick whose name
+     * resolves through a link escapes just as cleanly, and both mount and
+     * pivot_root follow links. It is a guard, not the fix. The fix is to
+     * stop carrying free-form paths -- docs/options/07. */
+    for (int i = 0; i < n; i++) {
+        if (s[i] != '/') continue;
+        if (s[i + 1] == '.' && s[i + 2] == '.'
+            && (s[i + 3] == '/' || s[i + 3] == 0))
+            return 0;
+    }
     return 1;
 }
 
@@ -89,7 +105,7 @@ int nw_check(const void *blob, uint32_t len)
     const struct nw_hdr *h = nw_hdr(blob);
     if (h->magic[0] != 'N' || h->magic[1] != 'W' || h->magic[2] != 'P'
         || h->magic[3] != 'L' || h->magic[4] != 'A' || h->magic[5] != 'N'
-        || h->magic[6] != '0' || h->magic[7] != '4')
+        || h->magic[6] != '0' || h->magic[7] != '5')
         return NW_E_MAGIC;
     if (h->n_units < 1 || h->n_units > NW_MAX_UNITS) return NW_E_UNITS;
     if (h->n_binds > NW_MAX_BINDS) return NW_E_BINDS;
@@ -129,12 +145,6 @@ int nw_check(const void *blob, uint32_t len)
         if (!path_ok(u[i].exec_path)) return NW_E_PATH;
         if (u[i].kind != NW_KIND_ONESHOT && u[i].kind != NW_KIND_LONGRUN)
             return NW_E_KIND;
-        if (u[i].profile != NW_PROF_STRICT && u[i].profile != NW_PROF_BUILD)
-            return NW_E_PROFILE;
-        /* A profile you would not actually wear is a silent wrong answer:
-         * without the seccomp lid no filter is applied at all. */
-        if (u[i].profile == NW_PROF_BUILD && !(u[i].lids & NW_LID_SECCOMP))
-            return NW_E_PROFILE;
         /* brick is optional; when present it must be a well-formed absolute
          * path, and it forces NEWNS -- a house cannot pivot into its own root
          * without a private mount namespace, and nw-sup must not quietly

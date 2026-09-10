@@ -453,6 +453,67 @@ def test_brick_is_a_root():
     print("ok brick-is-a-root")
 
 
+def test_path_traversal_refused():
+    """A path in the plan is a string that nw-sup hands straight to mount(2)
+    and open(2). Before this was checked, a brick of `<brick>/../..` baked
+    clean, passed nw-check, and gave the house a root of /tmp/nw-init-run/nw
+    -- every brick on the machine and the store -- while still logging
+    `lid brick` and exiting 0. No error anywhere.
+
+    Refused now at path_ok_len, the one site every path in a plan passes
+    through, so exec_path, brick and bind are all covered by one check. The
+    baker refuses too, independently: it is not in the TCB.
+
+    This closes traversal and NOT symlinks -- see docs/options/07."""
+    esc = f"{WORK}/esc.city"
+    brick = f"{STAGE}/nw/bricks/deadbeef"
+
+    for line, why in (
+        (f"house one /bin/brick kind=oneshot lids=newns,seccomp "
+         f"brick={brick}/../..\n", "brick"),
+        (f"house one /bin/brick kind=oneshot lids=newns,seccomp "
+         f"brick={brick} bind=/etc/../etc\n", "bind"),
+        (f"house one /bin/../bin/brick kind=oneshot lids=newns,seccomp "
+         f"brick={brick}\n", "exec_path"),
+    ):
+        open(esc, "w").write(line)
+        p = run(["python3", CC, "--city", esc, "--out", f"{WORK}/nope.blob"])
+        expect(p.returncode != 0, f"baker accepted .. in {why}\n{p.out}{p.err}")
+        expect("no '..' component" in (p.out + p.err),
+               f"{why} reason\n{p.out}{p.err}")
+
+    # The checker must refuse it on its own, from a blob the baker would not
+    # emit: bake a clean one, write ".." into the brick field by hand, repair
+    # the CRC exactly as a hand-rolled baker would.
+    good = f"{WORK}/esc-ok.blob"
+    open(esc, "w").write(
+        f"house one /bin/brick kind=oneshot lids=newns,seccomp "
+        f"brick={brick}\n")
+    p = run(["python3", CC, "--city", esc, "--out", good])
+    expect(p.returncode == 0, f"bake\n{p.out}{p.err}")
+
+    BRICK_OFF, BRICK_LEN = 20 + 32 + 128, 96   # hdr + name + exec_path
+    d = bytearray(open(good, "rb").read())
+    expect(bytes(d[BRICK_OFF:BRICK_OFF + len(brick)]) == brick.encode(),
+           "brick is not where the layout says it is")
+    evil = (brick + "/../..").encode()
+    expect(len(evil) < BRICK_LEN, "crafted brick too long for the field")
+    d[BRICK_OFF:BRICK_OFF + BRICK_LEN] = evil + b"\x00" * (BRICK_LEN - len(evil))
+    d[16:20] = b"\x00\x00\x00\x00"
+    d[16:20] = struct.pack("<I", zlib.crc32(bytes(d)) & 0xFFFFFFFF)
+    bad = f"{WORK}/esc.blob"
+    open(bad, "wb").write(bytes(d))
+
+    r = run([f"{BIN}/nw-check", bad])
+    expect(r.returncode != 0, "nw-check accepted a traversing brick")
+    expect("brick path" in (r.out + r.err), f"reason\n{r.out}{r.err}")
+
+    # And it must not merely fail later at mount: the city must not boot.
+    rc, out = boot(plan=bad, hold=400)
+    expect("HALT" in out, f"a traversing plan must not open the city\n{out}")
+    print("ok path-traversal-refused")
+
+
 def test_brick_needs_newns():
     """A brick is a root, and pivoting into one without a private mount
     namespace would repoint the machine's. The baker refuses rather than
@@ -485,13 +546,6 @@ def test_brick_needs_newns():
     r = run([f"{BIN}/nw-check", bad])
     expect(r.returncode != 0, "nw-check must reject a brick without NEWNS")
     expect("brick without NEWNS" in (r.out + r.err), f"reason\n{r.out}{r.err}")
-
-    # And a profile nobody wears: build without the seccomp lid.
-    open(city, "w").write("house solo /bin/true kind=oneshot lids=none "
-                          "profile=build\n")
-    p = run(["python3", CC, "--city", city, "--out", f"{WORK}/nope.blob"])
-    expect(p.returncode != 0, "profile=build without seccomp should fail")
-    expect("needs lids=...,seccomp" in (p.out + p.err), f"reason\n{p.out}{p.err}")
     print("ok brick-needs-newns")
 
 
@@ -524,6 +578,7 @@ def main():
     test_seccomp_kills()
     test_brick_is_a_root()
     test_brick_needs_newns()
+    test_path_traversal_refused()
     print("ALL TESTS PASSED")
 
 

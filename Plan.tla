@@ -6,13 +6,10 @@ CONSTANTS MaxUnits, MaxFds, Reserved, MaxBinds
 ASSUME MaxUnits = 64 /\ MaxFds = 1024 /\ Reserved = 8 /\ MaxBinds = 128
 
 Houses == 1..N
-VARIABLES n, kind, lids, brick, profile, binds
+VARIABLES n, kind, lids, brick, binds
 N == n
 
 LidNewNS == 4
-LidSeccomp == 1
-ProfStrict == 0
-ProfBuild == 1
 
 FdNeed == Reserved + 2 * n
 
@@ -25,7 +22,6 @@ BindNeed == Cardinality(UNION {binds[i] : i \in 1..n})
 TypeOK ==
   /\ n \in 1..MaxUnits
   /\ kind \in [1..n -> {0, 1}]   (* 0 oneshot, 1 longrun; explicit, no default *)
-  /\ profile \in [1..n -> {ProfStrict, ProfBuild}]
   /\ FdNeed <= MaxFds
   /\ BindNeed <= MaxBinds
 
@@ -37,11 +33,6 @@ BrickNeedsNewNS ==
 (* No root, nothing to bind into. nwcheck.c returns NW_E_BINDIDX. *)
 BindsNeedBrick ==
   \A i \in 1..n : binds[i] # {} => brick[i] # ""
-
-(* A profile without the lid that applies it is a filter nobody wears.
-   nwcheck.c returns NW_E_PROFILE. *)
-BuildNeedsSeccomp ==
-  \A i \in 1..n : profile[i] = ProfBuild => LidSeccomp \in lids[i]
 
 (* NoLiveRewrite is deliberately NOT restated as a predicate here.
    With edges removed, e was the only variable with a plausible runtime

@@ -43,9 +43,10 @@ The boundary that does matter here is not between files, it is **trust**:
   that reads it.
 - **Prefer rejecting at bake time — but any rule the runtime relies on must
   be in `nwcheck.c` too.** The baker is not in the TCB and a blob can
-  arrive from anywhere. The three cross-field rules (a brick forces
-  `NW_LID_NEWNS`; a bind requires a brick; `NW_PROF_BUILD` requires
-  `NW_LID_SECCOMP`) are each enforced in both places independently.
+  arrive from anywhere. The cross-field rules — a brick forces
+  `NW_LID_NEWNS`, and a bind requires a brick — are each enforced in both
+  places independently. (A third, `NW_PROF_BUILD` requires `NW_LID_SECCOMP`,
+  went with the profile on 2026-09-10; `HISTORY.md` §23.)
 - **The baker refuses; it does not repair.** A brick house that forgot
   `newns` is a bake error, not a plan to quietly add a lid to. A lid nobody
   asked for is a lid nobody reviewed.
@@ -55,13 +56,11 @@ The boundary that does matter here is not between files, it is **trust**:
   the enum.
 - **The lid set is closed.** Unknown bits are `NW_E_LIDS`.
 - **Check the struct sizes, do not eyeball them.** The Python
-  `struct.pack` format and the C struct must agree:
-
-  ```
-  python3 -c "import struct; print(struct.calcsize('<32s128s96sBBHBBB'), struct.calcsize('<H128s'))"
-  ```
-
-  against `sizeof(struct nw_unit)` and `sizeof(struct nw_bind)`. A
+  `struct.pack` format and the C struct must agree. Take the format from
+  `bake()` in the baker, run `struct.calcsize` on it, and compare against
+  `sizeof(struct nw_unit)` and `sizeof(struct nw_bind)` from a compiled
+  throwaway. Do not copy the format string into a brief or a comment: the one
+  that used to be here went stale on 2026-09-10, the day the format changed. A
   mismatch surfaces as a size error from `nw-check`, not as a Python
   exception, so it will look like a corrupt blob rather than a bug in you.
 

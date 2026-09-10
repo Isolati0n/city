@@ -168,19 +168,17 @@ int main(int argc, char **argv)
             }
             close(pp[1]);
             if (pack_kit(logw[i]) < 0) die("pack kit");
-            char lbuf[8], bbuf[8], wbuf[8], kbuf[8], pbuf[8], nbuf[8];
+            char lbuf[8], bbuf[8], wbuf[8], kbuf[8], nbuf[8];
             snprintf(lbuf, sizeof lbuf, "%u", (unsigned)u[i].lids);
             snprintf(bbuf, sizeof bbuf, "%u", (unsigned)u[i].budget);
             snprintf(wbuf, sizeof wbuf, "%u", (unsigned)u[i].window_s);
             snprintf(kbuf, sizeof kbuf, "%u", (unsigned)u[i].kind);
-            snprintf(pbuf, sizeof pbuf, "%u", (unsigned)u[i].profile);
             setenv("NW_UNIT", u[i].name, 1);
             setenv("NW_HOUSE", u[i].name, 1);
             setenv("NW_LIDS", lbuf, 1);
             setenv("NW_BUDGET", bbuf, 1);
             setenv("NW_WINDOW", wbuf, 1);
             setenv("NW_KIND", kbuf, 1);
-            setenv("NW_PROFILE", pbuf, 1);
             /* The brick and the paths bound into it. Names, not descriptors:
              * nw-sup mounts them itself and the house opens what it needs.
              * The init still provisions exactly /dev/null and a log pipe

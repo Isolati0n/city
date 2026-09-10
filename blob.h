@@ -3,7 +3,7 @@
 
 #include <stdint.h>
 
-#define NW_MAGIC        "NWPLAN04"
+#define NW_MAGIC        "NWPLAN05"
 #define NW_NAME_LEN     32
 #define NW_PATH_LEN     128
 #define NW_BRICK_LEN    96    /* "/nw/bricks/" + 64 hex + NUL */
@@ -15,14 +15,12 @@
 _Static_assert(NW_MAX_UNITS * 2 + NW_FD_RESERVED <= NW_MAX_FDS,
                "derived fd budget");
 
-/* Seccomp profile. STRICT is the ordinary application filter and the default,
- * because it is what every house wore before profiles existed. BUILD permits
- * process creation -- clone, unshare, mount, wait4 -- which STRICT does not,
- * so any compiler dies on STRICT instantly. A house declares which it wears;
- * declaring BUILD without the seccomp lid is a bake error, because asking for
- * a filter you will not receive is exactly the silent kind of wrong. */
-#define NW_PROF_STRICT   0u
-#define NW_PROF_BUILD    1u
+/* There is one seccomp filter and a house does not choose. A second profile
+ * (NW_PROF_BUILD, for a toolchain) existed briefly on 2026-09-10 and was
+ * removed the same day: its allow-list was written from a table rather than
+ * from running a compiler, and it killed gcc on the first exec. See
+ * HISTORY.md section 23. When the toolchain house needs one it comes back
+ * test-first, with a test that actually compiles something under it. */
 
 /* Whether a clean exit means "done" or "unexpected". Explicit in the plan:
  * there is no default and no inference. Exit 0 used to mean do-not-restart
@@ -45,7 +43,6 @@ struct nw_unit {
     uint8_t  budget;
     uint16_t window_s;
     uint8_t  lids;
-    uint8_t  profile;    /* NW_PROF_* — was the spare byte until 2026-09-10 */
     uint8_t  _pad;
 } __attribute__((packed));
 
@@ -89,8 +86,7 @@ enum {
     NW_E_BRICKNS = 12,
     NW_E_BINDS = 13,
     NW_E_BINDIDX = 14,
-    NW_E_BINDPATH = 15,
-    NW_E_PROFILE = 16
+    NW_E_BINDPATH = 15
 };
 
 const char *nw_errstr(int e);
