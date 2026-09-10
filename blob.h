@@ -104,6 +104,10 @@ enum {
 
 const char *nw_errstr(int e);
 uint32_t nw_crc32(const void *data, uint32_t len);
+/* CRC over two regions. nw_check needs the header with its crc field zeroed
+ * followed by the body, which is not one buffer; nw_crc32 delegates here so
+ * there is one implementation. See the comment in nwcheck.c. */
+uint32_t nw_crc32_split(const void *a, uint32_t na, const void *b, uint32_t nb);
 int nw_check(const void *blob, uint32_t len);
 
 static inline const struct nw_hdr *nw_hdr(const void *blob)

@@ -29,16 +29,39 @@ const char *nw_errstr(int e)
     return errs[e];
 }
 
-uint32_t nw_crc32(const void *data, uint32_t len)
+/* CRC32 over two regions, because nw_check needs the header with its own
+ * crc field zeroed followed by the body, and that is not one buffer.
+ *
+ * This is the ONLY implementation. nw_check carried a second, inlined copy
+ * of the same loop until 2026-09-10 while nw_crc32 sat exported and called
+ * by nothing -- two copies of an algorithm in a TCB file, which is what
+ * invariant 3 exists to prevent, found by measuring coverage rather than by
+ * reading. Extracting it also makes nw_check model-checkable: unrolling
+ * ~2,100 symbolic iterations of this loop is what stopped CBMC dead, and a
+ * call can be abstracted where an inlined loop cannot. docs/plans/02.
+ *
+ * b may be NULL when nb is 0; the loop then does not run. */
+uint32_t nw_crc32_split(const void *a, uint32_t na, const void *b, uint32_t nb)
 {
-    const unsigned char *p = data;
+    const unsigned char *p = a;
     uint32_t c = 0xffffffffu;
-    for (uint32_t i = 0; i < len; i++) {
+    for (uint32_t i = 0; i < na; i++) {
         c ^= p[i];
-        for (int b = 0; b < 8; b++)
+        for (int k = 0; k < 8; k++)
+            c = (c >> 1) ^ (0xedb88320u & (uint32_t)-(int)(c & 1u));
+    }
+    p = b;
+    for (uint32_t i = 0; i < nb; i++) {
+        c ^= p[i];
+        for (int k = 0; k < 8; k++)
             c = (c >> 1) ^ (0xedb88320u & (uint32_t)-(int)(c & 1u));
     }
     return c ^ 0xffffffffu;
+}
+
+uint32_t nw_crc32(const void *data, uint32_t len)
+{
+    return nw_crc32_split(data, len, (void *)0, 0);
 }
 
 static int name_ok(const char *s, int max)
@@ -100,6 +123,44 @@ static uint32_t hash_name(const char *s)
     return h;
 }
 
+/* Has u[i].name already appeared among u[0..i-1]?
+ *
+ * Open-addressed, 128 slots, carried across calls in slot[]. It replaced a
+ * nested scan that took 15.26 s at 64k units; do not reintroduce one.
+ *
+ * Extracted from nw_check on 2026-09-10 for the same two reasons as the CRC
+ * above. It is the single largest obstruction to model-checking the caller
+ * -- CBMC unwound this loop 10,265 times against 320 for the next worst --
+ * and it is code no test has ever reached: NW_E_DUPNAME has never been
+ * produced by nw-check, because the duplicate-name test rejects at the
+ * baker. Hardest to verify and least exercised are the same property here:
+ * the interesting path needs a hash collision, which a fuzzer will not
+ * stumble into and a solver cannot bound cheaply. As a function it can be
+ * proven and tested on its own.
+ *
+ * Returns 1 for a duplicate, 0 otherwise. A full table returns 0 -- the
+ * behaviour the inline version had, preserved deliberately: it cannot
+ * happen while the table is larger than NW_MAX_UNITS, and silently
+ * changing it here would be a second meaning for a full table. */
+static int name_dup(int *slot, const struct nw_unit *u, uint32_t i)
+{
+    uint32_t hv = hash_name(u[i].name);
+    int s = (int)(hv & 127u);
+    for (int p = 0; p < 128; p++) {
+        int k = (s + p) & 127;
+        if (slot[k] < 0) { slot[k] = (int)i; return 0; }
+        const char *a = u[slot[k]].name;
+        const char *b = u[i].name;
+        int same = 1;
+        for (int n = 0; n < NW_NAME_LEN; n++) {
+            if (a[n] != b[n]) { same = 0; break; }
+            if (!a[n]) break;
+        }
+        if (same) return 1;
+    }
+    return 0;
+}
+
 int nw_check(const void *blob, uint32_t len)
 {
     if (len < sizeof(struct nw_hdr)) return NW_E_SIZE;
@@ -127,20 +188,10 @@ int nw_check(const void *blob, uint32_t len)
     tmp_hdr[offsetof(struct nw_hdr, crc32) + 1] = 0;
     tmp_hdr[offsetof(struct nw_hdr, crc32) + 2] = 0;
     tmp_hdr[offsetof(struct nw_hdr, crc32) + 3] = 0;
-    const char *after = (const char *)blob + sizeof(struct nw_hdr);
-    uint32_t rest = len - (uint32_t)sizeof(struct nw_hdr);
-    uint32_t c = 0xffffffffu;
-    for (size_t i = 0; i < sizeof(struct nw_hdr); i++) {
-        c ^= tmp_hdr[i];
-        for (int b = 0; b < 8; b++)
-            c = (c >> 1) ^ (0xedb88320u & (uint32_t)-(int)(c & 1u));
-    }
-    for (uint32_t i = 0; i < rest; i++) {
-        c ^= (unsigned char)after[i];
-        for (int b = 0; b < 8; b++)
-            c = (c >> 1) ^ (0xedb88320u & (uint32_t)-(int)(c & 1u));
-    }
-    c ^= 0xffffffffu;
+    uint32_t c = nw_crc32_split(tmp_hdr, (uint32_t)sizeof(struct nw_hdr),
+                                (const unsigned char *)blob
+                                    + sizeof(struct nw_hdr),
+                                len - (uint32_t)sizeof(struct nw_hdr));
     if (c != h->crc32) return NW_E_CRC;
 
     const struct nw_unit *u = nw_units(blob);
@@ -177,20 +228,7 @@ int nw_check(const void *blob, uint32_t len)
         if (u[i].lids & ~(uint8_t)(NW_LID_SECCOMP | NW_LID_LANDLOCK
                                    | NW_LID_NEWNS | NW_LID_NEWNET))
             return NW_E_LIDS;
-        uint32_t hv = hash_name(u[i].name);
-        int s = (int)(hv & 127u);
-        for (int p = 0; p < 128; p++) {
-            int k = (s + p) & 127;
-            if (slot[k] < 0) { slot[k] = (int)i; break; }
-            const char *a = u[slot[k]].name;
-            const char *b = u[i].name;
-            int same = 1;
-            for (int n = 0; n < NW_NAME_LEN; n++) {
-                if (a[n] != b[n]) { same = 0; break; }
-                if (!a[n]) break;
-            }
-            if (same) return NW_E_DUPNAME;
-        }
+        if (name_dup(slot, u, i)) return NW_E_DUPNAME;
     }
 
     const struct nw_bind *b = nw_binds(blob);
