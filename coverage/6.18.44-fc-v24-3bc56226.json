@@ -12,6 +12,7 @@
   "baker-rejects",
   "brick-is-a-root",
   "brick-needs-newns",
+  "build-is-reproducible",
   "coverage-accounting",
   "crash-does-not-halt",
   "dawn-real-boot",

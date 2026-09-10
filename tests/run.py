@@ -2,6 +2,7 @@
 """Put-together suite. Not in the TCB."""
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 import struct
@@ -848,6 +849,50 @@ def test_non_provision_at_max():
     print(f"ok non-provision-at-max ({n} units)")
 
 
+def test_build_is_reproducible():
+    """The same source must produce the same binaries from any directory.
+
+    Two clean builds in one tree were already identical; a build of the same
+    source in a different directory was not, because the absolute source path
+    leaks into the binaries through debug info. That breaks the only claim
+    that makes a reviewed artifact meaningful -- that what runs is what was
+    read. `-ffile-prefix-map=$(CURDIR)=.` in the Makefile fixes it, and this
+    is what stops the flag being dropped without anyone noticing.
+
+    Deliberately builds in two paths of *different lengths*, since a leak
+    that happens to be the same width would otherwise hide."""
+    import shutil, tempfile
+    srcs = [f for f in os.listdir(ROOT)
+            if f.endswith((".c", ".h")) or f == "Makefile"]
+    hashes = []
+    with tempfile.TemporaryDirectory(dir=WORK) as base:
+        for sub in ("a", "bbbbbbbbbbbb"):
+            d = os.path.join(base, sub)
+            os.makedirs(os.path.join(d, "houses"))
+            for f in srcs:
+                shutil.copy(os.path.join(ROOT, f), d)
+            for f in os.listdir(os.path.join(ROOT, "houses")):
+                shutil.copy(os.path.join(ROOT, "houses", f),
+                            os.path.join(d, "houses"))
+            b = run(["make", "-C", d, "-j4"])
+            expect(b.returncode == 0, f"build in {sub} failed\n{b.err[-800:]}")
+            got = {}
+            for f in sorted(os.listdir(d)):
+                p = os.path.join(d, f)
+                if os.path.isfile(p) and os.access(p, os.X_OK) and "." not in f:
+                    got[f] = hashlib.sha256(open(p, "rb").read()).hexdigest()
+            expect(len(got) >= 8, f"only built {sorted(got)}")
+            hashes.append(got)
+
+    a, b = hashes
+    expect(set(a) == set(b), f"different binaries built: {set(a) ^ set(b)}")
+    differing = sorted(k for k in a if a[k] != b[k])
+    expect(not differing,
+           f"these binaries depend on the build directory: {differing} -- "
+           f"is -ffile-prefix-map still in CFLAGS?")
+    print(f"ok build-is-reproducible ({len(a)} binaries, two paths)")
+
+
 def test_harness_runs_fresh_binaries():
     """The suite must execute what was just built.
 
@@ -965,6 +1010,7 @@ def main():
     print_environment()
     print("== city suite ==")
     tests = [
+        test_build_is_reproducible,
         test_harness_runs_fresh_binaries, test_coverage_accounting,
         test_hash_pin, test_difftest, test_lids_are_not_advisory,
         test_baker_rejects, test_fuzz_checker, test_happy, test_slot_b,

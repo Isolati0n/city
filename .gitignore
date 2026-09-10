@@ -10,3 +10,6 @@
 nw-*
 unit-*
 .reviews/
+*.gcov
+*.gcno
+*.gcda

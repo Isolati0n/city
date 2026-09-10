@@ -5,7 +5,10 @@
 # `make test` stages to /tmp/nw-init-run.
 
 CC = gcc
-CFLAGS = -Wall -Wextra -O2 -g -std=gnu11
+# -ffile-prefix-map makes the build bit-reproducible from any directory.
+# Without it two builds of the same commit differ, because the absolute
+# source path leaks through debug info -- measured 2026-09-10.
+CFLAGS = -Wall -Wextra -O2 -g -std=gnu11 -ffile-prefix-map=$(CURDIR)=.
 # Overridable so an isolated run (tools/, the control agent) cannot clobber
 # the stage a parallel run is using.
 STAGE ?= /tmp/nw-init-run
@@ -70,6 +73,7 @@ test: stage
 	sh install-agents.sh --check
 	$(STAGE)/nw/bin/nw-check $(STAGE)/efi/slots/A/plan.blob
 	NW_STAGE=$(STAGE) python3 tests/run.py
+	NW_STAGE=$(STAGE) sh tools/coverage-tcb.sh
 
 clean:
 	rm -f lids.o nw-dawn nw-root nw-spawn nw-check nw-sup nw-rescue \
