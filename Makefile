@@ -1,6 +1,6 @@
 # Linux city TCB:
 #   PID 1, nw-spawn, nw-check, rescue = C
-#   nw-sup = Rust + lids.c (optional twin: nwsup.c)
+#   nw-sup = nwsup.c + lids.c
 #   baker = Python, offline
 # artifacts/ is noexec. `make test` stages to /tmp/nw-init-run.
 

@@ -1,11 +1,11 @@
 ---
 name: supervisor
-description: Owns nw-sup — nwsup.rs (shipping), nwsup.c (C twin) and lids.c. Use for per-unit sandboxing (seccomp, Landlock, mount and network namespaces), lid application order, restart budgets, liveness and heartbeat deadlines, and exec of the house binary.
+description: Owns nw-sup — nwsup.c and lids.c. Use for per-unit sandboxing (seccomp, Landlock, mount and network namespaces), lid application order, restart budgets and the window ring, the oneshot/longrun kind, signal handling in the supervisor, and exec of the house binary. NOT for liveness or freeze detection: there is none, deliberately — see the Liveness section before proposing any.
 tools: Read, Grep, Glob, Edit, Write, Bash
 model: inherit
 ---
 
-You own the per-unit supervisor: `nwsup.rs` (the spelling that booted, calling
+You own the per-unit supervisor: `nwsup.c` (the only spelling; calling
 into `lids.c` for the seccomp BPF), the `nwsup.c` twin, and `lids.c` itself.
 One supervisor per unit. TCB.
 
@@ -42,20 +42,66 @@ Order matters: namespaces before Landlock before seccomp, because seccomp may
 forbid the syscalls the later steps need. Sandboxing must be applied after the
 descriptors are in place and before `execv`.
 
-## Liveness — the rule that was wrong three times
+## Liveness — a recorded refusal, not a missing feature
 
-Final form: **`deadline >= heartbeat + 1.5 × max observed pause`.**
+**Freeze detection is deliberately not in the design. A house that goes silent
+but never exits is undetected by anything, and that is known and accepted.**
 
-The three earlier failures, so you do not repeat them:
+`nwsup.c` blocks in `waitpid(p, &st, 0)` with no time bound. There is no
+heartbeat, no deadline, no timeout, no `alarm`, no `WNOHANG` in the supervisor.
+There is no config field to put one in — `struct nw_unit` is `name`,
+`exec_path`, `kind`, `budget`, `window_s`, `lids`, `_pad`, and nothing in the
+plan language or the baker expresses a deadline. The only timing primitives in
+`nwsup.c` (`now_ms`, `win0`) serve the restart-budget window, which measures
+how often a house has **died**, not whether a living house is still
+responding. These are different problems and the budget does not touch this
+one.
+
+### Why refused
+
+Every form of freeze detection requires a guessed constant, and this project
+does not dress a guess as a guarantee.
+
+The rule was attempted three times and was wrong three times. That history is
+kept here **as the evidence for the refusal**, not as a chain of iterations
+that arrived at an answer:
+
 1. Dimensionally wrong — the deadline is measured from the *last beat*, so the
    floor is `heartbeat + N × pause`, not `N × pause`.
 2. 3× was too lenient and still leaked false kills over 30 days.
 3. The statistic was wrong: p999 cannot bound a tail. Required margin ranged
    8×–20× across runtime profiles and failed outright for heavy tails.
 
-**Liveness is a heuristic. Say so in the config.** A diverged unit sends
-nothing; every real supervisor guesses with timeouts. Do not present a timeout
-as a detection guarantee.
+A form once written here as a "final form" — `deadline >= heartbeat + 1.5 ×
+max observed pause` — was **never built and is not endorsed.** It is recorded
+only so that a reader who encounters it elsewhere knows it was considered and
+dropped. `max observed pause` is itself an estimate that grows the longer you
+watch, so the rule has no fixed point.
+
+Three wrong answers in a row is the strongest evidence available that this
+problem has no structural solution. A diverged unit sends nothing; every real
+supervisor guesses with timeouts. The project's method is to design the
+problem out rather than guard it, and here there is nothing to design out —
+so the honest move is to decline, visibly, rather than ship a guess wearing
+the language of detection.
+
+### If you want to change this
+
+**You are opening a design decision, not implementing a documented feature.**
+Nothing here is a spec waiting to be built. Before proposing anything:
+
+- Say where the constant comes from and why it is not a guess. If it is a
+  guess, say so in those words and put it in the plan where a reader will see
+  it, not in the supervisor where it looks like a mechanism.
+- Say what a false kill costs. Iteration 2 failed on exactly this: it looked
+  fine and leaked kills over 30 days.
+- Say why a timeout is not being presented as a detection guarantee, because
+  it is not one.
+
+Do not delete this section if you conclude liveness should stay unbuilt. A
+future reader finding no mention of liveness will reasonably assume nobody
+considered it and propose building it. The refusal has to stay visible and
+reasoned or it will be undone by someone being helpful.
 
 ## Restart rules
 

@@ -11,7 +11,7 @@ offline, then a runtime table interpreter executes it. Robustness comes from
 | `nw-root` (PID 1) | `pid1.c` + `nwcheck.c` | C | **yes** |
 | `nw-spawn` (boot spawner) | `nwspawn.c` + `nwcheck.c` | C | **yes** |
 | `nw-check` | `nwcheck_main.c` + `nwcheck.c` | C | **yes** |
-| `nw-sup` | `nwsup.c` / `nwsup.rs` + `lids.c` | C / Rust | **yes** |
+| `nw-sup` | `nwsup.c` + `lids.c` | C | **yes** |
 | `nw-rescue` | `rescue.c` | C | yes |
 | baker (`nw-cc`) | `bakery/nw-cc.py` | Python | **no** |
 | test suite | `tests/run.py` | Python | **no** |
