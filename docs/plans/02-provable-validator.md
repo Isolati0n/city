@@ -37,12 +37,22 @@ repository keeps finding next to code that does not do what it says.
 
 All run here today.
 
-**`nwcheck.c` line coverage is 79%**, from every blob a full suite run
-leaves behind plus 400 byte-flips. Nobody had measured it. (A first pass
-reported 83% over a corpus that had accumulated blobs from earlier runs, and
-a bare `make stage` gives 71% — the metric depends on the corpus, so it is
-pinned to one context: immediately after `tests/run.py`.) Eighteen lines never execute,
-and which ones is the finding:
+**`nwcheck.c` line coverage is 83%**, from every blob a full suite run
+leaves behind plus 400 byte-flips. Nobody had measured it, and the metric
+depends on the corpus, so it is pinned to one context: immediately after
+`tests/run.py`.
+
+*An earlier draft of this line said 79% and explained the gap against
+gcov's 83.33% as a corpus difference. That explanation was invented. The
+real cause was a bug in the measuring script: gcov marks a line whose
+branches are only partly taken as `403*:`, the line-counting regex missed
+the asterisk, and 24 of 108 executable lines fell out of both numerator and
+denominator. The script now reads gcov's own figure instead of recomputing
+it. Recorded rather than quietly corrected, because inventing a plausible
+cause for a discrepancy is the same failure as asserting a mechanism works
+without running it.*
+
+Eighteen lines never execute, and which ones is the finding:
 
 - **`nw_crc32` is dead.** Exported in `blob.h`, defined in `nwcheck.c`,
   called by nothing — `grep` finds only the declaration and the definition.
@@ -125,7 +135,7 @@ Not sampling. Enumerating:
 
 ## Tier C — coverage measured, with a floor that fails the build
 
-`make test` gains a coverage run over the TCB and a floor. 79% is the current
+`make test` gains a coverage run over the TCB and a floor. 83% is the current
 number for `nwcheck.c` after a full suite run; the floor starts there and
 only rises.
 Without this, coverage is a thing nobody looks at until someone measures it

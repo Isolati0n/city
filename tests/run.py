@@ -859,8 +859,18 @@ def test_build_is_reproducible():
     read. `-ffile-prefix-map=$(CURDIR)=.` in the Makefile fixes it, and this
     is what stops the flag being dropped without anyone noticing.
 
-    Deliberately builds in two paths of *different lengths*, since a leak
-    that happens to be the same width would otherwise hide."""
+    Builds in two paths of different lengths. That is a precaution, not a
+    demonstrated property: with equal-length names the control fails
+    identically, so nothing here evidences that the width matters. It is
+    kept because it can only help.
+
+    Note what this pins and what it does not. It pins the *property* --
+    same source, same binaries, different directory -- not any particular
+    flag: deleting `-g` outright, or using the weaker `-fdebug-prefix-map`,
+    both leave it green today, because no C source here uses `__FILE__` or
+    `assert()`. It also builds each directory once, so nondeterminism that
+    is constant between two builds seconds apart (`__DATE__`, an embedded
+    build id) would pass."""
     import shutil, tempfile
     srcs = [f for f in os.listdir(ROOT)
             if f.endswith((".c", ".h")) or f == "Makefile"]
@@ -889,7 +899,9 @@ def test_build_is_reproducible():
     differing = sorted(k for k in a if a[k] != b[k])
     expect(not differing,
            f"these binaries depend on the build directory: {differing} -- "
-           f"is -ffile-prefix-map still in CFLAGS?")
+           f"something is embedding an absolute source path. Most likely "
+           f"CFLAGS lost -ffile-prefix-map, but a new __FILE__ or assert() "
+           f"in the C sources would do it too.")
     print(f"ok build-is-reproducible ({len(a)} binaries, two paths)")
 
 

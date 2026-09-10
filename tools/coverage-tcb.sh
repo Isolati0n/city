@@ -16,9 +16,10 @@ set -eu
 # code actually is and only ratchets up. Note the number depends on the
 # corpus, so this is meant to run in one context: immediately after
 # tests/run.py, over the blobs that run left behind. Measured 79% there on
-# 2026-09-10; measured 71% after a bare `make stage`, which is the same code
-# with fewer inputs.
-FLOOR=${1:-79}
+# 2026-09-10, once the percentage was read from gcov rather than recomputed
+# wrongly. A bare `make stage` gives less -- the same code with fewer inputs
+# -- which is what the corpus guard below exists to distinguish.
+FLOOR=${1:-83}
 ROOT=$(pwd)
 W=$(mktemp -d)
 trap 'rm -rf "$W"' EXIT
@@ -34,10 +35,20 @@ STAGE=${NW_STAGE:-/tmp/nw-init-run}
 # as "the tests cover nothing" rather than "you gave me nothing to measure".
 # An instrument that cannot tell those apart is the defect this project keeps
 # finding, so say which one it is.
+# The first version checked only for A/plan.blob, which `make stage` always
+# writes -- so it could never fire from `make test`, and the case that does
+# happen (a stage tests/run.py never ran against) slipped past it and was
+# reported as a coverage regression. The suite's contribution to the corpus
+# is work/*.blob, so that is what to look for.
 if [ ! -f "$STAGE/efi/slots/A/plan.blob" ]; then
-    echo "coverage-tcb: no blobs at $STAGE -- run 'make stage' first." >&2
-    echo "  (measuring now would report 0%, which is not the same as" >&2
-    echo "   the tests covering nothing)" >&2
+    echo "coverage-tcb: no stage at $STAGE -- run 'make stage' first." >&2
+    exit 2
+fi
+if [ -z "$(find "$STAGE/work" -maxdepth 1 -name '*.blob' -print -quit 2>/dev/null)" ]
+then
+    echo "coverage-tcb: $STAGE has no work/*.blob, so tests/run.py has not" >&2
+    echo "  run against it. Measuring now reports a low number that looks" >&2
+    echo "  like a coverage regression and means the wrong corpus." >&2
     exit 2
 fi
 for f in "$STAGE"/efi/slots/A/plan.blob "$STAGE"/efi/slots/B/plan.blob \
@@ -56,10 +67,26 @@ PY
 fi
 
 cd "$W"
-gcov -o "$W" "$ROOT/nwcheck.c" >/dev/null 2>&1 || true
+GCOV=$(gcov -o "$W" "$ROOT/nwcheck.c" 2>/dev/null || true)
 [ -f nwcheck.c.gcov ] || { echo "coverage-tcb: gcov produced nothing" >&2; exit 1; }
 
-pct=$(awk -F'[:.]' '/^ *#####/{u++} /^ *[0-9]+:/{c++} END{printf "%d", (c*100)/(c+u)}' nwcheck.c.gcov)
+# Take gcov's own figure rather than re-deriving it. The first version
+# counted lines with an awk regex of ^ *[0-9]+: and reported 79%, while gcov
+# said 83.33% for the same run. Cause: gcov marks a line whose branches are
+# only partly taken as "403*:", the regex missed the asterisk, and 24 of
+# nwcheck.c's 108 executable lines fell out of BOTH numerator and
+# denominator -- so "of executable lines" was false as printed. Worse, the
+# 79-versus-83 gap was then explained away as a corpus difference instead of
+# investigated. One number, from the tool that computes it.
+pct=$(printf '%s\n' "$GCOV" | awk '
+    /^File .*nwcheck\.c/            { f = 1; next }
+    f && /^Lines executed:/          { sub(/.*:/, ""); sub(/[.%].*/, "");
+                                       print; exit }')
+case "$pct" in
+    ''|*[!0-9]*)
+        echo "coverage-tcb: could not read a percentage from gcov" >&2
+        exit 1 ;;
+esac
 echo "coverage-tcb: nwcheck.c ${pct}% of executable lines (floor ${FLOOR}%)"
 echo "  never executed:"
 grep "#####" nwcheck.c.gcov | sed 's/^ *#####: *//' | sed 's/^/    /' | head -40
