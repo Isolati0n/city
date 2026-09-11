@@ -19,3 +19,7 @@ boot-out/
 *.gcno
 *.gcda
 __pycache__/
+specs/limits.als
+specs/Plan.cfg
+# TLC/Alloy leave a states/ dir and a per-command output dir beside the spec
+states/

@@ -1,5 +1,30 @@
 /* Plan lid. Offline. Not in the TCB.
-   Assertions the baker and nw-check must agree on. */
+   Assertions the baker and nw-check must agree on.
+
+   THIS FILE IS RUN NOW. `tests/run.py` executes it with the Alloy jar in
+   tools/jars and fails if a check finds a counterexample. Until
+   2026-09-11 nothing ran it, and two things were wrong that only running
+   could find:
+
+   1. It did not execute AT ALL. `run sealed for 8 House` gives a scope
+      for House and none for Brick or Path, and Alloy refuses:
+      "You must specify a scope for sig this/Brick". Every scope is set
+      below. A spec that has never been parsed by its own tool is prose.
+
+   2. `fdNeed` did not add. It was `8 + 2.mul[#House]`, and in Alloy `+`
+      on Int is SET UNION, not addition -- so it was the set {8, 2*#House}
+      and `sealed` compared that against 1024. Measured: with 5 houses,
+      `fdNeed[] = 18` has a counterexample and `fdNeed[] = (8 + 10)`
+      holds, which is the union, exactly. The fd formula is one of the
+      four places invariant 3 says must agree, and it had never computed
+      the fd budget. Arithmetic goes through plus/mul/lte from
+      util/integer.
+
+   The limits come from specs/limits.als, generated out of blob.h by
+   tools/gen-spec-limits.py. They are not written here, so they cannot
+   drift from it -- the second copy is gone rather than checked. */
+open util/integer
+open limits
 
 sig House {
   kind: one Kind,
@@ -41,8 +66,8 @@ fact landlockNeedsBrick { all h: House | Landlock in h.lids => some h.brick }
 
 fact namesAreHouses { #House >= 1 }
 
-/* Derived budget: 8 reserved + 2 per house. One constant. */
-fun fdNeed[]: Int { 8 + 2.mul[#House] }
+/* Derived budget: reserved + 2 per house, both from blob.h. */
+fun fdNeed[]: Int { plus[nwReserved[], 2.mul[#House]] }
 
 /* Same arithmetic as NW_MAX_BINDS in blob.h, MAX_BINDS in bakery/nw-cc.py
    and MaxBinds in Plan.tla. Change one, change all four.
@@ -64,13 +89,33 @@ fun fdNeed[]: Int { 8 + 2.mul[#House] }
    is one per row of the blob's bind table. `#(House.binds)` was the number
    of distinct Path atoms any house reaches.
 
-   NOT RUN. There is no alloy on this machine and nothing in the Makefile
-   or tests/run.py executes this file, so this correction is reasoning
-   about Alloy's semantics, not a checked result. It matches what nw-check
-   and the baker measurably do, which is the agreement that matters. */
+   RUN as of 2026-09-11: the alloy jar is in tools/jars and tests/run.py
+   executes this file. `#binds` needed no change -- cardinality of a
+   relation is not arithmetic, so it never had the `+` defect fdNeed
+   had. */
 fun bindNeed[]: Int { #binds }
 
-pred sealed { fdNeed[] <= 1024 and bindNeed[] <= 128 }
+/* lte, not <=, for the same reason plus is not +: these are Int
+   comparisons and must go through util/integer. The limits are blob.h's,
+   via the generated module. */
+pred sealed { lte[fdNeed[], nwMaxFds[]] and lte[bindNeed[], nwMaxBinds[]] }
+
+/* THE CHECKS THE BUILD RUNS. Each is an agreement between this file and
+   the implementation, and each fails loudly if the two diverge.
+
+   FdArithmetic is the one that would have caught the `+` defect: it says
+   the formula equals reserved + 2 per house, computed a different way.
+   Sealed says every plan this file admits fits blob.h's budgets, so
+   lowering NW_MAX_FDS below what the scope needs fails here rather than
+   at boot. Both are BOUNDED to the scope on the command -- see the note
+   at the foot of this file about what the scope is and is not. */
+assert FdArithmetic {
+  fdNeed[] = plus[nwReserved[], plus[#House, #House]]
+}
+assert Sealed { sealed }
+
+check FdArithmetic for 8 but 12 Int
+check Sealed for 8 but 12 Int
 
 /* NOT a unit limit. `for 8 House` is Alloy's search scope -- how large a
    model it will look for a counterexample in -- and it is 8 against
@@ -88,4 +133,4 @@ pred sealed { fdNeed[] <= 1024 and bindNeed[] <= 128 }
    Also empty, for the same kind of reason: this file has no notion of a unit
    *name*. Name uniqueness is enforced in nwcheck.c and in the baker, and is
    not modelled here. */
-run sealed for 8 House
+run sealed for 8 but 12 Int

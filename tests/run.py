@@ -1982,6 +1982,111 @@ def test_old_magic_is_refused_as_magic():
           f"refused for its magic, not its size)")
 
 
+def test_specs_are_checked():
+    """Run the two specs. Until 2026-09-11 nothing ever did.
+
+    `plan.als` and `Plan.tla` were the one part of this repository that
+    could not be verified by running, and the honest consequence was
+    supposed to be that nobody cited them as evidence. They were cited
+    anyway, by their own comments: "Change one, change all four" sat
+    directly above an expression that was wrong.
+
+    Running them found, immediately, that NEITHER PARSED:
+
+    * Alloy refused `run sealed for 8 House` -- "You must specify a
+      scope for sig this/Brick". The file had never been executed by its
+      own tool.
+    * TLC refused `Houses == 1..N`, defined above `N == n`: "Unknown
+      operator: `N'". Also never executed, and `Houses` was used by
+      nothing.
+
+    And then that the fd formula did not add. Alloy's `+` on Int is set
+    union, so `8 + 2.mul[#House]` was the SET {8, 2*#House} and `sealed`
+    compared it against 1024. Measured with 5 houses: `fdNeed[] = 18`
+    has a counterexample, `fdNeed[] = (8 + 10)` holds.
+
+    The limits both specs use are generated from blob.h, so the
+    four-place drift of invariant 3 is now unrepresentable for these two
+    rather than checked -- there is no second copy left to go stale.
+
+    Controls, all run:
+      * restore the `+` union form            -> FdArithmetic counterexample
+      * NW_MAX_FDS = 16 in the generated limits -> Sealed counterexample
+      * NW_MAX_FDS = 100 in blob.h            -> FdBudgetCovers violated
+      * NW_MAX_UNITS = 128 in blob.h          -> tracked, 128 states, clean
+    """
+    jars = os.path.join(ROOT, "tools", "jars")
+    tla, alloy = (os.path.join(jars, "tla2tools.jar"),
+                  os.path.join(jars, "alloy.jar"))
+    have_java = run(["sh", "-c", "command -v java"]).returncode == 0
+    missing = [n for n, p in (("tla2tools.jar", tla), ("alloy.jar", alloy))
+               if not os.path.exists(p)]
+    if not have_java or missing:
+        why = "java is not installed" if not have_java else \
+              f"missing {', '.join(missing)} (see tools/jars/README.md)"
+        skip("specs-are-checked",
+             f"{why}; plan.als and Plan.tla are NOT verified in this run "
+             f"and must not be cited as evidence")
+        return
+
+    import importlib.util as _il
+    g = _il.spec_from_file_location(
+        "genlim", os.path.join(ROOT, "tools", "gen-spec-limits.py"))
+    gen = _il.module_from_spec(g)
+    g.loader.exec_module(gen)
+    lab = f"{WORK}/specs"
+    subprocess.run(["rm", "-rf", lab], check=False)
+    os.makedirs(lab, exist_ok=True)
+    vals, als_path, cfg_path = gen.generate(out_dir=lab)
+
+    # TLC. Static model: Next is UNCHANGED, so this evaluates the limit
+    # arithmetic at every legal unit count rather than exploring behaviour.
+    # generate() already wrote limits.als and Plan.cfg into lab.
+    assert cfg_path == f"{lab}/Plan.cfg" and als_path == f"{lab}/limits.als"
+    shutil.copy(os.path.join(ROOT, "Plan.tla"), f"{lab}/Plan.tla")
+    t = run(["java", "-cp", tla, "tlc2.TLC", "-config", "Plan.cfg",
+             "Plan.tla"], cwd=lab)
+    tout = t.out + t.err
+    expect("Model checking completed. No error has been found." in tout,
+           f"TLC rejected Plan.tla against blob.h's limits "
+           f"({vals}).\n{tout[-2000:]}")
+    m = re.search(r"(\d+) distinct states", tout)
+    expect(m and int(m.group(1)) == vals["nwMaxUnits"],
+           f"TLC explored {m.group(1) if m else '?'} states, expected one "
+           f"per legal unit count ({vals['nwMaxUnits']}). If Init stopped "
+           f"ranging over n, the invariant is being checked at one size "
+           f"and the run says nothing about the others.\n{tout[-1200:]}")
+
+    # Alloy. -Xss512m because the existential `run` overflows the default
+    # JVM stack at 12-bit Int; measured, not guessed.
+    shutil.copy(os.path.join(ROOT, "plan.als"), f"{lab}/plan.als")
+    a = run(["java", "-Xss512m", "-jar", alloy, "exec", "-f", "plan.als"],
+            cwd=lab)
+    aout = a.out + a.err
+    checks = re.findall(r"\d+\.\s+check\s+(\w+)\s+.*?(SAT|UNSAT)", aout)
+    runs = re.findall(r"\d+\.\s+run\s+(\w+)\s+.*?(SAT|UNSAT)", aout)
+    expect(len(checks) == 2 and len(runs) == 1,
+           f"expected two checks and one run from plan.als, parsed "
+           f"checks={checks} runs={runs}. A command that stopped being "
+           f"executed is a check that stopped happening.\n{aout[-1500:]}")
+    # For a `check`, SAT means a counterexample was FOUND.
+    for name, verdict in checks:
+        expect(verdict == "UNSAT",
+               f"Alloy found a counterexample to {name} in plan.als -- the "
+               f"spec disagrees with blob.h's limits ({vals}).\n{aout[-1500:]}")
+    # For the `run`, UNSAT means no instance exists: the facts contradict
+    # each other and every check above passed vacuously.
+    for name, verdict in runs:
+        expect(verdict == "SAT",
+               f"Alloy found NO instance of {name}: plan.als's facts admit "
+               f"no plan at all, so both checks above passed vacuously and "
+               f"prove nothing.\n{aout[-1500:]}")
+
+    print(f"ok specs-are-checked (TLC: {vals['nwMaxUnits']} states, invariant "
+          f"holds; Alloy: {len(checks)} checks clean and the model is "
+          f"non-vacuous; limits generated from blob.h)")
+
+
 def test_baker_writes_the_declared_layout():
     """The baker writes the bytes. Nothing pinned where it writes them.
 
@@ -2567,6 +2672,7 @@ def main():
         test_blob_size_ceiling,
         test_checker_rejects_crafted_fields,
         test_old_magic_is_refused_as_magic,
+        test_specs_are_checked,
         test_baker_writes_the_declared_layout,
         test_non_provision_at_max,
         test_landlock_confines,

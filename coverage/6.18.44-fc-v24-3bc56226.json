@@ -38,6 +38,7 @@
   "seccomp-kills",
   "shutdown-does-not-restart",
   "slot-b",
+  "specs-are-checked",
   "term-signal"
  ],
  "skipped": {

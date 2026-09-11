@@ -2999,3 +2999,106 @@ window the old field could have named, or a mutation that puts
 `window_s` back and watches the test go red. Cost of the slow
 fixture is the design call; a 7s hold against 1.2s deaths is
 not that pin.
+
+## 38. The specs run, and neither of them parsed (2026-09-11)
+
+Based on `554b6f9`. `tools/jars/` now carries TLC and Alloy, and
+`test_specs_are_checked` executes both. Everything below was invisible
+until something read the files.
+
+### Neither spec parsed. Both had read as verification for their whole life.
+
+- **Alloy refused `plan.als` outright.** `run sealed for 8 House` gives a
+  scope for `House` and none for `Brick` or `Path`: *"You must specify a
+  scope for sig this/Brick"*. The file had never been through its own
+  tool.
+- **TLC refused `Plan.tla`.** `Houses == 1..N` sat above `N == n`, and
+  TLA+ requires definition before use: *"Unknown operator: `N'"*.
+  `Houses` was also referenced by nothing. Deleted rather than reordered.
+
+### `fdNeed` never added. Alloy's `+` on Int is set union.
+
+`8 + 2.mul[#House]` is the SET `{8, 2·#House}`, so `sealed` was comparing
+a set against 1024. Measured with five houses: `fdNeed[] = 18` has a
+counterexample, and `fdNeed[] = (8 + 10)` — the union — holds exactly.
+Arithmetic goes through `plus`/`mul`/`lte` from `util/integer` now.
+
+This is the fd formula that **invariant 3 names as one of the four places
+that must agree**, and it had never computed the fd budget. The comment
+"Change one, change all four" sat directly above it.
+
+### The limits are generated, so two of the four places cannot drift
+
+`tools/gen-spec-limits.py` reads `blob.h` and writes `specs/limits.als`
+and `specs/Plan.cfg`. Neither spec holds a limit literal any more, so
+there is no second copy to go stale — the class is removed rather than
+checked, which is the preference this project states everywhere else.
+
+`Plan.tla`'s `ASSUME` used to pin the four constants to literals. With
+the values now derived that would make every invariant a tautology: a
+`blob.h` change fails the ASSUME and the invariants are never reached.
+Measured — lowering `NW_MAX_FDS` to 100 failed the ASSUME rather than
+`FdBudgetCovers`, which is the wrong error for the right problem. The
+ASSUME is sanity only now; the relationships are invariants.
+
+### What is actually checked, and what it is not
+
+`Plan.tla` had VARIABLES and no `Init` and no `Next`, so TLC had nothing
+to explore. The model is deliberately static — `Next == UNCHANGED` —
+because the plan format has no runtime mutation path (§17). It exists so
+the arithmetic is EVALUATED at every legal unit count instead of read.
+`FdBudgetCovers` is the same claim as the `_Static_assert` in `blob.h`,
+said in a second place and checked by a different tool.
+
+`BrickNeedsNewNS`, `LandlockNeedsBrick` and `BindsNeedBrick` are **not**
+state-checked: a generated plan satisfies them by construction, so
+checking them there would be circular. They live in `nwcheck.c` and are
+pinned by `test_checker_rejects_crafted_fields`.
+
+Both results are bounded — Alloy at scope 8 with 12-bit integers, TLC at
+one state per legal unit count — and `tools/jars/README.md` says so
+beside the commands.
+
+### Controls, all run
+
+| control | result |
+|---|---|
+| restore the `+` union form in `fdNeed` | Alloy counterexample to `FdArithmetic` |
+| `NW_MAX_FDS = 16` in the generated limits | Alloy counterexample to `Sealed` |
+| `NW_MAX_FDS = 100` in `blob.h` | TLC: `Invariant FdBudgetCovers is violated` |
+| `NW_MAX_UNITS = 128` in `blob.h` | tracked automatically, 128 states, clean |
+| a fact admitting no plan | Alloy: `run` UNSAT, caught as vacuous |
+| both jars removed | SKIP, named, and the suite refuses a bare pass |
+
+The vacuity control is the one worth keeping: for an Alloy `check`, `SAT`
+means a counterexample was FOUND, and for a `run`, `UNSAT` means the
+facts admit no model at all and every check above passed for nothing.
+Reading that convention backwards would make every failure look like a
+pass, so the suite asserts the `run` too.
+
+### Two things the suite caught in this work
+
+The skip name has to match the test's own name or the harness counts the
+test as passed — `main()` rejected `specs-checked` against
+`test_specs_are_checked` and said so. And `-Xss512m` is not optional:
+the existential `run` overflows the default JVM stack at 12-bit Int
+inside Kodkod's CNF translator.
+
+### Boot-chain queue, reordered
+
+The log regression goes first, ahead of `sync`. A group-directed TERM
+now kills every logger and discards a house's final output (0 of 5 lines
+relayed, against 3 of 5 before), and that breaks a precondition of a
+decision already taken: the hard-total budget means a house that
+exhausts its budget stays dead until reboot, and that was only acceptable
+because the death is visible. Lose the last lines at shutdown and it is
+a black screen with no explanation — the exact thing that made a hard
+total unsafe. Then the orphan race.
+
+`sync()` stays landed at `pid1.c:171`, before `reboot`, and is **blocked
+rather than pending**: its consequence — whether a clean shutdown without
+it leaves a dirty filesystem — cannot be measured without real hardware,
+because `reboot()` in a pid namespace only tears the namespace down. The
+call matches systemd, busybox and util-linux. The absence of `sync(` in
+the C sources before this was verbatim; the consequence was, and remains,
+a hypothesis.

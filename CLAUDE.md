@@ -268,7 +268,30 @@ What the map does not settle, because it is not a map question:
 restart loop in `nwsup.c`. Claude owns the baker and the mount path in
 `nwsup.c`. Nobody else touches `plan.als` or `Plan.tla`.
 
-That is the whole answer, and it is deliberately not derived from
+**Fix it and flag it — and the narrow version is the rule.** When a
+handoff breaks the boot, fix it in the other agent's file rather than
+handing it back. A trunk that panics on real hardware is worse than an
+ownership violation: the boundaries exist to stop two agents colliding,
+not to protect a broken trunk. Ratified 2026-09-11 after a fix delivered
+for `dawn.c` panicked on the first real boot and was repaired across the
+line.
+
+The narrow version and the general version look identical in a commit
+log, which is why the distinction is written down rather than left to
+judgement. Narrow means: **the trunk is broken, the fix is minimal, you
+say so loudly, and the owner reviews afterwards.** It is not a licence
+to edit another agent's files because you were there and it was quicker.
+If the trunk still boots, hand it back.
+
+*The finding underneath this matters more than the rule.* The break was
+a comment that had named the wrong errno for years — `umount2` answers
+EINVAL on the MS_MOVE path, never the ENOENT the comment claimed — and a
+reviewer's instruction to make comment and condition agree was followed
+by trusting the comment. That is this project's characteristic failure
+with teeth for the first time: previously a true-looking sentence
+misled a reader, and this time it panicked a machine.
+
+The ownership assignment above is deliberately not derived from
 anything. It is a **scheduling fact about who is working on what**, not a
 property of the code, so it changes when the work changes and a generated
 list will always be either stale or wrong. Every attempt to produce it
