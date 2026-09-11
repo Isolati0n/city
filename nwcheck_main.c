@@ -15,11 +15,11 @@ int main(int argc, char **argv)
     if (fd < 0) { perror(argv[1]); return 2; }
     struct stat st;
     if (fstat(fd, &st) < 0) { perror("stat"); return 2; }
-    if (st.st_size <= 0 || st.st_size > 1 << 20) {
+    if (st.st_size <= 0 || (uint32_t)st.st_size > NW_BLOB_MAX) {
         fprintf(stderr, "blob size\n");
         return 1;
     }
-    static unsigned char buf[1 << 20];
+    static unsigned char buf[NW_BLOB_MAX];
     ssize_t n = read(fd, buf, (size_t)st.st_size);
     close(fd);
     if (n != st.st_size) { fprintf(stderr, "short read\n"); return 2; }

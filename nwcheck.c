@@ -23,9 +23,12 @@ static const char *errs[] = {
     "landlock without brick"
 };
 
+_Static_assert(sizeof errs / sizeof errs[0] == NW_E__COUNT,
+               "one errs[] string per NW_E_* code");
+
 const char *nw_errstr(int e)
 {
-    if (e < 0 || e > NW_E_LLBRICK) return "unknown";
+    if (e < 0 || e >= NW_E__COUNT) return "unknown";
     return errs[e];
 }
 
@@ -142,13 +145,22 @@ static uint32_t hash_name(const char *s)
  * blob.h rather than this sentence. It was this sentence alone until
  * 2026-09-11, and the sentence was not load-bearing enough: see NW_DUP_SLOTS.
  *
- * slot is [static NW_DUP_SLOTS] so the array and its bound cannot be
- * separated by the extraction -- a caller passing a shorter one is a
- * -Wstringop-overflow at the call site, not a silent out-of-bounds read of
- * u[] through a garbage index. */
-static int name_dup(int slot[static NW_DUP_SLOTS], const struct nw_unit *u,
-                    uint32_t i)
+ * The table is a struct so the caller has no size to write. It was
+ * `int slot[static NW_DUP_SLOTS]` for half a day, which makes a mismatch a
+ * -Wstringop-overflow -- but a warning in a build with no -Werror, and the
+ * caller still spelled NW_DUP_SLOTS twice, once for the array and once for
+ * the init loop. Prefer designing the problem out over checking for it:
+ * with a type there is no number at the call site to get wrong. */
+struct nw_dup_tab { int slot[NW_DUP_SLOTS]; };
+
+static void name_dup_init(struct nw_dup_tab *t)
 {
+    for (int i = 0; i < NW_DUP_SLOTS; i++) t->slot[i] = -1;
+}
+
+static int name_dup(struct nw_dup_tab *t, const struct nw_unit *u, uint32_t i)
+{
+    int *slot = t->slot;
     uint32_t hv = hash_name(u[i].name);
     int s = (int)(hv & (uint32_t)(NW_DUP_SLOTS - 1));
     for (int p = 0; p < NW_DUP_SLOTS; p++) {
@@ -201,8 +213,8 @@ int nw_check(const void *blob, uint32_t len)
 
     const struct nw_unit *u = nw_units(blob);
 
-    int slot[NW_DUP_SLOTS];
-    for (int i = 0; i < NW_DUP_SLOTS; i++) slot[i] = -1;
+    struct nw_dup_tab dup;
+    name_dup_init(&dup);
 
     for (uint32_t i = 0; i < h->n_units; i++) {
         if (!name_ok(u[i].name, NW_NAME_LEN)) return NW_E_NAME;
@@ -233,7 +245,7 @@ int nw_check(const void *blob, uint32_t len)
         if (u[i].lids & ~(uint8_t)(NW_LID_SECCOMP | NW_LID_LANDLOCK
                                    | NW_LID_NEWNS | NW_LID_NEWNET))
             return NW_E_LIDS;
-        if (name_dup(slot, u, i)) return NW_E_DUPNAME;
+        if (name_dup(&dup, u, i)) return NW_E_DUPNAME;
     }
 
     const struct nw_bind *b = nw_binds(blob);

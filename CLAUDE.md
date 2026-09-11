@@ -311,6 +311,15 @@ The record, which is the argument:
   and an invariant both asserting that a house cannot see outside its brick.
   A traversing brick baked clean, passed `nw-check`, booted, and logged
   `lid brick` while rooted on the machine.
+- **A test said it planted a hash collision and did not.** Its probe asked
+  `nwcheck.c`'s real hash and then applied the slot mask itself — a second
+  copy of an expression that also lives in `name_dup`. Change the derivation
+  in one and the other answers for the old one: the pair no longer collided,
+  the case that exists to be controlled stopped being controlled, and the
+  line still read `a real collision on slot 80`. `HISTORY.md` §30. The same
+  round found the packet handed to every reviewer carrying an **empty**
+  environment block, because its fallback only ran on failure and `sed` on
+  `/dev/null` succeeds.
 
 Notice what is common. In every case the code was memory-safe, the tests were
 green, and the prose was confident. Nothing was reviewing the *relationship*

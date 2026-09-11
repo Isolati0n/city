@@ -665,7 +665,13 @@ def test_path_traversal_refused():
 
     # And it must not merely fail later at mount: the city must not boot.
     rc, out = boot(plan=bad, hold=400)
-    expect("HALT" in out, f"a traversing plan must not open the city\n{out}")
+    # The reason, not just the halt. halt_now() has many call sites in
+    # pid1.c -- "logger fork", "plan size", "signalfd" -- so bare "HALT" is
+    # satisfied by any boot failure, including one that never validated the
+    # plan. Found by `control`.
+    expect("nw-check reject: brick path" in out and "HALT: plan" in out,
+           f"a traversing plan must be refused by name, not merely halt on"
+           f"\n{out}")
     print("ok path-traversal-refused")
 
 
@@ -817,30 +823,73 @@ def test_landlock_confines():
 
 
 def c_name_slots(names):
-    """Ask nwcheck.c itself which table slot each name hashes to.
+    """Ask nwcheck.c itself which table slot each name occupies.
 
-    hash_name is static, so a throwaway includes the translation unit rather
-    than linking it -- the pattern .claude/rules/plan.md uses for struct
-    sizes, for the same reason: the alternative is a second copy of a TCB
-    algorithm in Python, and a copy that drifts turns the collision test
-    below into a test of nothing while it still prints ok."""
+    Not "which slot does the hash give" -- which slot does `name_dup`
+    actually record the unit in. A throwaway includes the translation unit
+    (hash_name and name_dup are both static), builds a one-unit array per
+    name, runs name_dup against a fresh table, and reports the index that
+    stopped being -1. Two names collide exactly when that index is the same,
+    which is the property the collision test needs, observed through the code
+    under test.
+
+    The first version asked `hash_name(name) & (NW_DUP_SLOTS - 1)` instead.
+    That looks equivalent and is not: the mask is a *second copy* of an
+    expression that also lives in name_dup, so changing name_dup's derivation
+    to `(hv >> 16) & (NW_DUP_SLOTS - 1)` left this helper answering for the
+    old one, the planted pair no longer collided, the collision case quietly
+    became a second plain duplicate, and the suite still printed `a real
+    collision on slot 80`. It survived the truncate-the-probe-chain control
+    too, so the case that exists to be controlled stopped being controlled.
+    Found by `control`. Invariant 3's failure mode, one layer up, inside the
+    test written to catch it.
+
+    Compiled from {STAGE}/src, NOT the source tree -- see the Makefile's
+    stage rule. Taking an *algorithm* rather than a binary from ROOT is the
+    staging trap one level in: against a stale stage the probe answers for
+    code the binary under test does not contain. Found by fd-auditor."""
     slots = int(blob_h("NW_DUP_SLOTS"))
-    src = f"{WORK}/hashprobe.c"
+    srcdir = os.path.join(STAGE, "src")
+    expect(os.path.exists(os.path.join(srcdir, "nwcheck.c")),
+           f"{srcdir}/nwcheck.c is missing: this stage predates the rule that "
+           f"stages the sources beside the binaries. Run make stage.")
+    src = f"{WORK}/slotprobe.c"
     with open(src, "w") as f:
-        f.write('#include "nwcheck.c"\n#include <stdio.h>\n'
+        f.write('#include "nwcheck.c"\n'
+                '#include <stdio.h>\n'
+                '#include <string.h>\n'
+                'static int where(const char *nm)\n'
+                '{\n'
+                '    static struct nw_unit u[1];\n'
+                '    int slot[NW_DUP_SLOTS];\n'
+                '    memset(u, 0, sizeof u);\n'
+                '    strncpy(u[0].name, nm, NW_NAME_LEN - 1);\n'
+                '    for (int i = 0; i < NW_DUP_SLOTS; i++) slot[i] = -1;\n'
+                '    if (name_dup(slot, u, 0)) return -2;\n'
+                '    int seen = -1;\n'
+                '    for (int i = 0; i < NW_DUP_SLOTS; i++)\n'
+                '        if (slot[i] >= 0) { if (seen >= 0) return -3; seen = i; }\n'
+                '    return seen;\n'
+                '}\n'
                 'int main(void){\n')
         for nm in names:
-            f.write(f'  printf("%u\\n", hash_name("{nm}") & '
-                    f'(unsigned)(NW_DUP_SLOTS - 1));\n')
+            expect(all(c.isalnum() or c in "_-" for c in nm) and nm,
+                   f"probe name {nm!r} is not a legal unit name")
+            f.write(f'  printf("%d\\n", where("{nm}"));\n')
         f.write("  return 0;\n}\n")
-    exe = f"{WORK}/hashprobe"
-    c = run(["gcc", "-std=gnu11", f"-I{ROOT}", "-o", exe, src])
-    expect(c.returncode == 0, f"hash probe build\n{c.out}{c.err}")
+    exe = f"{WORK}/slotprobe"
+    c = run(["gcc", "-std=gnu11", f"-I{srcdir}", "-o", exe, src])
+    expect(c.returncode == 0, f"slot probe build\n{c.out}{c.err}")
     p = run([exe])
-    expect(p.returncode == 0, f"hash probe\n{p.out}{p.err}")
+    expect(p.returncode == 0, f"slot probe\n{p.out}{p.err}")
     got = [int(x) for x in p.out.split()]
-    expect(len(got) == len(names), f"hash probe output\n{p.out}")
-    expect(all(0 <= s < slots for s in got), f"slot out of range\n{p.out}")
+    expect(len(got) == len(names), f"slot probe output\n{p.out}")
+    # -2 means name_dup called a single name in an empty table a duplicate;
+    # -3 means it wrote more than one entry. Either would make every
+    # collision below meaningless, so they fail here rather than downstream.
+    expect(all(0 <= s < slots for s in got),
+           f"name_dup did not record exactly one slot per name: "
+           f"{[(n, s) for n, s in zip(names, got) if not 0 <= s < slots][:4]}")
     return got
 
 
@@ -934,9 +983,10 @@ def test_dupname_refused():
         # indistinguishable in the log and to nw-sup, which takes the name as
         # argv. The city must not open.
         rc, out = boot(plan=path, hold=400)
-        expect("HALT" in out,
-               f"a duplicate plan must not open the city ({what})"
-               f"\n{out[-1500:]}")
+        expect("nw-check reject: duplicate name" in out
+               and "HALT: plan" in out,
+               f"a duplicate plan must be refused by name, not merely halt "
+               f"on ({what})\n{out[-1500:]}")
 
     # The pairing. Every assertion above is a rejection, and a checker that
     # answers NW_E_DUPNAME to everything satisfies all of them: emptying the
@@ -999,11 +1049,23 @@ def test_checker_rejects_crafted_fields():
         open(path, "wb").write(bytes(d))
         return path
 
+    # Every value outside each closed set, not one representative. A single
+    # crafted kind of 2 is satisfied by `if (kind == 2) return NW_E_KIND;`,
+    # and a single lid bit of 0x10 by `if (lids & 0x10)`: both leave the
+    # other values accepted and the whole suite green. `control` produced
+    # exactly those two mutants. A loop costs nothing here -- the crafted
+    # blob is rebuilt either way -- and it is the difference between pinning
+    # a closed set and pinning one member of it.
+    LEGAL_LIDS = 1 | 2 | 4 | 8          # seccomp landlock newns newnet
     cases = [
-        ("kind", [(KIND_OFF, 2)], "kind",
-         "a kind outside the two the runtime knows"),
-        ("lids", [(LIDS_OFF, 1 | 4 | 0x10)], "lids",
-         "a lid bit outside the closed set"),
+        (f"kind{k}", [(KIND_OFF, k)], "kind",
+         f"kind={k}, outside the two the runtime knows")
+        for k in (2, 3, 127, 255)
+    ] + [
+        (f"lid{bit:#04x}", [(LIDS_OFF, 1 | 4 | bit)], "lids",
+         f"lid bit {bit:#04x}, outside the closed set")
+        for bit in (0x10, 0x20, 0x40, 0x80)
+    ] + [
         # Landlock grants read and execute beneath the house's root, which
         # restricts nothing when the root is the machine's. Clear the brick
         # and ask for the lid: NW_E_LLBRICK, not a house confined to /.
@@ -1020,15 +1082,29 @@ def test_checker_rejects_crafted_fields():
         expect(reason in (r.out + r.err),
                f"{why}: wrong reason for {what}\n{r.out}{r.err}")
 
-    # The pairing: the unmodified blob these were cut from must be accepted,
-    # or every assertion above is satisfied by a checker that rejects
-    # everything -- including one that rejects this shape for an unrelated
-    # reason and never reaches the three checks at all.
-    r = run([f"{BIN}/nw-check", good])
-    expect(r.returncode == 0,
-           f"the blob the crafted ones were cut from must pass"
-           f"\n{r.out}{r.err}")
-    print("ok checker-rejects-crafted (kind, lids, landlock-without-brick)")
+    # The pairing, from both sides of each closed set. The unmodified blob
+    # must be accepted -- otherwise every rejection above is satisfied by a
+    # checker that rejects everything, including one that never reaches
+    # these checks at all. And every *legal* value must be accepted too, or
+    # the rejections are satisfied by a checker whose set is narrower than
+    # the plan language: dropping NW_LID_NEWNET from the allow-mask left the
+    # entire suite green, because no test in it had ever declared newnet,
+    # and the TCB could have rejected every lids=newnet plan unnoticed.
+    # `control` found that; this is the half that was missing.
+    ok_cases = [("unmodified", [])]
+    ok_cases += [(f"kind={k}", [(KIND_OFF, k)]) for k in (0, 1)]
+    ok_cases += [(f"lids={bit:#04x}", [(LIDS_OFF, bit | 4)])
+                 for bit in (1, 2, 4, 8)]
+    ok_cases += [("lids=all-legal", [(LIDS_OFF, LEGAL_LIDS)])]
+    for why, edits in ok_cases:
+        path = craft("ok-" + why.replace("=", ""), edits) if edits else good
+        r = run([f"{BIN}/nw-check", path])
+        expect(r.returncode == 0,
+               f"nw-check rejected a legal plan ({why}): the closed set in "
+               f"the TCB is narrower than the one the baker emits"
+               f"\n{r.out}{r.err}")
+    print("ok checker-rejects-crafted (every illegal kind and lid bit "
+          "refused, every legal one accepted)")
 
 
 def test_non_provision_at_max():
@@ -1141,7 +1217,29 @@ def test_harness_runs_fresh_binaries():
     expect(not stale,
            f"the suite is running binaries that are not the ones just built: "
            f"{stale} -- run `make stage`, not `make`")
-    print("ok harness-runs-fresh-binaries")
+
+    # And the sources must not be newer than the binaries. The comparison
+    # above is two binaries, so it is green by construction when neither was
+    # rebuilt: editing nwcheck.c and running the suite with no make at all
+    # passes it, and every source-reading test in this suite -- the staged
+    # src/ probe, blob_h(), the layout offsets -- is then answering for code
+    # that is not under test. Found by `control`, which reproduced it by
+    # changing hash_name and running the suite with no build step.
+    #
+    # mtime, not content: there is no build output to compare against, and
+    # the question is "was this edited after the build", which is what mtime
+    # answers.
+    newest = max((os.path.getmtime(os.path.join(ROOT, f)),
+                  f) for f in os.listdir(ROOT)
+                 if f.endswith((".c", ".h")))
+    oldest = min((os.path.getmtime(f"{BIN}/{b}"), b)
+                 for b in ("nw-root", "nw-check", "nw-sup"))
+    expect(newest[0] <= oldest[0],
+           f"{newest[1]} was modified after {oldest[1]} was staged: the "
+           f"binaries under test do not contain that edit, and the tests "
+           f"that read sources will answer for code nothing is running. "
+           f"Run `make stage`.")
+    print("ok harness-runs-fresh-binaries (content and mtime)")
 
 
 def test_coverage_accounting():

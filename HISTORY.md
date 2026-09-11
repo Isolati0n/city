@@ -2101,3 +2101,70 @@ the table; truncating the probe chain to one slot did not fail it, because
 `nwcheck.c`'s own hash puts in the same slot, asked at run time through a
 throwaway that includes the translation unit, and truncating the chain fails
 it. A control that passes is not good news.
+
+## 30. Three reviewers, three ways the new tests lied (2026-09-11)
+
+§29's tests were run with controls before they were believed, and they still
+had three defects. All three were found by reviewers, each with a
+reproduction, and all three are the same shape: **a guard living in a
+different artefact from the thing it guards.**
+
+**The slot probe recomputed the mask.** `c_name_slots` asked `nwcheck.c`'s
+real `hash_name` and then applied `& (NW_DUP_SLOTS - 1)` itself — a second
+copy of an expression that also lives in `name_dup`. Changing `name_dup`'s
+derivation to `(hv >> 16) & (NW_DUP_SLOTS - 1)` left the probe answering for
+the old one: the planted pair no longer collided, the collision case became a
+second plain duplicate, the truncate-the-chain control stopped failing, and
+the suite still printed `a real collision on slot 80`. Found by `control`.
+The probe now runs `name_dup` itself against a fresh table and reports which
+slot stopped being -1 — the slot observed through the code under test, with
+no expression duplicated. The shifted-derivation mutant now fails the test.
+
+**The probe compiled from the source tree.** Every binary the suite runs
+comes from the stage; this helper was the first place it took an
+*algorithm*, and it took it from `ROOT`. With a stale stage the probe
+answered for code the binary under test did not contain. Found by
+`fd-auditor`. `make stage` now copies `nwcheck.c` and `blob.h` beside the
+binaries built from them, and the probe compiles from there, so the two
+cannot disagree. `harness-runs-fresh-binaries` also compared two binaries —
+green by construction when neither was rebuilt — and now checks source mtime
+against staged mtime too.
+
+**The closed sets were pinned at one member each.** One crafted `kind=2` is
+satisfied by `if (kind == 2)`; one crafted lid bit `0x10` by
+`if (lids & 0x10)`. Worse in the other direction: dropping `NW_LID_NEWNET`
+from the allow-mask left the **entire suite** green, because no test had ever
+declared `newnet`, so the TCB could have rejected every `lids=newnet` plan
+unnoticed. Found by `control`. Every illegal value is now crafted and every
+legal one accepted — both sides, which is what makes it a closed set rather
+than a list of examples.
+
+Two drift sites of the §29 class were found in the same round, by
+`fd-auditor`, and fixed the same way — one number, derived:
+
+- **`errs[]`'s length was a second declaration of the `NW_E_*` count.** Add a
+  code, update `nw_errstr`'s bound, forget the string: builds clean under
+  `-Wall -Wextra -Werror`, then segfaults in `nw_errstr`, which `pid1.c`
+  calls at boot on the value `nw_check` returned. Now an `NW_E__COUNT`
+  terminator with a `_Static_assert`. It has to be the terminator: anchoring
+  on `NW_E_LLBRICK + 1` compiles clean against a drifted enum, because the
+  anchor moves with the thing it pins. Both measured.
+- **The maximum blob size was written five times in three TCB files** —
+  `1<<16` in `pid1.c` and `nwspawn.c`, `1<<20` in `nwcheck_main.c`, against
+  the 33,428 bytes the format actually permits. At `NW_MAX_UNITS = 187` with
+  a full bind table, a plan `nw-check` accepts makes PID 1 halt on
+  `plan size`. Now `NW_BLOB_MAX`, computed in `blob.h` from the limits it
+  already has.
+
+And the tool that was supposed to make reviewing cheap was itself lying: the
+packet's environment block read `NW_SUITE_LOG` or `/dev/null`, so with the
+variable unset `sed` succeeded, printed nothing, and the `||` fallback never
+fired. Every reviewer got an **empty** environment block while `CLAUDE.md`
+requires reporting that block with any result. A fallback that only runs on
+failure does not cover a command that succeeds and produces nothing. It asks
+the suite directly now, and says so loudly when it cannot.
+
+The rule this round earns: **run the controls, then have someone else run
+the controls you did not think of.** Three of the five mutants above are ones
+I would not have written, and each of them left a green suite printing a
+sentence that was false.

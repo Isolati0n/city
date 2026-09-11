@@ -53,8 +53,28 @@ echo '```'
 echo
 echo "## Environment the suite reports"
 echo '```'
-sed -n '/^== environment ==/,/^$/p' "${NW_SUITE_LOG:-/dev/null}" 2>/dev/null \
-  || echo "(run: make test 2>&1 | tee suite.log; NW_SUITE_LOG=suite.log)"
+# Ask the suite, do not scrape a log. This read NW_SUITE_LOG or /dev/null
+# until 2026-09-11: with the variable unset, sed on /dev/null succeeded and
+# printed nothing, the `||` fallback never fired, and the packet carried an
+# EMPTY block -- so every reviewer was handed a file whose environment
+# section said nothing, while CLAUDE.md requires reporting that block with
+# any suite result. fd-auditor read the empty block and went and generated
+# its own. A fallback that only runs on failure does not cover the case
+# where the command succeeds and produces nothing.
+env_block=$(NW_STAGE="${NW_STAGE:-/tmp/nw-init-run}" python3 -c '
+import runpy, sys
+m = runpy.run_path("tests/run.py")
+m["print_environment"]()
+' 2>&1) || env_block=""
+if printf '%s' "$env_block" | grep -q "^== environment =="; then
+    printf '%s\n' "$env_block"
+else
+    echo "COULD NOT DETERMINE THE ENVIRONMENT. This is not an empty"
+    echo "environment: it means tests/run.py would not run here, usually"
+    echo "because nothing is staged. Run 'make stage' and re-pack. Do not"
+    echo "report a suite result against this packet without a real block."
+    [ -n "$env_block" ] && printf '%s\n' "$env_block"
+fi
 echo '```'
 echo
 echo "Read your brief in \`.claude/agents/\` and apply it to the diff above."

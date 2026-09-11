@@ -13,3 +13,4 @@ unit-*
 *.gcov
 *.gcno
 *.gcda
+__pycache__/

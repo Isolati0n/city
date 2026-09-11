@@ -145,7 +145,7 @@ int main(int argc, char **argv)
 
     int bfd = open(blob_path, O_RDONLY);
     if (bfd < 0) die("open blob");
-    static unsigned char blob[1 << 16];
+    static unsigned char blob[NW_BLOB_MAX];
     ssize_t n = read(bfd, blob, sizeof blob);
     close(bfd);
     if (n <= 0) die("read blob");

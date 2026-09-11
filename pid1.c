@@ -285,8 +285,12 @@ int main(int argc, char **argv)
     if (fd < 0) halt_now("open plan");
     struct stat st;
     if (fstat(fd, &st) < 0) halt_now("stat plan");
-    if (st.st_size <= 0 || st.st_size > 1 << 16) halt_now("plan size");
-    static unsigned char blob[1 << 16];
+    /* NW_BLOB_MAX, not a hand-written ceiling: this and nwcheck_main.c
+     * disagreed by a factor of sixteen, and neither matched what the
+     * format permits. blob.h computes it. */
+    if (st.st_size <= 0 || (uint32_t)st.st_size > NW_BLOB_MAX)
+        halt_now("plan size");
+    static unsigned char blob[NW_BLOB_MAX];
     ssize_t n = read(fd, blob, (size_t)st.st_size);
     close(fd);
     if (n != st.st_size) halt_now("plan read");

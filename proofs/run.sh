@@ -49,12 +49,27 @@ CHECKS="--bounds-check --pointer-check --signed-overflow-check
 #                  empty table and N units at most N slots are taken, so a
 #                  probe cannot walk further. Not an assumption.
 #   caller         nw_check.4 is the unit loop and is what must be bounded;
-#                  nw_check.2 is the 128-entry slot init and bounding THAT
-#                  costs a run to a spurious unwinding failure.
+#                  nw_check.2 is the slot init and bounding THAT costs a run
+#                  to a spurious unwinding failure.
+
+# Read the limits from blob.h rather than restating them. They were bare
+# literals here until 2026-09-11 -- a 128 and five 33s, which are
+# NW_DUP_SLOTS and NW_NAME_LEN + 1 under other names, in a file the drift
+# check does not cover. `drift` measured that a stale bound fails loudly
+# (--unwinding-assertions turns it into a FAILURE, not a truncated search),
+# so this was never going to be silent; deriving it means it is not wrong
+# either. Invariant 3 does not stop at the TCB.
+blob_h() { awk -v k="$2" '$1=="#define" && $2==k {print $3}' "$1"; }
+DUP_SLOTS=$(blob_h blob.h NW_DUP_SLOTS)
+NAME_LEN=$(blob_h blob.h NW_NAME_LEN)
+[ -n "$DUP_SLOTS" ] && [ -n "$NAME_LEN" ] || {
+    echo "proofs: blob.h has no NW_DUP_SLOTS or no NW_NAME_LEN" >&2; exit 1; }
+
 LEAF_PATH_UNW="--unwind 200"
 LEAF_NAME_UNW="--unwind 200"
 DUP_UNITS=${PROOF_UNITS:-2}
-DUP_UNW="--unwind 5 --unwindset name_dup.1:$((DUP_UNITS + 2)),name_dup.0:33,hash_name.0:33,fields_equal.0:33,main.0:33,main.1:33,main.2:$((128 + 1))"
+N1=$((NAME_LEN + 1))
+DUP_UNW="--unwind 5 --unwindset name_dup.1:$((DUP_UNITS + 2)),name_dup.0:$N1,hash_name.0:$N1,fields_equal.0:$N1,main.0:$N1,main.1:$N1,main.2:$((DUP_SLOTS + 1))"
 CALLER_UNW="--unwind 200 --unwindset nw_check.4:2"
 
 expect() {       # expect PASS|FAIL NAME cbmc-args...  -> $OUT/NAME.txt

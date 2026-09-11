@@ -53,10 +53,18 @@ it. Recorded rather than quietly corrected, because inventing a plausible
 cause for a discrepancy is the same failure as asserting a mechanism works
 without running it.*
 
+*This section records the state on 2026-09-10, when coverage was first
+measured. Every item in it has since been acted on; read it as history, not
+as a description of the tree. The measurement today is 99%, with one
+uncovered line — `name_dup`'s full-table return, which the `NW_DUP_SLOTS`
+assert makes unreachable.*
+
 Eighteen lines never execute, and which ones is the finding:
 
 - **`nw_crc32` is dead.** Exported in `blob.h`, defined in `nwcheck.c`,
   called by nothing — `grep` finds only the declaration and the definition.
+  (Deleted 2026-09-11; it survived the first extraction as a delegating
+  wrapper that still had no caller.)
   Meanwhile `nw_check` carries its **own inlined copy** of the same CRC loop.
   A second copy of an algorithm in a TCB file, which is the exact class
   invariant 3 exists for.
@@ -130,12 +138,17 @@ checksum, not weaker. The CRC's own correctness is a separate, easy
 obligation — differential test against `zlib.crc32`, which the baker already
 uses.
 
-**So one change fixes both problems at once**: have `nw_check` call the
-`nw_crc32` that already exists instead of inlining a duplicate. That removes
-the second copy of the CRC from the TCB *and* makes the validator
-model-checkable. **This is the item that needs a decision**, because it edits
-`nwcheck.c`. It is a small change with an unusually good ratio, and the gate
-requires `tcb-review` before it is pushed.
+**So one change fixes both problems at once**: have `nw_check` call a shared
+CRC instead of inlining a duplicate. That removes the second copy of the CRC
+from the TCB *and* makes the validator model-checkable. **This is the item
+that needs a decision**, because it edits `nwcheck.c`. It is a small change
+with an unusually good ratio, and the gate requires `tcb-review` before it is
+pushed.
+
+*Done, 2026-09-10, as `nw_crc32_split` — the two-region shape `nw_check`
+actually needs. The one-region `nw_crc32` this paragraph proposed reusing was
+the wrong function for the job and had no caller either way; it was deleted
+the following day.*
 
 ## Tier A — ACHIEVED for one unit, 2026-09-11
 

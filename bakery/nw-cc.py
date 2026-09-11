@@ -1,8 +1,20 @@
 #!/usr/bin/env python3
 """nw-cc stand-in (Haskell/OCaml baker). Not in the TCB.
 
-Encodes the Alloy assertions: unique names, derived fd budget,
-closed lid set. Lockfile = the blob. Never rebuild-switch.
+Refuses what nwcheck.c refuses, and refuses it independently: the derived fd
+budget, the closed lid set, a brick forcing newns, a bind requiring a brick,
+and unique names. The baker refuses; it does not repair.
+
+This said "encodes the Alloy assertions: unique names, derived fd budget,
+closed lid set" until 2026-09-11. Two of the three are in plan.als
+(`fdNeed`, the lid set); **unique names is not, and never was** -- `grep` for
+"name" in plan.als returns a comment and `fact namesAreHouses`, which despite
+its identifier is a nonemptiness fact about `#House`. `House` has no name
+field, so there is nothing there for a uniqueness fact to be about. Found by
+`drift`. Rewritten to describe what this file does rather than to claim
+provenance it does not have.
+
+Lockfile = the blob. Never rebuild-switch.
 """
 from __future__ import annotations
 

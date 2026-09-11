@@ -50,4 +50,20 @@ fun bindNeed[]: Int { #(House.binds) }
 
 pred sealed { fdNeed[] <= 1024 and bindNeed[] <= 128 }
 
+/* NOT a unit limit. `for 8 House` is Alloy's search scope -- how large a
+   model it will look for a counterexample in -- and it is 8 against
+   NW_MAX_UNITS = 64 in blob.h, MAX_UNITS in bakery/nw-cc.py and MaxUnits in
+   Plan.tla. This file declares no upper bound on #House at all, so there is
+   nothing here for those three to drift against; what would drift is a
+   reader taking 8 for the limit. Raising the scope costs solver time and
+   proves nothing extra about a bound that is not stated.
+
+   Recorded 2026-09-11 after `drift` reported the 8-versus-64 row as a
+   mismatch. It is a real question and the answer is that the cell is empty,
+   not that the numbers disagree -- which is worth writing down here, because
+   the next reader will ask it again.
+
+   Also empty, for the same kind of reason: this file has no notion of a unit
+   *name*. Name uniqueness is enforced in nwcheck.c and in the baker, and is
+   not modelled here. */
 run sealed for 8 House

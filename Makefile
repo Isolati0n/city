@@ -61,6 +61,15 @@ stage: all
 	cp -f nw-dawn nw-root nw-spawn nw-check nw-sup nw-rescue \
 	      unit-probe unit-boom unit-badcall unit-term unit-brick $(STAGE)/nw/bin/
 	chmod +x $(STAGE)/nw/bin/*
+	# The sources the staged binaries were built from, staged with them.
+	# tests/run.py's hash probe compiles nwcheck.c to ask which slot a name
+	# lands in, and it must ask the code under test, not the tree. Compiling
+	# from ROOT against a stale stage made the collision case degrade to a
+	# plain duplicate while still printing "a real collision" -- the staging
+	# trap inside a test, found by fd-auditor. Staged together, they cannot
+	# disagree.
+	mkdir -p $(STAGE)/src
+	cp -f nwcheck.c blob.h $(STAGE)/src/
 	python3 bakery/nw-cc.py --probe $(STAGE)/nw/bin/unit-probe \
 	    --out $(STAGE)/efi/slots/A/plan.blob --lids seccomp
 	printf 'house solo %s/nw/bin/unit-probe kind=oneshot lids=seccomp\n' $(STAGE) >  $(STAGE)/work/slot-b.city

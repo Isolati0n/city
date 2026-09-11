@@ -102,6 +102,20 @@ struct nw_hdr {
     (sizeof(struct nw_hdr) + (nu) * sizeof(struct nw_unit) \
                            + (nb) * sizeof(struct nw_bind))
 
+/* The largest a legal blob can be. Every reader of a blob sizes its buffer
+ * and its size check from this, so there is nothing to keep in sync: raising
+ * NW_MAX_UNITS resizes all of them.
+ *
+ * It was five hand-written numbers in three TCB files until 2026-09-11 --
+ * 1<<16 in pid1.c twice and nwspawn.c once, 1<<20 in nwcheck_main.c twice --
+ * none of them related to what the format permits, and two of them
+ * disagreeing by a factor of sixteen. fd-auditor measured the input where
+ * that bites: at NW_MAX_UNITS = 187 with a full bind table, a plan nw-check
+ * accepts makes PID 1 print `plan size` and halt. Every failure was loud, so
+ * this is the same class as NW_DUP_SLOTS caught earlier rather than a bug
+ * that shipped -- and the class is what invariant 3 is about. */
+#define NW_BLOB_MAX ((uint32_t)NW_BLOB_SIZE(NW_MAX_UNITS, NW_MAX_BINDS))
+
 enum {
     NW_OK = 0,
     NW_E_MAGIC = 1,
@@ -119,7 +133,21 @@ enum {
     NW_E_BINDS = 13,
     NW_E_BINDIDX = 14,
     NW_E_BINDPATH = 15,
-    NW_E_LLBRICK = 16
+    NW_E_LLBRICK = 16,
+    /* Terminator, not a code. nw_errstr's bound and the length of errs[] in
+     * nwcheck.c are both derived from it, so the three things that must
+     * agree -- last code, array length, bound -- become one number.
+     *
+     * They were three separate declarations held together by a sentence in
+     * .claude/rules/plan.md until 2026-09-11. Adding a code and updating the
+     * bound while forgetting the string built clean under -Wall -Wextra
+     * -Werror and segfaulted in nw_errstr, which pid1.c calls at boot on the
+     * value nw_check returned. Found by fd-auditor.
+     *
+     * It must be the terminator and not NW_E_LLBRICK + 1: anchoring on the
+     * last code makes the anchor move with the thing it is meant to pin, and
+     * that version compiles clean against a drifted enum. Also measured. */
+    NW_E__COUNT
 };
 
 const char *nw_errstr(int e);
