@@ -1,9 +1,20 @@
 #ifndef NW_BLOB_H
 #define NW_BLOB_H
 
+#include <stddef.h>
 #include <stdint.h>
 
-#define NW_MAGIC        "NWPLAN05"
+/* Bumped 05 -> 06 on 2026-09-11, when window_s left struct nw_unit.
+ * The layout changed and the magic did not, so every pre-change blob was
+ * refused as NW_E_SIZE ("size") -- correct verdict, wrong diagnosis. An
+ * operator reads "size" as a truncated or corrupt file and goes looking
+ * for a bad copy; the truth was "this slot holds a plan the previous
+ * nw-cc baked". NW_E_MAGIC is the code that names that, and it had been
+ * made unreachable for the one class it exists for: one channel carrying
+ * two meanings, separated only by which integer, which is bug 9's shape.
+ * Found independently by drift and tcb-review, each with the reproduction.
+ * The magic and the layout move together or the diagnosis lies. */
+#define NW_MAGIC        "NWPLAN06"
 #define NW_NAME_LEN     32
 #define NW_PATH_LEN     128
 #define NW_BRICK_LEN    96    /* "/nw/bricks/" + 64 hex + NUL */
@@ -97,21 +108,55 @@ struct nw_hdr {
     uint32_t crc32;
 } __attribute__((packed));
 
-/* NWPLAN05 and sizeof(nw_unit) are one agreement. window_s left the
- * trailer (kind, budget, lids, pad = 4 bytes) and the magic stayed
- * NWPLAN05 only because the baker and this struct moved together.
- * There was no compile-time pin: two editors could change the
- * trailer and the magic independently and both builds would be
- * green against different on-disk layouts. Found empty 2026-09-11
- * while rebasing stay-up onto the proofs work that was editing
- * the same struct. */
+/* The on-disk layout, pinned field by field.
+ *
+ * WHAT THIS CATCHES AND WHAT IT DOES NOT, because the comment that stood
+ * here claimed more than the code did. It said "NWPLAN05 and
+ * sizeof(nw_unit) are one agreement"; the assert it introduced mentions
+ * no magic, and a SIZE constant cannot see a REORDER. `drift` and
+ * `fd-auditor` found that independently, with the same reproduction:
+ * swap `budget` and `lids` in the struct above and the build is green
+ * under -Werror with every assert passing, while a plan that declares
+ * `lids=none` boots under seccomp and its restart budget silently
+ * becomes 0. Green build, green assert, nw-check says OK -- this
+ * project's characteristic failure standing next to the guard that was
+ * supposed to prevent it.
+ *
+ * Caught now: a field added, removed, resized or MOVED, and `_pad`
+ * reused for something with a different offset. The offsets are the
+ * layout, so pinning them is pinning the format.
+ *
+ * NOT caught, and there is no version field to catch it with: changing
+ * what a byte MEANS while leaving it where it is -- redefining `kind`'s
+ * values, say. Only the magic can carry that, and nothing forces the
+ * magic to move when the layout does. That gap is real and named here
+ * rather than papered over; docs/options/09 is where a `unit_size` or a
+ * version field would be argued if it is worth one.
+ *
+ * The trailing 4 is deliberately the only hand-written number: the other
+ * three terms are the same macros the struct uses, so they cannot drift,
+ * and a wrong 4 is a build error rather than a wrong blob. */
 #define NW_UNIT_SIZE (NW_NAME_LEN + NW_PATH_LEN + NW_BRICK_LEN + 4)
 _Static_assert(sizeof(struct nw_unit) == NW_UNIT_SIZE,
-               "NWPLAN05 unit size drifted from the magic");
-_Static_assert(sizeof(NW_MAGIC) - 1 == 8,
-               "magic must fill nw_hdr.magic");
-_Static_assert(sizeof(struct nw_hdr) == 20,
-               "hdr is magic[8] + 3 * u32");
+               "unit size drifted: a field was added, removed or resized");
+_Static_assert(offsetof(struct nw_unit, name)      == 0,   "name moved");
+_Static_assert(offsetof(struct nw_unit, exec_path) == 32,  "exec_path moved");
+_Static_assert(offsetof(struct nw_unit, brick)     == 160, "brick moved");
+_Static_assert(offsetof(struct nw_unit, kind)      == 256, "kind moved");
+_Static_assert(offsetof(struct nw_unit, budget)    == 257, "budget moved");
+_Static_assert(offsetof(struct nw_unit, lids)      == 258, "lids moved");
+_Static_assert(offsetof(struct nw_unit, _pad)      == 259, "_pad moved");
+
+_Static_assert(sizeof(struct nw_bind) == 130, "bind size drifted");
+_Static_assert(offsetof(struct nw_bind, unit) == 0, "bind.unit moved");
+_Static_assert(offsetof(struct nw_bind, path) == 2, "bind.path moved");
+
+_Static_assert(sizeof(NW_MAGIC) - 1 == 8, "magic must fill nw_hdr.magic");
+_Static_assert(sizeof(struct nw_hdr) == 20, "hdr is magic[8] + 3 * u32");
+_Static_assert(offsetof(struct nw_hdr, magic)   == 0,  "hdr.magic moved");
+_Static_assert(offsetof(struct nw_hdr, n_units) == 8,  "hdr.n_units moved");
+_Static_assert(offsetof(struct nw_hdr, n_binds) == 12, "hdr.n_binds moved");
+_Static_assert(offsetof(struct nw_hdr, crc32)   == 16, "hdr.crc32 moved");
 
 #define NW_BLOB_SIZE(nu, nb) \
     (sizeof(struct nw_hdr) + (nu) * sizeof(struct nw_unit) \

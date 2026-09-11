@@ -91,6 +91,19 @@ def sha256_of(path):
     return h.hexdigest()
 
 
+# PID 1's shutdown grace, read from the source rather than written down:
+# test_shutdown_does_not_restart can only observe a restart that lands
+# inside it, and that margin belongs in the ok line.
+def pid1_grace_ms():
+    import re
+    src = open(os.path.join(ROOT, "pid1.c")).read()
+    m = re.search(r"NW_GRACE_MS\s+(\d+)", src) or \
+        re.search(r"grace[^\n]*?(\d{3,4})\s*(?:;|\))", src, re.I)
+    return int(m.group(1)) if m else 400
+
+
+PID1_GRACE_MS = pid1_grace_ms()
+
 SKIPPED = []
 
 
@@ -284,7 +297,14 @@ def test_baker_rejects():
     open(city, "w").write("house a /bin/true kind=oneshot window=1 lids=none\n")
     p = run(["python3", CC, "--city", city, "--out", f"{WORK}/nope.blob"])
     expect(p.returncode != 0, "window= must fail the bake")
-    expect("window=" in (p.out + p.err), f"reason\n{p.out}{p.err}")
+    # A distinctive substring of the D18 message, not the key echoed back:
+    # deleting the `elif k == "window"` branch entirely falls through to
+    # the generic "unknown key window=" and `"window=" in out` is still
+    # satisfied, so the reasoning could be deleted from the baker and
+    # nothing would notice. `control` ran that mutant.
+    expect("hard total" in (p.out + p.err),
+           f"window= was refused, but not by the D18 branch -- the message "
+           f"does not explain why\n{p.out}{p.err}")
     print("ok baker-reject-dupname+window")
 
 
@@ -610,6 +630,14 @@ def test_term_signal():
     rc, out = boot(plan=blob, hold=500)
     expect(city_closed(rc, out), f"term rc={rc}\n{out}")
     expect("sigterm_blocked=0" in out, f"house inherited a blocked mask\n{out}")
+    # The house must actually DIE, not merely receive TERM. A restart can
+    # only follow an exit, so asserting only that the handler ran leaves
+    # the test green against a fixture whose handler prints and keeps
+    # looping -- `control` built exactly that and watched this test pass
+    # with the branch it exists for deleted.
+    expect("exiting cleanly after TERM" in out,
+           f"the house took TERM but never exited, so nothing could have "
+           f"restarted and this test proved nothing\n{out[-1200:]}")
     expect("SIGTERM handler ran" in out, f"handler never ran\n{out}")
     expect("exiting cleanly after TERM" in out, f"no clean exit\n{out}")
     expect("houses_reaped=1" in out, f"house was killed, not reaped\n{out}")
@@ -653,8 +681,23 @@ def test_budget_is_hard_total():
     blob = f"{WORK}/d18.blob"
     b = run(["python3", CC, "--city", city, "--out", blob])
     expect(b.returncode == 0, f"bake\n{b.out}{b.err}")
-    # 3 deaths * 1.2s plus spawn/shutdown slack. A sliding 1s window
-    # would log death=4 before this deadline.
+    # 3 deaths * 1.2s plus spawn/shutdown slack.
+    #
+    # CORRECTION: this said a sliding 1s window "would log death=4 before
+    # this deadline". It would not -- a window resets the tally to 0 before
+    # the increment, so every line reads death=1 forever and
+    # `death=4 not in out` is satisfied by the exact defect it names. The
+    # assertions that catch a restored window are `death=2 in out` and
+    # `n == 3`. `control` ran the mutant and read the log.
+    #
+    # STILL NOT PINNED, stated because the suite should not imply more than
+    # it proves: a window LONGER than this hold is green here. `control`
+    # restored a 30-second window and the whole suite passed, budget
+    # unbounded again. What this test pins is "no reset inside a 7s hold",
+    # which is a property of the fixture's 1.2s interval, not of the budget
+    # being a hard total. Pinning that needs deaths spaced further apart
+    # than any plausible window, which is a slow test and a design call for
+    # whoever owns the restart loop.
     rc, out = boot(plan=blob, hold=7000)
     expect(city_closed(rc, out), f"city should survive, rc={rc}\n{out}")
     expect("restart drip death=1" in out, f"first restart missing\n{out}")
@@ -683,9 +726,24 @@ def test_shutdown_does_not_restart():
     rc, out = boot(plan=blob, hold=500)
     expect(city_closed(rc, out), f"shutdown rc={rc}\n{out}")
     expect("SIGTERM handler ran" in out, f"house never saw TERM\n{out}")
+    # The house must actually DIE. A restart can only follow an exit, so
+    # "took TERM" alone leaves this green against a fixture whose handler
+    # prints and keeps looping -- `control` built that and watched the
+    # test pass with the branch it exists for deleted.
+    expect("exiting cleanly after TERM" in out,
+           f"the house took TERM but never exited, so nothing could have "
+           f"restarted and this test proved nothing\n{out}")
     expect("restart stay" not in out,
            f"supervisor restarted during shutdown\n{out}")
-    print("ok shutdown-no-restart")
+    # The margin is not incidental: the restart has to land inside PID 1's
+    # grace window to be observable at all. `control` measured the edge by
+    # delaying the restart -- 100ms and 300ms fail the test, 450ms passes
+    # it, because PID 1 SIGKILLs the supervisor before the line exists. So
+    # a supervisor that restarts a SLOW-exiting house during shutdown still
+    # reads green here, which is nearer to the QEMU repro than this test is.
+    print(f"ok shutdown-no-restart (observed inside shutdown_city's "
+          f"{PID1_GRACE_MS}ms grace; a restart later than that is invisible "
+          f"to this test)")
 
 
 def test_seccomp_kills():
@@ -1481,11 +1539,28 @@ def test_blob_size_ceiling():
     expect(r.returncode == 0,
            f"nw-check refused the largest legal blob\n{r.out}{r.err}")
 
+    # And it must BOOT, not merely validate. nw-check accepting it says
+    # nothing about the other two readers: changing pid1.c's ceiling test
+    # from `>` to `>=` left this whole suite green while PID 1 answered
+    # `HALT: plan size` to a plan nw-check had just called OK -- verbatim
+    # the failure blob.h says NW_BLOB_MAX exists to prevent, reintroduced,
+    # with the test written for it not seeing it. Found by `control`.
+    rc, out = boot(plan=good, hold=900)
+    expect(f"houses={nu}" in out,
+           f"the largest legal blob validates but does not boot: some "
+           f"reader is refusing a plan nw-check accepts -- PID 1 halts on "
+           f"`plan size`, nw-spawn dies on `blob size`\n{out[-1200:]}")
+    expect(f"houses_reaped={nu}" in out,
+           f"the largest legal plan booted but did not reap\n{out[-1200:]}")
+
     # One byte over. Refused for its size by nw-check and by PID 1, and --
     # the half that regressed -- nw-spawn's recheck must not accept the
     # truncated prefix either.
     over = f"{WORK}/maxblob-plus.blob"
-    open(over, "wb").write(open(good, "rb").read() + b"\\x00")
+    # ONE byte. This was b"\\x00" -- four ASCII characters, not a NUL --
+    # so the `ok` line said "+1 refused" about a +4 file, in the test whose
+    # entire job is a one-byte boundary. `control` measured it at 33304.
+    open(over, "wb").write(open(good, "rb").read() + b"\x00")
     r = run([f"{BIN}/nw-check", over])
     expect(r.returncode != 0 and "blob size" in (r.out + r.err),
            f"nw-check accepted a blob one byte over the ceiling"

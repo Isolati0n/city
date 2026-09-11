@@ -176,14 +176,28 @@ gcc -static -O2 -s -o "$IRD/init" "$BUILD/initrd-init.c"
 cp -f "$BUILD/nw-dawn" "$IRD/dawn"
 chmod 0755 "$IRD/init" "$IRD/dawn"
 
-KBASE=$(basename "$KERNEL")
+# Resolve the symlink first: KERNEL defaults to /boot/vmlinuz, whose
+# basename is "vmlinuz", so stripping the "vmlinuz-" prefix left "vmlinuz"
+# and /lib/modules/vmlinuz never exists. The fallback then picked the HOST
+# kernel's modules -- which by construction are not the guest's -- staged
+# no NLS module, and dawn failed to mount the FAT ESP with errno 22. That
+# surfaced as `Attempted to kill init`, so `make qemu` with the default
+# KERNEL panicked every time on the machine it was written on and the
+# failure read as a dawn bug. tcb-review.
+KREAL=$(readlink -f "$KERNEL" 2>/dev/null || echo "$KERNEL")
+KBASE=$(basename "$KREAL")
 KREL=${KBASE#vmlinuz-}
 if [ -d "/lib/modules/$KREL" ]; then
     MODDIR=/lib/modules/$KREL
-elif [ -d "/lib/modules/$(uname -r)" ]; then
-    MODDIR=/lib/modules/$(uname -r)
 else
-    MODDIR=
+    # No guess. uname -r is the host kernel and can only ever be wrong
+    # here; staging its modules would load the wrong NLS into the guest
+    # or none at all, and the symptom appears in dawn.
+    echo "mkboot: no /lib/modules/$KREL for $KREAL." >&2
+    echo "mkboot: KERNEL= must name a kernel whose modules are installed," >&2
+    echo "mkboot: or one with CONFIG_NLS_ISO8859_1=y. Not guessing with" >&2
+    echo "mkboot: the host's $(uname -r) -- that is not the guest kernel." >&2
+    exit 1
 fi
 if [ -n "$MODDIR" ]; then
     for pair in "nls_iso8859-1:nls_iso8859_1.ko" "nls_utf8:nls_utf8.ko"; do
@@ -271,6 +285,29 @@ if [ "$CHECK" -eq 1 ]; then
         echo "FAIL: HALT" >&2
         exit 1
     fi
-    echo "== check: city open, no panic, no HALT =="
+    # An unattended production boot NEVER shuts down. Seeing it is a
+    # failure, and until 2026-09-11 it was the one outcome this check
+    # could not see: with NW_HOLD_MS on the kernel command line -- the
+    # same channel that carries NW_ROOT -- PID 1 closed the city 800ms
+    # after opening it and powered the machine off, and every grep above
+    # still passed. The panic that the stay-up change removed became a
+    # silent power-off, which is worse than what it replaced: the old
+    # failure printed "Attempted to kill init" and this one printed a
+    # green line. tcb-review found it by putting NW_HOLD_MS in APPEND.
+    if grep -q '\[nw-root\] closed' "$LOG"; then
+        echo "FAIL: the city closed. PID 1 is not supposed to return on an" >&2
+        echo "      unattended boot -- check whether NW_HOLD_MS reached the" >&2
+        echo "      kernel command line." >&2
+        exit 1
+    fi
+    if grep -q 'reboot: Power down\|reboot: System halted' "$LOG"; then
+        echo "FAIL: the machine powered itself off" >&2
+        exit 1
+    fi
+    if grep -q 'Kernel panic' "$LOG"; then
+        echo "FAIL: kernel panic" >&2
+        exit 1
+    fi
+    echo "== check: city open, stayed up, no panic, no HALT =="
 fi
 exit 0

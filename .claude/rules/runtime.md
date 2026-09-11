@@ -53,8 +53,18 @@ environment — so a change to any link is a change to everything below it.
 - **No allocation, no parsing, no recursion after start in PID 1.** The one
   text it reads is `<slots>/current`, at boot, bounded to `NW_NAME_LEN`
   and validated to `[A-Za-z0-9_-]` so it cannot escape the slots directory.
-- **The budget is a ring of timestamps, never a counter** — there is nothing
-  to overflow — and **budgets are never nested.** Bug 3 was a supervisor
+- **The budget is a hard total of deaths for the supervisor's life** —
+  `int deaths` in `nwsup.c`, compared against `budget`, never reset —
+  and **budgets are never nested.**
+
+  *This said "a ring of timestamps, never a counter" until 2026-09-11,
+  and `CLAUDE.md` had already retracted that sentence twice while this
+  copy stayed. There has never been a ring. The sliding window that
+  replaced it in the telling was worse than a wrong description: a reset
+  made the budget unbounded, which is D18. This file is what
+  `tools/rules-hook.sh` hands an agent the moment it edits `nwsup.c`, so
+  a stale rule here is delivered straight into the work. `drift` and
+  `fd-auditor` both found it.* Bug 3 was a supervisor
   giving up, PID 1 restarting it with a fresh budget, and the pair looping.
 - **No compile-time descriptor numbers alongside dynamic allocation.** Bugs
   5, 9 and 13 were one mistake three times, and none of them produced an
@@ -112,9 +122,7 @@ accepted.**
 `nwsup.c` blocks in `waitpid(p, &st, 0)` with no time bound. There is no
 heartbeat, no deadline, no timeout, no `alarm`, no `WNOHANG`. There is no
 field to put one in, and nothing in the plan language or the baker expresses
-a deadline. The only timing primitives in the file serve the restart-budget
-window, which measures how often a house has **died** — not whether a living
-house is still responding. Different problems; the budget does not touch this
+a deadline. There are no timing primitives left in `nwsup.c` at all: `grep` for `clock_gettime`, `now_ms`, `alarm` or `nanosleep` returns nothing since D18 removed the restart-budget window. The budget counts how often a house has **died**. Different problems; the budget does not touch this
 one.
 
 **Why refused:** every form of detection needs a guessed constant, and the

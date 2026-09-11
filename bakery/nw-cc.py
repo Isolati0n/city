@@ -123,7 +123,9 @@ def bake(path, houses):
     table = b""
     for u, p in binds:
         table += struct.pack("<H", u) + pad(p, PATH_LEN)
-    prefix = b"NWPLAN05" + struct.pack("<II", len(houses), len(binds))
+    # Must equal NW_MAGIC in blob.h. tests/run.py asserts that agreement;
+    # the version moves when the layout moves -- see the comment there.
+    prefix = b"NWPLAN06" + struct.pack("<II", len(houses), len(binds))
     crc = zlib.crc32(prefix + struct.pack("<I", 0) + unit + table) & 0xFFFFFFFF
     blob = prefix + struct.pack("<I", crc) + unit + table
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
