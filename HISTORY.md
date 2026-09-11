@@ -3186,7 +3186,7 @@ unit write its line twice and the test fails naming that unit.
 
 Separating routing from interleaving needs per-unit capture. That is the
 logging pass's problem, and it is the second thing that pass now has to
-answer for (the first is the group-TERM drain, §38).
+answer for (the first is the group-TERM drain, §39).
 
 ## 41. Two reviewers against the specs: ~25 findings, most of them mine (2026-09-11)
 

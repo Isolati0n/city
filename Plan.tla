@@ -1,7 +1,7 @@
 ------------------------------ MODULE Plan ------------------------------
 EXTENDS Integers, Sequences, FiniteSets
 
-CONSTANTS MaxUnits, MaxFds, Reserved, MaxBinds
+CONSTANTS MaxUnits, MaxFds, Reserved, MaxBinds, LidNewNS, LidLandlock
 
 (* The constants arrive from specs/Plan.cfg, generated out of blob.h by
    tools/gen-spec-limits.py. This ASSUME used to pin them to literals --
@@ -33,8 +33,11 @@ N == n
    Deleted rather than reordered: a definition with no use is the thing
    that rots. *)
 
-LidNewNS == 4
-LidLandlock == 2
+(* LidNewNS and LidLandlock are CONSTANTS from specs/Plan.cfg now, not
+   `== 4` and `== 2` written here. They were hand-copied from blob.h's
+   NW_LID_NEWNS and NW_LID_LANDLOCK, checked by nothing, and feeding two
+   predicates this file records as not state-checked -- so LidNewNS == 999
+   gave a clean run. `claims`. *)
 
 FdNeed == Reserved + 2 * n
 

@@ -56,7 +56,9 @@ sections after this one and are deliberately not numbered here.
    the header — the drift class is removed there rather than checked.
    One hand-written number survives in a spec, Alloy's `but 12 Int`
    bitwidth, and `test_specs_are_checked` asserts it covers
-   `NW_MAX_FDS`.
+   `NW_MAX_FDS`. (`Plan.tla` also hand-copied the lid bits until
+   2026-09-11; nothing checked them and their only consumers are
+   unchecked predicates, so `LidNewNS == 999` ran clean. Generated now.)
 4. **`nw-spawn` exits; its death is not a failure mode.** It forks one
    supervisor per unit, double-forked so PID 1 adopts the houses, reports the
    pids and exits 0. PID 1 requires a complete report *and* a clean exit —
@@ -76,9 +78,9 @@ sections after this one and are deliberately not numbered here.
    "a counter over a sliding window" until 2026-09-11. Both were present-tense
    invariants the code did not honour, and the second was worse than a wrong
    description: the window it described made the budget unbounded. `grep -w`
-   for `window_s` across the C sources returns two hits, `blob.h` and
-   `nwsup.c`, and both are comments recording its removal — the same shape
-   invariant 1 uses for `mount` in `pid1.c`. There is no `window_s` field
+   for `window_s` across the C sources returns only comments recording its
+   removal, in `blob.h` and `nwsup.c` — the same shape invariant 1 uses for
+   `mount` in `pid1.c`, and for the same reason: a count here is a hostage. There is no `window_s` field
    and no reset. (This retraction previously claimed the grep returned
    nothing, which the commit that wrote it had already made false;
    `claims` ran it.)*
@@ -246,7 +248,9 @@ The rule stands because of what it cost, not because anything is still
 missing. *This paragraph said the opposite until 2026-09-11 — that none of
 that work was in the tree and it was "one agent's next task" — and it named
 `grep` for `RB_POWER_OFF`, `reboot(` or `qemu` as the evidence. Run
-verbatim, that grep returns `pid1.c:164` and `Makefile:102`. `claims`
+verbatim, that grep returns hits in `pid1.c` and the `Makefile` --
+line numbers deliberately not quoted, because the ones this sentence
+gave went stale within one commit when `sync()` shifted them. `claims`
 found it. A stale sentence here is worse than elsewhere: it instructs, so
 an agent that believes it re-does work that is already committed. Note
 what it is *not* replaced with — a new present-tense claim about what
@@ -320,8 +324,13 @@ thing this paragraph exists to invite.)
 
 ## Dispatching agents
 
-`sh install-agents.sh --list` prints this table; it is repeated here because
-this file is always loaded and the briefs are not.
+`sh install-agents.sh --list` prints the roster, derived from the brief
+files themselves; the dispatch table below is repeated here because this
+file is always loaded and the briefs are not. (`--list` printed a
+hand-written roster naming three dispatchable territories and a `repro`
+agent that no longer exists, for a day after this file said territories
+are rules. A second copy of a roster rots the same way a second copy of
+a limit does. `claims`.)
 
 **Dispatch before you push, not after.** Both HIGH findings of 2026-09-10 —
 the `..` traversal and the profile that killed compilers — were found in code

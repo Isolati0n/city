@@ -81,9 +81,19 @@ The boundary that does matter here is not between files, it is **trust**:
 `test_specs_are_checked` in `tests/run.py` executes both inside
 `make test`. `TypeOK`, `FdBudgetCovers`, `FdNeedAgrees` and
 `LargestCityFits` are TLC invariants; `FdArithmetic` and `Sealed` are
-Alloy checks, each one shown failing when the thing it is about is
-broken. Their limits are generated from `blob.h` by
-`tools/gen-spec-limits.py`, so neither file holds a limit to drift.
+Alloy checks. **The two Alloy checks are shown failing on every run** —
+the suite breaks the thing each is about and requires a counterexample.
+The TLC invariants have no such probe: their controls were run by hand
+once and are recorded in `HISTORY.md` §39, which is weaker and is why
+this sentence separates them.
+
+The limits both specs use are generated from `blob.h` by
+`tools/gen-spec-limits.py` — including the lid bits, as of 2026-09-11.
+**One hand-written number remains**, Alloy's `but 12 Int` bitwidth in
+`plan.als`, and `test_specs_are_checked` asserts it covers `NW_MAX_FDS`.
+(This said "neither file holds a limit to drift", which the same round's
+own work disproved three lines later in `plan.als`. Correcting a
+sentence into an absolute is how the last four of these went wrong.)
 
 *This section said the opposite until 2026-09-11 — "you cannot verify by
 running … no `alloy`, no `tlc`, and nothing in the `Makefile` or

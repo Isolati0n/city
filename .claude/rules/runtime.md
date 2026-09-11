@@ -75,8 +75,8 @@ environment — so a change to any link is a change to everything below it.
   `strict_allow[]`, and a house does not choose it. *This described
   `NW_PROF_BUILD` as "assembled as `NW_PROF_STRICT` plus `build_extra[]`
   at filter-build time" until 2026-09-11; `grep` for `NW_PROF` or
-  `build_extra` across the C sources returns one hit, `blob.h:65`, and it
-  is a comment recording the removal. The profile went on 2026-09-10
+  `build_extra` across the C sources returns only a comment in `blob.h`
+  recording the removal. The profile went on 2026-09-10
   (`HISTORY.md` §23) and `CLAUDE.md` invariant 6 already said so — this
   copy did not. Found by `claims`, in the file the hook hands to an agent
   editing `nwsup.c` or `lids.c`.* If you find yourself adding a filter

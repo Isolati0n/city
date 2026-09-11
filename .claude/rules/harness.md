@@ -258,7 +258,8 @@ ladder that never breaks usually is not reaching anything.
 
 **Still open, and now with a number attached:** nothing in `make test`
 runs above `NW_MAX_UNITS`, because getting there costs a rebuild. The
-suite's contribution is exactly-once at 64 units, in
+suite's contribution is exactly-once at `NW_MAX_UNITS` (read from the
+header, not written down here), in
 `test_non_provision_at_max`; the ladder is a tool you run by hand.
 
 ## Definition of done

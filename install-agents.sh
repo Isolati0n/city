@@ -60,42 +60,37 @@ fi
 
 # ---------------------------------------------------------------- list ----
 if [ "$MODE" = list ]; then
-    cat <<'LISTEOF'
-nw-init agents — three territories, four reviewers, two specialists.
-
-TERRITORIES (write; one coherent change each)
-  plan        blob.h, nwcheck.c, nwcheck_main.c, bakery/nw-cc.py,
-              plan.als, Plan.tla.  One agent because invariant 3 makes
-              these move together: every plan-format change in this
-              repository's history touched all of them in one commit.
-  runtime     dawn.c, pid1.c, nwspawn.c, nwsup.c, lids.c.  One agent
-              because state flows down the boot chain — D11 was one
-              cause spread across three of these files and invisible to
-              anyone holding only one.
-  harness     tests/run.py, unit_probe.c, houses/*.c.
-
-REVIEWERS (read-only; fan out in parallel, they cannot break anything)
-  tcb-review  adversarial review of a diff to a TCB file.
-  fd-auditor  the recurring descriptor class. Hand-maintained.
-  drift       the places that must agree, checked mechanically.
-  claims      prose in CLAUDE.md and the briefs, checked against code.
-
-SPECIALISTS (narrow, one job)
-  repro       reproduce a reported failure. Does not fix.
-  measurement performance and scale claims. Hand-maintained.
-
-WHEN TO DISPATCH
-  a TCB file changed ............ tcb-review + fd-auditor, in parallel
-  a limit or the blob changed ... drift
-  a failure was reported ........ repro, alone, before anyone edits
-  a brief or CLAUDE.md changed .. claims
-  a speed or scale claim ........ measurement
-  a decided format change ....... plan (hand it the design, not the problem)
-  a decided boot/lid change ..... runtime (likewise)
-
-Territories propagate a decision. They do not make one. Decide the design
-in the main thread where the whole picture is, then hand it over.
-LISTEOF
+    # DERIVED, not written down. This printed the pre-2026-09-10 roster
+    # for a day after the territories stopped being agents: it listed
+    # plan/runtime/harness as dispatchable writers, offered a `repro`
+    # specialist that had been removed for never being dispatched, and
+    # omitted `control` entirely -- while CLAUDE.md said "sh
+    # install-agents.sh --list prints this table". A hand-written second
+    # copy of a roster is the same defect as a hand-written second copy
+    # of a limit. `claims` found it.
+    echo "nw-init agents — read-only reviewers, plus territories that are rules."
+    echo
+    echo "REVIEWERS (dispatchable; they fan out and cannot break anything)"
+    for f in "$DIR"/*.md; do
+        [ -e "$f" ] || continue
+        nm=$(sed -n 's/^name: *//p' "$f" | head -1)
+        ds=$(sed -n 's/^description: *//p' "$f" | head -1)
+        printf '  %-12s %s\n' "$nm" "$ds" | fold -s -w 78 |
+            sed '2,$s/^/               /'
+    done
+    echo
+    echo "TERRITORIES (NOT agents: tools/rules-hook.sh delivers these on a"
+    echo "PreToolUse for any file in scope. Dispatched zero times when they"
+    echo "were agents, which is why they are rules.)"
+    for f in .claude/rules/*.md; do
+        [ -e "$f" ] || continue
+        nm=$(basename "$f" .md)
+        ds=$(sed -n 's/.*Scope: *//p' "$f" | head -1)
+        printf '  %-12s %s\n' "$nm" "$ds" | fold -s -w 78 |
+            sed '2,$s/^/               /'
+    done
+    echo
+    echo "WHEN TO DISPATCH — the table in CLAUDE.md is the authority."
     exit 0
 fi
 
