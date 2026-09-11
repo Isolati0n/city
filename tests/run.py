@@ -236,6 +236,86 @@ def boot(slot=None, plan=None, extra=None, hold=800):
     return p.returncode, out
 
 
+def strip_c_comments(src):
+    """Blank out comments and string literals, keeping line structure.
+
+    A source-level assertion that matches raw text is an assertion about
+    prose as well as code. `control` turned the suite red with one added
+    comment containing "at fork time (" and another containing
+    "deaths = 0" -- both describing history, neither changing behaviour,
+    and one of them is the re-filing CLAUDE.md explicitly asks for.
+    """
+    out, i, n = [], 0, len(src)
+    while i < n:
+        c = src[i]
+        if c == "/" and i + 1 < n and src[i + 1] == "*":
+            j = src.find("*/", i + 2)
+            j = n if j < 0 else j + 2
+            out.append("".join(ch if ch == "\n" else " " for ch in src[i:j]))
+            i = j
+        elif c == "/" and i + 1 < n and src[i + 1] == "/":
+            j = src.find("\n", i)
+            j = n if j < 0 else j
+            out.append(" " * (j - i))
+            i = j
+        elif c in "\"'":
+            j, q = i + 1, c
+            while j < n and src[j] != q:
+                j += 2 if src[j] == "\\" else 1
+            j = min(j + 1, n)
+            out.append(" " * (j - i))
+            i = j
+        else:
+            out.append(c)
+            i += 1
+    return "".join(out)
+
+
+def nested_init(unshare_pid):
+    """PID 1 of the namespace `unshare --pid --fork` made, or None."""
+    try:
+        kids = open(
+            f"/proc/{unshare_pid}/task/{unshare_pid}/children").read().split()
+    except (FileNotFoundError, ProcessLookupError):
+        return None
+    return int(kids[0]) if kids else None
+
+
+def reap_nested(p):
+    """Tear down an `unshare --pid --fork` child, inner process first.
+
+    KILLING THE PARENT DOES NOT KILL WHAT IT FORKED. `p.kill()` on the
+    `unshare` process leaves the nested PID 1 running, reparented to init
+    and still holding the loop-device mounts inside its own namespace --
+    so the `finally` below that runs `losetup -d` silently fails to
+    detach, the next run's `rm -rf lab` deletes the image out from under
+    a live mount, and the machine accumulates
+    `/dev/loopN: ... (deleted)` entries. Found by fd-auditor, with four
+    of them already on this machine from earlier failed runs, and three
+    orphaned `nw-root`s at ppid 1.
+
+    Neither shortcut works: `unshare --kill-child` does not fire for a
+    pid-namespace init, and `os.killpg` does not reach it either -- both
+    measured. Signalling the nested init directly does work.
+
+    Called from a `finally` so no branch can skip it, including the
+    timeout path, the path where the child is already gone, and the path
+    where the test is about to raise.
+    """
+    k = nested_init(p.pid)
+    if k is not None:
+        try:
+            os.kill(k, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+    if p.poll() is None:
+        p.kill()
+    try:
+        p.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        pass
+
+
 def city_closed(rc, out):
     """Production PID 1 ends in reboot(RB_POWER_OFF), not _exit.
 
@@ -630,50 +710,116 @@ def test_dawn_real_boot():
             log = f"{lab}/console.log"
             with open(log, "wb") as f:
                 p = subprocess.Popen(cmd, stdout=f, stderr=subprocess.STDOUT)
-                deadline = time.time() + timeout
-                signalled = False
-                while time.time() < deadline:
-                    if p.poll() is not None:
-                        break
-                    if expect_open and not signalled:
-                        try:
-                            seen = open(log, "rb").read().decode(
-                                "utf-8", "replace")
-                        except FileNotFoundError:
-                            seen = ""
-                        if "city open" in seen:
-                            # PID 1 of the nested ns is unshare's only child.
-                            kids = open(
-                                f"/proc/{p.pid}/task/{p.pid}/children"
-                            ).read().split()
-                            if kids:
-                                os.kill(int(kids[0]), signal.SIGTERM)
-                                signalled = True
-                    time.sleep(0.05)
-                else:
-                    p.kill()
-                    p.wait()
-                    out = open(log, "rb").read().decode("utf-8", "replace")
-                    raise SystemExit(
-                        f"FAIL: dawn boot did not finish within {timeout}s "
-                        f"(city open seen: {'city open' in out}, TERM sent: "
-                        f"{signalled}). A hang is not a shutdown.\n{out[-1500:]}")
-            return p.returncode, open(log, "rb").read().decode(
-                "utf-8", "replace")
+                try:
+                    deadline = time.time() + timeout
+                    signalled = False
+                    argv = []
+                    t_term = []
+                    while time.time() < deadline:
+                        if p.poll() is not None:
+                            break
+                        if expect_open and not signalled:
+                            try:
+                                seen = open(log, "rb").read().decode(
+                                    "utf-8", "replace")
+                            except FileNotFoundError:
+                                seen = ""
+                            if "city open" in seen:
+                                k = nested_init(p.pid)
+                                if k:
+                                    # What dawn actually exec'd. A timer on
+                                    # PRODUCTION argv is the defect finding 3
+                                    # removed, and it is invisible to a log
+                                    # snapshot if it is longer than the
+                                    # window: `control` put `--hold-ms 3000`
+                                    # here and the whole suite stayed green
+                                    # on a machine that powers itself off
+                                    # three seconds after boot. Read the
+                                    # argv instead of timing it.
+                                    argv.append(open(
+                                        f"/proc/{k}/cmdline", "rb"
+                                    ).read().decode().split("\0"))
+                                    os.kill(k, signal.SIGTERM)
+                                    signalled = True
+                                    t_term.append(time.time())
+                        time.sleep(0.05)
+                    else:
+                        out = open(log, "rb").read().decode(
+                            "utf-8", "replace")
+                        raise SystemExit(
+                            f"FAIL: dawn boot did not finish within "
+                            f"{timeout}s (city open seen: "
+                            f"{'city open' in out}, TERM sent: {signalled}). "
+                            f"A hang is not a shutdown.\n{out[-1500:]}")
+                finally:
+                    reap_nested(p)
+            after = (time.time() - t_term[0]) if t_term else None
+            return (p.returncode,
+                    open(log, "rb").read().decode("utf-8", "replace"),
+                    signalled, argv[0] if argv else None, after)
 
-        rc, out = boot_dawn()
+        rc, out, signalled, argv, after = boot_dawn()
         expect(city_closed(rc, out), f"dawn boot rc={rc}\n{out}")
-        # Pair the close with proof the TERM arrived. city_closed alone is
-        # satisfied by anything that ends after printing `closed`, and the
-        # whole point of this boot is that the production shutdown path ran
-        # rather than a lab timer expiring.
+        # Pair the close with proof THIS TEST's TERM is what ended it.
+        #
+        # `shutdown TERM houses` alone does not establish that: the line is
+        # printed by shutdown_city however it was entered, so a PID 1 that
+        # ignores TERM and closes on a timer prints it too. `control` built
+        # exactly that and the whole suite stayed green, with `signalled`
+        # computed here and asserted nowhere. The three assertions below
+        # are what make this a claim about signal handling: we sent it, the
+        # city was still running when we did, and it closed afterwards.
+        expect(signalled,
+               f"this test never sent SIGTERM -- the city ended on its own, "
+               f"so nothing here is evidence that PID 1 answers a signal"
+               f"\n{out}")
         expect("shutdown TERM houses" in out,
                f"the city closed without shutdown_city having been entered "
                f"by signal -- something other than the production close "
                f"path ended this boot\n{out}")
+        # And dawn must not have handed PID 1 a deadline. A timer longer
+        # than any window this test watches is invisible to the log; the
+        # argv is not.
+        expect(argv is not None and "--hold-ms" not in argv,
+               f"dawn exec'd nw-root with a deadline on production argv: "
+               f"{argv}. That is a machine which powers itself off without "
+               f"being asked, which is the defect NW_HOLD_MS's removal was "
+               f"for -- reached by a different route.")
+        # And it must close BECAUSE of the signal, which means promptly
+        # after it. `control` compiled a 3-second deadline into main() as
+        # the default for hold_ms and made PID 1 ignore TERM: argv is
+        # clean, we did send a TERM, the city did close, and every
+        # assertion above passed. What separates that from the real thing
+        # is that its close came 2.9s after the signal rather than one
+        # grace period.
+        #
+        # The bound is derived from pid1.c's own grace, not picked: four
+        # times it. A real close is grace + reboot, measured at ~0.4s.
+        # RESIDUAL, stated because a bound is not a proof: a compiled-in
+        # deadline SHORTER than this bound still passes here, and only the
+        # NW_HOLD_MS boot below -- which signals nothing at all -- bounds
+        # that case.
+        bound = 4 * PID1_GRACE_MS / 1000.0
+        expect(after is not None and after < bound,
+               f"the city took {after:.2f}s to close after SIGTERM, bound is "
+               f"{bound:.2f}s (4x pid1.c's {PID1_GRACE_MS}ms grace). It did "
+               f"not close because of the signal -- something else ended it "
+               f"and the TERM was ignored.\n{out}")
         expect("mounted /sysroot" in out, f"root not mounted\n{out}")
         expect("mounted /sysroot/efi" in out, f"esp not mounted\n{out}")
-        expect("pivoted" in out, f"no pivot_root\n{out}")
+        # WHICH branch, not just "a pivot happened". `"pivoted" in out`
+        # matches `pivoted MS_MOVE` too, so `control` disabled pivot_root
+        # entirely, sent dawn down the fallback, and this stayed green --
+        # while the message said "no pivot_root". The harness is not on
+        # rootfs, so pivot_root is the branch it must take; production is
+        # on rootfs and takes the other one, which harness.md records as
+        # having no lab coverage. Saying which ran is the rule for a
+        # branch the environment picks.
+        expect("pivoted pivot_root" in out,
+               f"dawn did not take the pivot_root branch. If this says "
+               f"`pivoted MS_MOVE`, the lab has silently started "
+               f"exercising the fallback instead -- that is a finding to "
+               f"report, not a baseline to accept.\n{out}")
         expect("mounted /sys/fs/cgroup" in out, f"cgroup2 not mounted\n{out}")
         expect("mounted /run" in out and "mounted /tmp" in out,
                f"tmpfs missing\n{out}")
@@ -685,8 +831,9 @@ def test_dawn_real_boot():
         open(f"{lab}/me/slots/current", "w").write("B\n")
         subprocess.run(["sync"], check=True)
         subprocess.run(["umount", f"{lab}/me"], check=True)
-        rc, out = boot_dawn()
+        rc, out, signalled, _, _ = boot_dawn()
         expect(city_closed(rc, out), f"slot B rc={rc}\n{out}")
+        expect(signalled, f"slot B ended without this test signalling it\n{out}")
         expect("shutdown TERM houses" in out,
                f"slot B closed without the production shutdown path\n{out}")
         expect("live slot /efi/slots/B" in out, f"B not selected\n{out}")
@@ -697,8 +844,26 @@ def test_dawn_real_boot():
         open(f"{lab}/me/slots/current", "w").write("../../etc\n")
         subprocess.run(["sync"], check=True)
         subprocess.run(["umount", f"{lab}/me"], check=True)
-        rc, out = boot_dawn(expect_open=False)
+        rc, out, _, _, _ = boot_dawn(expect_open=False)
         expect("HALT: slots/current" in out, f"traversal not refused\n{out}")
+
+        # More than one shape, because one string is not the check.
+        # `control` replaced the [A-Za-z0-9_-] loop with a length bound --
+        # `if (n > 2) return -1;` -- and this test stayed green, because
+        # `../../etc` is nine bytes. A bare `..` is two, so it passes any
+        # length bound and is refused only by a charset check. Measured on
+        # that mutant: `live slot /tmp/.../slots/..` and the city booted.
+        for bad in ("..", "A/../../etc", "a b"):
+            subprocess.run(["mount", espdev, f"{lab}/me"], check=True)
+            open(f"{lab}/me/slots/current", "w").write(bad + "\n")
+            subprocess.run(["sync"], check=True)
+            subprocess.run(["umount", f"{lab}/me"], check=True)
+            rc, out, _, _, _ = boot_dawn(expect_open=False)
+            expect("HALT: slots/current" in out,
+                   f"slots/current = {bad!r} was not refused -- a name that "
+                   f"escapes the slots directory must be rejected for its "
+                   f"CHARSET, and a check that only refuses long names or "
+                   f"one literal is not that\n{out}")
 
         # NW_HOLD_MS MUST BE INERT IN PRODUCTION. This is the property the
         # variable's removal was for, and dropping it from the boot above
@@ -731,15 +896,25 @@ def test_dawn_real_boot():
                 exited_on_its_own = True
             except subprocess.TimeoutExpired:
                 exited_on_its_own = False
-            snap = open(log, "rb").read().decode("utf-8", "replace")
-            if not exited_on_its_own:
-                kids = open(f"/proc/{p.pid}/task/{p.pid}/children").read().split()
-                if kids:
-                    os.kill(int(kids[0]), signal.SIGTERM)
-                try:
-                    p.wait(timeout=15)
-                except subprocess.TimeoutExpired:
-                    p.kill(); p.wait()
+            try:
+                snap = open(log, "rb").read().decode("utf-8", "replace")
+                if not exited_on_its_own:
+                    k = nested_init(p.pid)
+                    if k is not None:
+                        os.kill(k, signal.SIGTERM)
+                    try:
+                        p.wait(timeout=15)
+                    except subprocess.TimeoutExpired:
+                        pass
+            finally:
+                # Unconditionally, and inner-first. The single-shot
+                # `if kids:` that used to be here had no else: an empty
+                # read fell through to killing the parent only, orphaning
+                # the nested init -- while this test still PASSED, because
+                # both assertions below were already evaluated from `snap`.
+                # A cleanup that leaks on a path the test calls green is
+                # the unpaired-absence shape wearing a teardown costume.
+                reap_nested(p)
         # Paired: the city must have OPENED, or "did not close" is also
         # satisfied by a boot that never got anywhere.
         expect("city open" in snap,
@@ -884,25 +1059,56 @@ def test_budget_is_hard_total():
     # exactly, cheaply, and for all time -- so check it here instead of
     # pretending a longer hold would settle it. Handed over by the agent
     # who owns the restart loop; the file is ours, so the test is ours.
-    sup = open(os.path.join(ROOT, "nwsup.c")).read()
+    # CODE ONLY. Matching raw source made this go red for a COMMENT:
+    # `\btime\s*\(` hits "at fork time (", which is this repository's own
+    # phrasing, and `deaths = 0` inside a note about D18 counted as an
+    # assignment. CLAUDE.md requires a removed rule to be re-filed as a
+    # comment rather than deleted, so the raw-source version punished the
+    # thing the project asks for, and blamed a reset that did not exist.
+    # `control` found both.
+    sup = strip_c_comments(open(os.path.join(ROOT, "nwsup.c")).read())
     assigns = re.findall(r"\bdeaths\s*(?:=[^=]|\+\+|--|[-+*/]=)", sup)
     expect(len(assigns) == 2,
            f"nwsup.c assigns `deaths` {len(assigns)} times, expected exactly "
            f"two -- one initialisation and one increment. A third assignment "
            f"is where a window reset would live, and no boot-length test can "
            f"see one: {assigns}")
+    # A reset can also be written through a pointer -- `int *dp = &deaths;
+    # *dp = 0;` -- which the assignment count above cannot see. `control`
+    # built exactly that, with times() as the clock, and both halves of
+    # this test stayed green while the budget was unbounded again. Taking
+    # the address is the step every such route needs (a pointer, a
+    # memset, a helper, a read(2) straight into it), so refuse it: nothing
+    # in this loop has any reason to.
+    taken = re.findall(r"&\s*deaths\b", sup)
+    expect(not taken,
+           f"nwsup.c takes the address of `deaths` ({len(taken)}x). Every "
+           f"route that resets it without assigning it by name goes through "
+           f"&deaths, and the assignment count above cannot see any of them.")
     clocks = re.findall(
-        r"\b(clock_gettime|now_ms|alarm|nanosleep|usleep|setitimer|"
-        r"timerfd_create|gettimeofday|time)\s*\(", sup)
+        r"\b(clock_gettime|now_ms|alarm|nanosleep|clock_nanosleep|usleep|"
+        r"setitimer|timerfd_create|timer_create|gettimeofday|times|clock|"
+        r"sysinfo|time)\s*\(", sup)
     expect(not clocks,
            f"nwsup.c has regained a timing primitive: {sorted(set(clocks))}. "
            f"A budget that can read a clock can reset on one, which is D18 "
            f"coming back, and this suite's timing assertions above would "
            f"stay green against any window longer than their hold.")
 
-    # The name says what is pinned, and no more.
-    print("ok budget-no-reset (3 restarts in a 7s hold, and nwsup.c has one "
-          "increment, no other assignment to deaths, and no clock)")
+    # WHAT THIS DOES NOT CLOSE, said plainly because the previous wording
+    # ("there is nowhere for a reset to live") claimed more than it
+    # checks. A denylist of names cannot be exhaustive: `control` got a
+    # working 30-second window past an earlier version of these lines
+    # using times() and a pointer, and lists further misses -- sysinfo(),
+    # a /proc/uptime read, a poll() timeout, or a parallel `forgiven`
+    # counter that never writes `deaths` at all. The address check above
+    # closes the pointer family; the clock list is a fence, not a proof.
+    # The behavioural half catches any window SHORTER than the 7s hold.
+    # A window longer than the hold and built from a name not listed here
+    # is still invisible, and closing that needs deaths spaced further
+    # apart than any plausible window -- the slow test the handoff names.
+    print("ok budget-no-reset (3 restarts in a 7s hold; nwsup.c assigns "
+          "deaths twice, never takes its address, and names no clock)")
 
 
 def test_shutdown_does_not_restart():
