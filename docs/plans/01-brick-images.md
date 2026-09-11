@@ -47,7 +47,25 @@ The bakery needs `mkfs.erofs`. It is not installed by default anywhere we
 have looked, and the bakery is not the running machine, so this is a bakery
 requirement rather than a runtime one.
 
-## Phase 1 — the baker packs an image. No TCB change.
+## Phase 1 — the baker packs an image. No TCB change. **LANDED 2026-09-11.**
+
+`bakery/mkbrick.py` and `test_brick_image_reproducible`. The flag set is
+exported as `EROFS_FLAGS` and the test imports it rather than copying it,
+so the negative control drops a flag from the list the packer actually
+uses. Three controls run, all failing as required: `-U` removed from the
+packer (two packs of one tree disagree), `-T 0` removed (same), and the
+image named by the tree path instead of its own bytes (the hash no longer
+matches the filename).
+
+The measured behaviour, on this machine: the same tree packs to one hash
+twice; a copy at a different path with every mtime rewritten packs to the
+same hash; and with `-U` dropped the two packs differ, which is what
+makes the first two mean something rather than being a report on
+`mkfs.erofs`'s good manners.
+
+Nothing at runtime reads these images yet. That is phase 2.
+
+### The original text of this phase
 
 `bakery/mkbrick.py` (new, not in the TCB): take a directory tree, pack it
 with the exact flag set from `08`, name the output by the sha256 of the

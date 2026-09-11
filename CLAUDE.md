@@ -248,12 +248,16 @@ What the map does not settle, because it is not a map question:
   `Plan.tla`; `plan.md`'s scope names all four, and any split puts a
   required-atomic change across a boundary.
 
-**Waiting on a prerequisite:** who owns `nwsup.c` and `nwspawn.c` while
-both workstreams are in flight. The decision lives in
-`docs/options/09-who-owns-a-file.md`, which states the question and the
-options and settles none of them. The prerequisite is evidence rather
-than argument — the first genuine conflicting edit to `nwsup.c` — and
-that is also the day it stops being optional.
+**Who owns what, this week.** Grok owns `pid1.c`, `dawn.c` and the
+restart loop in `nwsup.c`. Claude owns the baker and the mount path in
+`nwsup.c`. Nobody else touches `plan.als` or `Plan.tla`.
+
+That is the whole answer, and it is deliberately not derived from
+anything. It is a **scheduling fact about who is working on what**, not a
+property of the code, so it changes when the work changes and a generated
+list will always be either stale or wrong. Three attempts to compute it
+proved that the expensive way. Edit these three sentences when the
+assignment moves; do not build a mechanism.
 
 ## Dispatching agents
 

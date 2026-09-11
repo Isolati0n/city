@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+import shutil
 import struct
 import subprocess
 import sys
@@ -80,6 +81,15 @@ def blob_h(name):
 # failing for a reason unrelated to the property it tests. Found by
 # fd-auditor and tcb-review, independently.
 PROBE_CFLAGS = ["-std=gnu11", "-Wall", "-Wextra", "-Werror"]
+
+def sha256_of(path):
+    import hashlib
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
 
 SKIPPED = []
 
@@ -1539,6 +1549,75 @@ def test_non_provision_at_max():
     print(f"ok non-provision-at-max ({n} units)")
 
 
+def test_brick_image_reproducible():
+    """A brick is named by the sha256 of its image, so identical content
+    must pack to identical bytes. Phase 1 of docs/plans/01.
+
+    Three assertions, and the third is what makes the first two mean
+    anything. Packing the same tree twice and getting one hash is also
+    what you would see if mkfs.erofs were simply deterministic with no
+    flags at all -- so the test would be green while the flag set, which
+    docs/options/08 argues IS the spec, did nothing. The third assertion
+    drops `-U` from the list mkbrick.py exports and requires the two packs
+    to differ: the UUID is random per invocation, so its absence changes
+    every byte while nothing about the content moved.
+
+    The flag list is imported, not copied. A second copy here would drift
+    from the one in the baker, and then the control would be dropping a
+    flag from a list the packer does not use -- the shape this suite has
+    produced repeatedly."""
+    if not run(["sh", "-c", "command -v mkfs.erofs"]).returncode == 0:
+        skip("brick-image-reproducible",
+             "mkfs.erofs is not installed; no brick can be packed here")
+        return
+
+    import runpy
+    mk = runpy.run_path(os.path.join(ROOT, "bakery", "mkbrick.py"))
+
+    lab = f"{WORK}/brick"
+    subprocess.run(["rm", "-rf", lab], check=False)
+    tree, out = f"{lab}/tree", f"{lab}/out"
+    os.makedirs(f"{tree}/bin"); os.makedirs(f"{tree}/etc"); os.makedirs(out)
+    open(f"{tree}/etc/conf", "w").write("hello\n")
+    shutil.copy(f"{BIN}/unit-probe", f"{tree}/bin/unit-probe")
+    subprocess.run(["touch", "-d", "2001-02-03 04:05:06",
+                    f"{tree}/etc/conf"], check=True)
+
+    a, pa = mk["pack"](tree, out, quiet=True)
+    b, _ = mk["pack"](tree, out, quiet=True)
+    expect(a == b, f"the same tree packed twice gave two names:\n  {a}\n  {b}")
+    expect(os.path.basename(pa) == a + ".img",
+           f"the image is not named by its own hash: {pa}")
+    expect(sha256_of(pa) == a,
+           f"{pa} does not hash to the name it was given")
+
+    # Same content, different path, every mtime rewritten.
+    tree2 = f"{lab}/elsewhere/tree-renamed"
+    os.makedirs(os.path.dirname(tree2))
+    subprocess.run(["cp", "-a", tree, tree2], check=True)
+    subprocess.run(["sh", "-c",
+                    f"find {tree2} -exec touch -d '2020-12-25 11:22:33' {{}} +"],
+                   check=True)
+    c, _ = mk["pack"](tree2, out, quiet=True)
+    expect(a == c,
+           f"path or mtime leaked into the image name:\n  {a}\n  {c}")
+
+    # The pairing: the flags are doing the work, not erofs's good manners.
+    flags = list(mk["EROFS_FLAGS"])
+    i = flags.index("-U")
+    del flags[i:i + 2]
+    d1, _ = mk["pack"](tree, out, flags=flags, quiet=True)
+    d2, _ = mk["pack"](tree, out, flags=flags, quiet=True)
+    expect(d1 != d2,
+           f"without -U two packs of one tree still agreed ({d1}) -- either "
+           f"this mkfs.erofs does not randomise the UUID, in which case the "
+           f"reproducibility above is not evidence that the flag set works, "
+           f"or -U is no longer the flag that carries it")
+
+    print(f"ok brick-image-reproducible (two packs, a moved and re-dated "
+          f"copy, and -U dropped to prove the flags matter)")
+
+
 def test_build_is_reproducible():
     """The same source must produce the same binaries from any directory.
 
@@ -1750,7 +1829,7 @@ def main():
     print_environment()
     print("== city suite ==")
     tests = [
-        test_build_is_reproducible,
+        test_build_is_reproducible, test_brick_image_reproducible,
         test_harness_runs_fresh_binaries, test_coverage_accounting,
         test_hash_pin, test_difftest, test_lids_are_not_advisory,
         test_baker_rejects, test_fuzz_checker, test_happy, test_slot_b,

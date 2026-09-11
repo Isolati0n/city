@@ -11,6 +11,7 @@
   "bad-crc",
   "baker-rejects",
   "blob-size-ceiling",
+  "brick-image-reproducible",
   "brick-is-a-root",
   "brick-needs-newns",
   "budget-is-hard-total",
