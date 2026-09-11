@@ -200,14 +200,14 @@ you are.**
    hash, at the top.
 
 This is a rule because it has already cost a divergence. On 2026-09-11
-there were three lines of work and no agreed trunk: `origin/main` was at
+there was no agreed trunk: `origin/main` was at
 `1974a08` (local `main` was further along and unpushed, which is the same
 defect in miniature), the pushed branch carried everything since, and a
 full PID 1 stay-up pass — production reap loop, `RB_POWER_OFF` shutdown,
 a budget fix, the shutdown-restart race, a `make qemu` target — existed
-only inside a tarball based on `d84da58`. Each of the three had a
-different part, and **none of it was visible until someone cloned the
-repository and looked.** A tarball hides divergence in a way a branch
+only inside a tarball based on `d84da58`. Each place had a part of the
+work and none had all of it, and **none of that was visible until someone
+cloned the repository and looked.** A tarball hides divergence in a way a branch
 does not: nothing about it shows up in `git log`, `git status`, or a
 fetch.
 
@@ -224,39 +224,52 @@ section you are reading is describing a delivery that has not happened.
 ### Who owns which file
 
 **The territory scopes in `.claude/rules/plan.md`, `runtime.md` and
-`harness.md` are the map.** Read those rather than a second copy here — a
-competing table was written in this file on 2026-09-11 and immediately
-contradicted them, giving `bakery/nw-cc.py` to bricks when `plan.md` owns
-it and splitting `dawn.c` when `runtime.md` owns all of it. `claims` found
-that within minutes. Two ownership maps is the same defect as two copies
-of a limit.
+`harness.md` are the map, and `sh tools/ownership.sh` derives the rest
+from them.** Do not write a second list here. One was written on
+2026-09-11 and contradicted the scopes; its replacement — a hand-kept
+list of what the scopes leave unclaimed — was wrong on two of six entries
+and silently dropped `proofs/`. Both were caught by `claims`, the second
+inside the fix for the first. A list that must agree with another list is
+the shape invariant 3 exists to prevent, so the tool computes it:
 
-What the scopes do **not** settle, and what this section is actually for:
+```
+sh tools/ownership.sh          # what no scope claims
+sh tools/ownership.sh --all    # every tracked file and its territory
+```
 
-- **`nwsup.c` and `nwspawn.c` are each touched by two workstreams.**
-  `nwsup.c` holds `lid_brick()` and the bind mounts (bricks) beside the
-  restart budget and death handling (lifecycle). `nwspawn.c` never
-  mounts — it hands the brick and binds on through `setenv("NW_BRICK",…)`
-  and `NW_BIND_n` (bricks) beside the budget handoff and the mid-fork
-  reap (lifecycle). A first pass here claimed `nwsup.c` was the only such
-  file, because it grepped for `lid_brick|MS_BIND` and `nwspawn.c` calls
-  neither. **Grepping for the mechanism misses the file that passes the
-  data on**, which is worth remembering the next time a claim about "the
-  only file that…" rests on one pattern.
-- **`bakery/nw-cc.py` cannot move.** Invariant 3 makes a limit change
-  atomic across `blob.h`, the baker, `plan.als` and `Plan.tla`; the plan
-  territory owns all four, and any split puts a required-atomic change
-  across a boundary.
-- Unassigned by every scope: `lids.c`, `nwcheck_main.c`, `rescue.c`,
-  `Makefile`, `install-agents.sh`, `tools/`. `lids.c` is the awkward one
-  — the TCB table above makes it half of `nw-sup`, whose other half is
-  one of the two contested files.
+What the scopes genuinely do not settle:
 
-**Waiting on a prerequisite:** who owns `nwsup.c` and `nwspawn.c` is a
-decision nobody has made. **It lives in this list** — whoever makes it
-records it here, in the same commit as the change that forced it. Until
-then the next collision happens inside a file rather than between
-branches, where a fast-forward cannot fix it.
+- **Territories are not workstreams, and the collision is inside one.**
+  `runtime` owns the whole boot chain — `dawn.c`, `pid1.c`, `nwspawn.c`,
+  `nwsup.c`, `lids.c` — so the map has no gap. But *bricks* work and
+  *lifecycle* work are concurrent workstreams that both land in that one
+  territory, and specifically in two files: `nwsup.c` holds `lid_brick()`
+  and the bind mounts beside the restart budget and death handling, and
+  `nwspawn.c` hands the brick and binds on through `setenv("NW_BRICK",…)`
+  and `NW_BIND_n` beside the budget handoff and the mid-fork reap. **A
+  territory map does not prevent two agents colliding inside a
+  territory.**
+- A first pass claimed `nwsup.c` was the only such file, because it
+  grepped for `lid_brick|MS_BIND` and `nwspawn.c` calls neither — it
+  passes the data on rather than mounting. **Grepping for the mechanism
+  misses the file that forwards it**, which is worth remembering the next
+  time a claim about "the only file that…" rests on one pattern.
+- **`bakery/nw-cc.py` cannot move out of `plan`.** Invariant 3 makes a
+  limit change atomic across `blob.h`, the baker, `plan.als` and
+  `Plan.tla`; `plan.md`'s scope names all four, and any split puts a
+  required-atomic change across a boundary.
+- **`proofs/` is claimed by no scope**, and `tools/`, `rescue.c`,
+  `lids.h` and `install-agents.sh` are not either. That is a statement
+  about the scopes rather than a defect — but an unclaimed file is one
+  two agents can edit at once.
+
+**Waiting on a prerequisite:** which workstream owns `nwsup.c` and
+`nwspawn.c` while both are in flight. It is not a territory question, so
+`.claude/rules/` cannot answer it; the decision belongs in a
+`docs/options/` entry alongside the other open design questions, and
+whoever opens that file records the answer in this section in the same
+commit. Until then the next collision happens inside a file rather than
+between branches, where a fast-forward cannot fix it.
 
 ## Dispatching agents
 
