@@ -1038,6 +1038,23 @@ def test_dupname_refused():
            f"{blob_h('NW_DUP_SLOTS')} slots -- widen the candidate set")
     a, bb, slot = pair
 
+    # The pairing for the probe, and it is the assertion this test was
+    # missing. Everything below asserts that a duplicate is refused, which
+    # a degenerate probe also satisfies: make c_name_slots return a
+    # constant and the pair becomes two adjacent names that do not collide,
+    # the collision case silently degrades into a second plain duplicate,
+    # and the ok line still says "a real collision on slot 0". tcb-review
+    # ran exactly that control and the test passed. So assert the property
+    # the case depends on, here, where it is cheap.
+    expect(len(set(slots)) > 1,
+           f"the slot probe answered the same slot for all {len(cand)} "
+           f"names -- it is not reading name_dup's table, and the "
+           f"collision case below is not a collision")
+    expect(a != bb, "the colliding pair must be two different names")
+    expect(slots.count(slot) >= 2,
+           f"{a} and {bb} are supposed to share slot {slot}, but only "
+           f"{slots.count(slot)} name lands there")
+
     cases = []
     d = bytearray(base)
     put(d, 1, f"u{0:02d}")
@@ -1122,6 +1139,11 @@ def test_checker_rejects_crafted_fields():
 
     def craft(why, edits):
         d = bytearray(base)
+        if why.startswith("dirtyblank"):
+            # Clear the brick and the lid that requires one, so the only
+            # thing wrong with this blob is the dirty padding.
+            d[HDR + NAME + PATH:HDR + NAME + PATH + BRICK] = b"\x00" * BRICK
+            d[LIDS_OFF] = 1
         for off, val in edits:
             d[off] = val
         d[16:20] = b"\x00\x00\x00\x00"
@@ -1138,7 +1160,22 @@ def test_checker_rejects_crafted_fields():
     # blob is rebuilt either way -- and it is the difference between pinning
     # a closed set and pinning one member of it.
     LEGAL_LIDS = 1 | 2 | 4 | 8          # seccomp landlock newns newnet
+    BRICK_OFF = HDR + NAME + PATH
     cases = [
+        # A blank brick must be zero to the field width. Deleting that check
+        # left the suite, the coverage floor AND the caller proof green --
+        # gcov marks `if (...) return NW_E_BRICK;` covered on every unit
+        # with a blank brick without the return ever being taken, and the
+        # proof only ever asserted brick[0]. An unvalidated field cannot be
+        # given meaning later: an old blob carrying garbage would be
+        # accepted by a new checker that reads it. Bug 1's shape, found by
+        # tcb-review, which also noted the incentive to delete it -- that
+        # 96-iteration loop is most of the caller proof's runtime.
+        ("dirtyblank", [(BRICK_OFF + 1, ord("x"))], "brick path",
+         "a blank brick with a nonzero byte after it"),
+        ("dirtyblank-last", [(BRICK_OFF + BRICK - 1, 1)], "brick path",
+         "a blank brick with a nonzero byte in its last position"),
+    ] + [
         (f"kind{k}", [(KIND_OFF, k)], "kind",
          f"kind={k}, outside the two the runtime knows")
         for k in (2, 3, 127, 255)

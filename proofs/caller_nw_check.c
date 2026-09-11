@@ -128,6 +128,18 @@ int main(void)
             __CPROVER_assert(u[k]._pad == 0, "accepted: spare byte is zero");
             __CPROVER_assert(u[k].brick[0] == 0 || (u[k].lids & NW_LID_NEWNS),
                              "accepted: a brick implies the NEWNS lid");
+            /* A blank brick is zero to the field width. This was asserted
+             * nowhere -- only brick[0] was -- so deleting the check that
+             * enforces it left this proof, the suite and the 99% coverage
+             * floor all green, while a blob with garbage in brick[1..]
+             * validated. An unvalidated field cannot be given meaning
+             * later. tcb-review. */
+            int blank_is_zero = 1;
+            for (int i = 1; i < NW_BRICK_LEN; i++)
+                if (u[k].brick[i] != 0) blank_is_zero = 0;
+            __CPROVER_assert(u[k].brick[0] != 0 || blank_is_zero,
+                             "accepted: a blank brick is zero to the field "
+                             "width");
             __CPROVER_assert(!(u[k].lids & NW_LID_LANDLOCK) || u[k].brick[0],
                              "accepted: landlock implies a brick");
             __CPROVER_assert(u[k].kind == NW_KIND_ONESHOT

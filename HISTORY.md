@@ -2424,3 +2424,98 @@ that went wrong because of that ordering.
   `fd-auditor`'s third report. `wbuf[8]` is the closest to the class: if
   `window_s` ever widens past `uint16_t`, `snprintf` truncates and `nw-sup`
   parses a *different* restart window, silently.
+
+## 33. The check that could be deleted without anything noticing (2026-09-11)
+
+`tcb-review`'s third pass asked the question the whole discipline is built
+on — *what single change would still leave this passing?* — and found one.
+Delete this from `nwcheck.c`:
+
+```c
+} else {
+    for (int k = 0; k < NW_BRICK_LEN; k++)
+        if (u[i].brick[k] != 0) return NW_E_BRICK;
+}
+```
+
+and **the suite, the 99% coverage floor and the CBMC caller proof all stay
+green.** A blob whose unit has `brick[0] == 0` and garbage in
+`brick[1..95]` then validates. That is bug 1's shape and the exact hazard
+`.claude/rules/plan.md` names: an unvalidated field cannot be given
+meaning later, because an old blob carrying garbage would be accepted by a
+new checker that reads it.
+
+Each of the three artifacts missed it for its own reason, and the reasons
+are worth more than the fix:
+
+- **Coverage.** `if (u[i].brick[k] != 0) return NW_E_BRICK;` is one source
+  line, so gcov marks it executed by every unit with a blank brick, with
+  the return never taken. Line coverage at 99% does not mean every
+  rejection path has fired, and `tools/coverage-tcb.sh` said the opposite.
+  It now says this.
+- **The test.** `test_checker_rejects_crafted_fields` zeroes the *whole*
+  brick field for its landlock case. Nothing planted a blank-but-dirty one.
+- **The proof.** Every brick post-condition was about `brick[0]`.
+
+There was also an active incentive to delete it: that 96-iteration loop is
+most of the caller proof's runtime, and removing it takes the run from
+about 70 seconds to 1. Someone optimising the proof would have found it.
+
+Closed from both sides — two crafted cases (`brick[1]` and the last byte)
+and a post-condition over `brick[1..]`. Deleting the check now fails the
+suite on the reason string and fails the proof on
+`accepted: a blank brick is zero to the field width`.
+
+### The loop-id class, closed properly
+
+§31a fixed one hardcoded CBMC loop id. The same edit had renumbered
+`main`'s loops in `leaf_name_dup.c` too, and `main.2:129` — the bound on
+the slot-init loop that had moved into `name_dup_init` — **named nothing at
+all**. CBMC ignores an unknown `--unwindset` name silently, so a bound left
+behind by a refactor reads as a bound and is not one. The unwinding
+assertion caught the consequence; nothing caught the cause.
+
+Both halves are mechanical now: every id is resolved from the loop's source
+line, and `run.sh` refuses to run a proof whose `--unwindset` names a loop
+that `--show-loops` does not report. The control stops the run before any
+proof executes.
+
+### And the stub that assumed more than its proof delivered
+
+`path_ok_len` takes its field width as a parameter, and `nw_check` calls it
+at **both** `NW_PATH_LEN` and `NW_BRICK_LEN`. The leaf proof ran at one.
+The caller's stub assumed the accept-postcondition at whichever width it
+was called with, so this was the single place where the hand-maintained
+stub/leaf correspondence — the part of the composition with nothing
+mechanical behind it — claimed more than had been proven. Injecting
+`if (max != NW_PATH_LEN) return 1;` left the proof SUCCESSFUL. It runs at
+both widths now, and that injection fails the second one.
+
+### Smaller, same round
+
+- **`mkcomp.py` counted braces inside comments.** A lone brace in a comment
+  — legal C, clean under `-Wall -Wextra` — made it stop early, leave the
+  body in, and exit 0 with both of its own guards satisfied: the definition
+  count was 1, and the re-match found 0 because what it re-matched was the
+  declaration it had just emitted. The matcher skips comments and literals
+  now, and gcc syntax-checks what it wrote.
+- **`test_dupname_refused` never asserted that its pair collides.** Make
+  the probe return a constant and the pair becomes two names that do not
+  collide, the collision case degrades into a second plain duplicate, and
+  the `ok` line still says `a real collision on slot 0`. The probe was
+  hardened earlier to observe `name_dup`'s own insert, which makes a wrong
+  answer unlikely — but unlikely is not asserted, and the pairing is three
+  cheap lines.
+- `/tmp` is unreliable in this sandbox: two consecutive listings of a `/tmp`
+  directory returned different file sets with no run in between, producing
+  a spurious `make proof` failure. Proof output defaults to `/var/tmp` now.
+  Recorded because a reader who hits it will otherwise treat it as a
+  finding — and because I hit it myself earlier and read it as one.
+
+The pattern across §30 to §33 is one thing said four ways: **every artifact
+that reports success can report it for a reason other than the one you
+mean** — a test that passes because the mechanism never ran, a proof that
+passes because the assertion was never reached, a coverage number that
+counts a line whose branch never fired, a bound that names a loop which no
+longer exists. The defence is the same in all four cases and it is not
+review: it is removing the mechanism and watching the artifact go red.

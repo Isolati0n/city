@@ -13,6 +13,7 @@ A `static int f(...);` declaration with the definition supplied later in the
 same translation unit is legal C, so the stubs stay file-local exactly as the
 originals are.
 """
+import os
 import re
 import sys
 
@@ -33,18 +34,48 @@ def strip_body(src, fn):
         return src, len(hits)
     m = hits[0]
     i = src.index("{", m.end() - 1)
-    depth, j = 0, i
-    while True:
-        if src[j] == "{":
+    j = _matching_brace(src, i, fn)
+    return src[:m.start()] + m.group(1) + ";" + src[j + 1:], 1
+
+
+def _matching_brace(src, i, fn):
+    """Index of the `}` closing the `{` at i, ignoring comments and literals.
+
+    The first version counted every brace in the file. A lone brace inside a
+    comment -- legal C, clean under `gcc -Wall -Wextra` -- made it stop
+    early, leave the body in place, and exit 0, with both of its own guards
+    satisfied: the definition count was 1, and the re-match found 0 because
+    what it re-matched was the declaration it had just emitted. Found by
+    tcb-review. The comments in this repository are long and discuss code,
+    so a brace in one is a plausible edit rather than a contrived one."""
+    depth, j, n = 0, i, len(src)
+    while j < n:
+        c = src[j]
+        if c == "/" and j + 1 < n and src[j + 1] == "*":
+            k = src.find("*/", j + 2)
+            if k < 0:
+                raise SystemExit(f"mkcomp: unterminated comment in {fn}")
+            j = k + 2
+            continue
+        if c == "/" and j + 1 < n and src[j + 1] == "/":
+            j = src.find("\n", j)
+            if j < 0:
+                break
+            continue
+        if c in "\"'":
+            q, j = c, j + 1
+            while j < n and src[j] != q:
+                j += 2 if src[j] == "\\" else 1
+            j += 1
+            continue
+        if c == "{":
             depth += 1
-        elif src[j] == "}":
+        elif c == "}":
             depth -= 1
             if depth == 0:
-                break
+                return j
         j += 1
-        if j >= len(src):
-            raise SystemExit(f"mkcomp: unbalanced braces in {fn}")
-    return src[:m.start()] + m.group(1) + ";" + src[j + 1:], 1
+    raise SystemExit(f"mkcomp: unbalanced braces in {fn}")
 
 
 def main():
@@ -71,6 +102,27 @@ def main():
               " edit. */\n")
     out.write(src)
     out.close()
+
+    # And it must be C. A backstop for anything the matcher above still gets
+    # wrong: a mangled comp file otherwise reaches CBMC, whose diagnostic
+    # points at whatever prose the truncation landed in rather than at this
+    # script. Warnings are expected -- the stripped leaves are declared and
+    # not defined here.
+    import shutil
+    import subprocess
+    if shutil.which("gcc"):
+        r = subprocess.run(
+            ["gcc", "-fsyntax-only", "-std=gnu11",
+             "-I" + os.path.dirname(os.path.abspath(sys.argv[1])),
+             "-I" + os.path.dirname(os.path.abspath(sys.argv[2])),
+             sys.argv[2]],
+            capture_output=True, text=True)
+        if r.returncode != 0:
+            sys.stderr.write(r.stderr)
+            raise SystemExit(
+                "mkcomp: the generated comp file is not valid C. A leaf body "
+                "was cut in the wrong place -- fix this script rather than "
+                "the output, which is regenerated every run.")
 
 
 if __name__ == "__main__":

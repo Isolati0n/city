@@ -33,6 +33,16 @@ set -eu
 # uncovered because blob.h asserts at compile time that the table cannot
 # fill. Unreachable by construction is the right reason for a line to be
 # cold; "no test does that" is not.
+#
+# READ THE NUMBER HONESTLY. This is LINE coverage, and a line that is both
+# a condition and its consequence counts as covered when the condition runs
+# -- `if (u[i].brick[k] != 0) return NW_E_BRICK;` is marked executed by
+# every unit with a blank brick, with the return never taken. So 99% does
+# not mean every rejection path has fired. tcb-review deleted that whole
+# check and the suite, this floor AND the CBMC caller proof all stayed
+# green. The uncovered LIST is still what finds things; the percentage only
+# stops it sliding. A branch-coverage pass (gcov -b) would say more and has
+# not been done.
 FLOOR=${1:-99}
 ROOT=$(pwd)
 W=$(mktemp -d)
