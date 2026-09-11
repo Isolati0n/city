@@ -76,6 +76,13 @@ stage: all
 	# disagree.
 	mkdir -p $(STAGE)/src
 	cp -f nwcheck.c blob.h $(STAGE)/src/
+	# The specs' limits, derived from blob.h. Generated at stage time and
+	# not only inside tests/run.py, because a fresh clone has no specs/
+	# (it is a build product, gitignored) and install-agents --check reads
+	# drift.md, which names specs/limits.als. `make test` on a clean clone
+	# failed there before this line existed -- found by actually cloning,
+	# which nothing else in the suite does.
+	python3 tools/gen-spec-limits.py >/dev/null
 	python3 bakery/nw-cc.py --probe $(STAGE)/nw/bin/unit-probe \
 	    --out $(STAGE)/efi/slots/A/plan.blob --lids seccomp
 	printf 'house solo %s/nw/bin/unit-probe kind=oneshot lids=seccomp\n' $(STAGE) >  $(STAGE)/work/slot-b.city
