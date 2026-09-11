@@ -248,15 +248,73 @@ def test_fuzz_checker():
 
 
 def test_difftest():
-    """Baker output must be accepted by C nw-check; flipped crc must not.
+    """The C and Python implementations must agree, checked as a difference
+    rather than as a corpus.
 
-    Also pins the magic across the two implementations. NW_MAGIC in blob.h is
-    now what nw_check compares against, but the baker has its own literal and
-    cannot include the header -- so the two are a place that must agree, and
-    this is what makes disagreeing fail rather than produce a confusing
-    NW_E_MAGIC at boot."""
+    This is where the CRC's correctness is discharged, and that matters more
+    than it looks: proofs/caller_nw_check.c leaves nw_crc32_split
+    unconstrained on purpose -- nw_check must be right for any checksum,
+    which is the stronger claim -- so nothing in the proof says the checksum
+    is the right one. This test is the other half, and proofs/README.md
+    names it as such.
+
+    It did not do that until 2026-09-11. It ran nw-check on one staged blob,
+    expected 0, and compared the magic literal: a corpus check on whatever
+    the suite happened to bake, cited as a difftest against zlib.crc32.
+    Its docstring also promised a flipped-crc case it did not contain.
+    Found by `claims`. Now it drives nw_crc32_split across every length and
+    every split point and compares each answer to zlib -- which is the
+    function the baker actually calls, so this is the real cross-language
+    agreement, not a restatement of it."""
+    # nw_crc32_split against zlib.crc32, both regions, every split point.
+    # Compiled from the staged sources so it answers for the binary under
+    # test -- same reason as c_name_slots.
+    srcdir = os.path.join(STAGE, "src")
+    expect(os.path.exists(os.path.join(srcdir, "nwcheck.c")),
+           f"{srcdir}/nwcheck.c is missing -- run make stage")
+    csrc = f"{WORK}/crcdiff.c"
+    open(csrc, "w").write(
+        '#include "nwcheck.c"\n#include <stdio.h>\n#include <stdlib.h>\n'
+        'int main(int argc, char **argv)\n{\n'
+        '    static unsigned char buf[4096];\n'
+        '    int n = atoi(argv[1]);\n'
+        '    for (int i = 0; i < n; i++) buf[i] = (unsigned char)(i * 37 + 11);\n'
+        '    for (int cut = 0; cut <= n; cut++)\n'
+        '        printf("%u\\n", nw_crc32_split(buf, (uint32_t)cut,\n'
+        '                                      buf + cut, (uint32_t)(n - cut)));\n'
+        '    (void)argc;\n    return 0;\n}\n')
+    cexe = f"{WORK}/crcdiff"
+    c = run(["gcc", "-std=gnu11", f"-I{srcdir}", "-o", cexe, csrc])
+    expect(c.returncode == 0, f"crc difftest build\n{c.out}{c.err}")
+    for n in (0, 1, 2, 19, 255, 256, 257, 1024, 4095):
+        buf = bytes(((i * 37 + 11) & 0xFF) for i in range(n))
+        want = [zlib.crc32(buf) & 0xFFFFFFFF] * (n + 1)
+        p = run([cexe, str(n)])
+        expect(p.returncode == 0, f"crc difftest n={n}\n{p.out}{p.err}")
+        got = [int(x) for x in p.out.split()]
+        expect(got == want,
+               f"nw_crc32_split disagrees with zlib at n={n}: first "
+               f"mismatch at cut="
+               f"{next(i for i, (a, b) in enumerate(zip(got, want)) if a != b)}"
+               if got != want and len(got) == len(want) else
+               f"nw_crc32_split produced {len(got)} answers for {n + 1} "
+               f"cut points" if len(got) != len(want) else "")
+    # The NULL second region, which is the only caller shape nw_crc32 used
+    # to serve and is now reachable only this way.
+    p = run([cexe, "0"])
+    expect(p.out.split() == ["0"], f"crc of nothing must be zlib's 0\n{p.out}")
+
     r = run([f"{BIN}/nw-check", f"{SLOTS}/A/plan.blob"])
     expect(r.returncode == 0, "difftest good")
+
+    # The flipped crc this docstring used to promise.
+    d = bytearray(open(f"{SLOTS}/A/plan.blob", "rb").read())
+    d[16] ^= 0x01
+    flipped = f"{WORK}/difftest-flipped.blob"
+    open(flipped, "wb").write(bytes(d))
+    r = run([f"{BIN}/nw-check", flipped])
+    expect(r.returncode != 0 and "crc32" in (r.out + r.err),
+           f"a flipped crc must be refused as crc32\n{r.out}{r.err}")
 
     want = blob_h("NW_MAGIC").strip('"')
     src = open(CC).read()
@@ -266,7 +324,7 @@ def test_difftest():
            f"blob.h NW_MAGIC is {want!r}, baker emits {set(lit)!r}")
     expect(open(f"{SLOTS}/A/plan.blob", "rb").read(8) == want.encode(),
            "the staged blob does not carry NW_MAGIC")
-    print("ok difftest")
+    print("ok difftest (crc vs zlib at every split point, magic, flip)")
 
 
 def test_kind_required():

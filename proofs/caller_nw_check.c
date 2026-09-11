@@ -35,17 +35,26 @@ uint32_t nondet_u32(void);
  * it is the stronger claim: nw_check must reach the same verdicts for ANY
  * hash, ANY duplicate judgement and ANY checksum. The CRC's own correctness
  * is a separate and easy obligation -- the suite's difftest against
- * zlib.crc32, which is what the baker uses. Invariant 7 already says the
+ * zlib.crc32, which is what the baker uses. Invariant 8 already says the
  * checksum is diagnostic and the structural checks are the safety property;
  * proving those hold for an arbitrary checksum result is stronger than
  * proving them for one particular one. */
+#ifdef PROOF_SIGCHECK
+/* Signature-only build: gcc cannot parse __CPROVER_exists, and the point of
+ * this build is the types, not the assumptions. See proofs/run.sh. */
+#define PROOF_ASSUME_NUL(s, max) (void)0
+#else
+#define PROOF_ASSUME_NUL(s, max) \
+    __CPROVER_assume(__CPROVER_exists { int i; i >= 0 && i < (max) \
+                                        && (s)[i] == 0 })
+#endif
+
 static int name_ok(const char *s, int max)
 {
     int r = nondet_int();
     if (r) {
         __CPROVER_assume(s[0] != 0);
-        __CPROVER_assume(__CPROVER_exists { int i; i >= 0 && i < max
-                                            && s[i] == 0 });
+        PROOF_ASSUME_NUL(s, max);
     }
     return r;
 }
@@ -55,17 +64,15 @@ static int path_ok_len(const char *s, int max)
     int r = nondet_int();
     if (r) {
         __CPROVER_assume(s[0] == '/');
-        __CPROVER_assume(__CPROVER_exists { int i; i >= 0 && i < max
-                                            && s[i] == 0 });
+        PROOF_ASSUME_NUL(s, max);
     }
     return r;
 }
 
 static uint32_t hash_name(const char *s) { (void)s; return nondet_u32(); }
 
-static int name_dup(int slot[static NW_DUP_SLOTS], const struct nw_unit *u,
-                    uint32_t i)
-{ (void)slot; (void)u; (void)i; return nondet_int(); }
+static int name_dup(struct nw_dup_tab *t, const struct nw_unit *u, uint32_t i)
+{ (void)t; (void)u; (void)i; return nondet_int(); }
 
 uint32_t nw_crc32_split(const void *a, uint32_t na, const void *b, uint32_t nb)
 { (void)a; (void)na; (void)b; (void)nb; return nondet_u32(); }
@@ -132,13 +139,24 @@ int main(void)
                                                       | NW_LID_NEWNET)),
                              "accepted: no lid bit outside the closed set");
         }
+#if PROOF_BINDS > 0
         const struct nw_bind *bd = nw_binds(blob);
         for (uint32_t k = 0; k < PROOF_BINDS; k++) {
+#ifdef PROOF_BIND_REACHED
+            /* Reachability control. At PROOF_BINDS=0 this loop never runs,
+             * so the two assertions below are reported SUCCESS while saying
+             * nothing -- `__CPROVER_assert(0, ...)` passes there too, which
+             * is how `claims` found it. This must FAIL, and it fails only
+             * if the body is actually entered. Pairing an absence with the
+             * positive that the mechanism ran, in a proof. */
+            __CPROVER_assert(0, "REACHABILITY CONTROL: must fail");
+#endif
             __CPROVER_assert(bd[k].unit < PROOF_UNITS,
                              "accepted: bind names a unit that exists");
             __CPROVER_assert(u[bd[k].unit].brick[0] != 0,
                              "accepted: a bind implies the unit has a brick");
         }
+#endif
     }
 #endif
     return 0;

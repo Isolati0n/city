@@ -2168,3 +2168,72 @@ The rule this round earns: **run the controls, then have someone else run
 the controls you did not think of.** Three of the five mutants above are ones
 I would not have written, and each of them left a green suite printing a
 sentence that was false.
+
+## 31. The claims audit: nine, and two of them were in the proof (2026-09-11)
+
+`claims` was dispatched because `CLAUDE.md` and a new `proofs/` directory
+changed. It found nine things. Two matter.
+
+**Two of the caller proof's nine SUCCESS lines were vacuous.** The bind
+post-conditions sit inside `for (k = 0; k < PROOF_BINDS; k++)` and
+`PROOF_BINDS` is 0, so the loop never runs and the assertions are reported
+SUCCESS without being evaluated. The control is one line —
+`__CPROVER_assert(0, ...)` in the same body — and it passes. Meanwhile
+`docs/plans/02` counted one of them among the post-conditions the proof had
+"grown", on a page that also says "**Anything with binds.** `n_binds == 0`
+throughout". The document contradicted itself and the proof agreed with the
+wrong half.
+
+This is `harness.md`'s unpaired-absence rule — *satisfied by the mechanism
+working and by the mechanism never being reached, reported identically* —
+reproduced inside a proof harness, where it is harder to see because the
+tool prints SUCCESS with such conviction. `make proof` now runs the caller a
+second time at one bind, with a reachability control that must fail.
+
+**`PROOF_UNITS` and `PROOF_BINDS` were documented as raising the caller and
+were passed to nothing.** `PROOF_UNITS=3 sh proofs/run.sh caller` produced a
+byte-identical one-unit run — same 282 properties — that read like a
+three-unit one. Worse than useless: a reader who set it got a weaker proof
+that looked stronger.
+
+The rest, each a sentence that read as fact:
+
+- `CLAUDE.md` said `make proof` exits 3 without cbmc. `proofs/run.sh` exits
+  3; `make` flattens it to 2. The whole point of a distinguished code is
+  that a caller can tell SKIP from FAIL, and through `make` none could.
+- `proofs/README.md` said "every byte is free". Two of the four harnesses
+  narrow the input on purpose, soundly, and say so at the site —
+  `claims` falsified the summary by asserting the pinned bytes are pinned
+  and watching CBMC verify it.
+- It also said `name_dup` is proven over "all 2^(8·32) values" of each name
+  in a cell that begins "every pair of **well-formed** names". Both halves
+  cannot be true.
+- `docs/plans/02` quoted `SUCCESS: 247  FAILURE: 0`. **cbmc 5.95.1 does not
+  print a line of that shape** — it prints `** 0 of N failed`. The block was
+  reformatted from memory rather than pasted, which is why the number
+  belonged to a harness that no longer exists. §28's defect in miniature.
+- The leaf counts quoted as evidence in its assumption table (`0 of 68`,
+  `0 of 32`) are from harnesses that asserted less than the ones in
+  `proofs/` do. Today: 335 and 326.
+- `nwcheck.c`'s `name_dup` comment still said, present tense, that no test
+  had ever reached `NW_E_DUPNAME` — falsified by the test added in the same
+  commit, which `HISTORY.md` §29 describes. The characteristic failure
+  inside a comment about the characteristic failure.
+- An invariant reference in a brand-new file used the pre-2026-09-10
+  numbering that `CLAUDE.md` explicitly warns about.
+
+**And the one that was a real gap, not a wording problem.** `proofs/README`
+named `test_difftest` as where the CRC's correctness is discharged — which
+is load-bearing, because the caller proof leaves `nw_crc32_split`
+unconstrained on purpose. `claims` read the test: it ran `nw-check` on one
+staged blob, expected 0, and compared a magic literal. No differential
+comparison of anything. Its own docstring promised a flipped-crc case it did
+not contain. It now drives `nw_crc32_split` across every length and every
+split point against `zlib.crc32` — the function the baker actually calls —
+and flips a crc byte. Three controls fail it: a truncated second region, a
+wrong polynomial, and deleting the crc comparison from `nw_check`.
+
+The rule: **a proof prints SUCCESS for an assertion it never evaluated, and
+so does a test.** Everything the negative-control discipline says about
+tests applies unchanged to harnesses, and it is easier to forget there
+because the output is so much more emphatic.

@@ -131,9 +131,13 @@ static uint32_t hash_name(const char *s)
  * Extracted from nw_check on 2026-09-10 for the same two reasons as the CRC
  * above. It is the single largest obstruction to model-checking the caller
  * -- CBMC unwound this loop 10,265 times against 320 for the next worst --
- * and it is code no test has ever reached: NW_E_DUPNAME has never been
- * produced by nw-check, because the duplicate-name test rejects at the
- * baker. Hardest to verify and least exercised are the same property here:
+ * and until 2026-09-11 it was code no test had ever reached: NW_E_DUPNAME
+ * had never been produced by nw-check, because the only duplicate-name test
+ * rejected at the baker. test_dupname_refused reaches it now, and
+ * proofs/leaf_name_dup.c proves it. Past tense on purpose -- this sentence
+ * was left in the present by the same change that falsified it, which is
+ * this file's characteristic failure inside a comment about it.
+ * Hardest to verify and least exercised were the same property here:
  * the interesting path needs a hash collision, which a fuzzer will not
  * stumble into and a solver cannot bound cheaply. As a function it can be
  * proven and tested on its own.

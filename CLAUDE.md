@@ -174,8 +174,12 @@ make proof      # the CBMC proofs of the validator, and their controls
 genuine PID 1 and orphan reaping is actually exercised.
 
 `make proof` is minutes rather than seconds and needs `cbmc`, so it is not
-part of `make test`; when `cbmc` is absent it exits 3 and says SKIP rather
-than passing. **A proof kept outside the tree is a sentence** — that is the
+part of `make test`. When `cbmc` is absent, **`proofs/run.sh` exits 3** and
+says SKIP rather than passing — `make proof` reports that as `Error 3` and
+exits 2, so a caller that needs to tell SKIP from FAIL must run the script,
+not the target. (This paragraph said `make proof` exits 3 until 2026-09-11;
+`claims` ran it and it exits 2. The distinguished code exists exactly so a
+caller can tell the two apart, and through `make` no caller could.) **A proof kept outside the tree is a sentence** — that is the
 rule `proofs/` exists to enforce, and `HISTORY.md` §28 is why. Read
 `proofs/README.md` before quoting a result from it: every run there is
 bounded to a small number of units, and a bounded proof reported without its

@@ -113,6 +113,11 @@ path_ok_len   0 of 68 failed   VERIFICATION SUCCESSFUL    6.0s
 name_ok       0 of 32 failed   VERIFICATION SUCCESSFUL    0.8s
 ```
 
+*Those counts are from the 2026-09-10 harnesses, which asserted less than
+the ones in `proofs/` do. Today: `0 of 335` and `0 of 326`. Quoted in the
+assumption table below as "0 of 68" and "0 of 32" until `claims` measured
+them.*
+
 Over *all* inputs of the field width, with bounds, pointer validity, signed
 overflow and unwinding completeness — plus the post-conditions that an
 accepted path is absolute and NUL-terminated within the field. That
@@ -152,18 +157,21 @@ the following day.*
 
 ## Tier A — ACHIEVED for one unit, 2026-09-11
 
-```
-VERIFICATION SUCCESSFUL
-SUCCESS: 247  FAILURE: 0
+*The block originally quoted here was `SUCCESS: 247  FAILURE: 0` over five
+assertions. **cbmc 5.95.1 does not print a line of that form** — it prints
+`** 0 of N failed` — so the quoted output was reformatted from memory rather
+than pasted, and the count belonged to a harness that no longer exists. The
+in-tree harness reports nine assertions. Replaced below with what
+`make proof` actually prints. Found by `claims`, and it is the §28 defect in
+miniature: a proof result quoted in prose that the shipped harness cannot
+produce.*
 
-[main.assertion.1] accepted: unit name is NUL-terminated:      SUCCESS
-[main.assertion.2] accepted: exec_path is absolute:            SUCCESS
-[main.assertion.3] accepted: spare byte is zero:               SUCCESS
-[main.assertion.4] accepted: a brick implies the NEWNS lid:    SUCCESS
-[main.assertion.5] accepted: landlock implies a brick:         SUCCESS
+```
+  caller_nw_check            PASS (want PASS)  ** 0 of 282 failed  81s
+  caller_nw_check_vacuity    FAIL (want FAIL)  ** 1 of 196 failed  79s
 ```
 
-For **every one of the 2^(8×282) possible blobs** of that length: no
+For **every one of the 2^(8×274) blobs** of that length whose header says one unit and no binds (8 of the 282 bytes are pinned, soundly — see the harness): no
 out-of-bounds read, no invalid pointer, no signed overflow, no undefined
 shift, and — whenever `nw_check` answers `NW_OK` — the five properties the
 runtime then relies on without re-checking.
@@ -177,8 +185,8 @@ harness can fail, and the passes mean something.
 
 | assumption | why it is sound |
 |---|---|
-| `name_ok` accepts ⟹ name is NUL-terminated, non-empty | proven separately, 0 of 32 |
-| `path_ok_len` accepts ⟹ absolute, NUL-terminated | proven separately, 0 of 68 |
+| `name_ok` accepts ⟹ name is NUL-terminated, non-empty | proven separately — `proofs/leaf_name_ok.c` |
+| `path_ok_len` accepts ⟹ absolute, NUL-terminated, no `..` | proven separately — `proofs/leaf_path_ok.c` |
 | `hash_name`, `name_dup`, `nw_crc32_split` unconstrained | **nothing** assumed — the result holds for any hash, any duplicate verdict, any checksum, which is stronger than proving it against the real ones |
 | `n_units == 1`, `n_binds == 0` | the `len != need` size check rejects every other shape at this length *before* the unit loop and before anything asserted, so no input that could falsify a post-condition is excluded |
 | unit loop unwound to 2 | `--unwinding-assertions` stayed on and passed, so CBMC confirmed 2 suffices rather than being told to assume it |
@@ -221,8 +229,8 @@ The property is the one `nw_check` relies on, in both directions: running
 `name_dup` over units in order against a table that started empty reports a
 duplicate **exactly when** two of them share a name. Both directions,
 because a checker that answers `NW_E_DUPNAME` to everything satisfies the
-first. Names are free across all 2^(8×32) values; the assumption is only
-that each is non-empty and NUL-padded, which is what `name_ok` — proven
+first. Names range over every non-empty NUL-padded value of the field — not all
+2^(8×32) byte strings, which the padding assumption excludes, which is what `name_ok` — proven
 separately, and asserting exactly that pair of post-conditions — guarantees
 about every name that reaches `name_dup` in `nw_check`.
 
@@ -239,9 +247,14 @@ in the same slot — asked at run time through a throwaway that includes the
 translation unit, so a change to the hash cannot silently turn the test back
 into the weaker one — and truncating the chain fails it.
 
-The caller proof also grew three post-conditions it did not have: kind is
-one of the two, no lid bit outside the closed set, and a bind names a unit
-that exists and has a brick.
+The caller proof also grew post-conditions it did not have: kind is one of
+the two, and no lid bit outside the closed set. The two bind post-conditions
+were added at the same time and were **vacuous** — `PROOF_BINDS` was 0, so
+they sat in a zero-trip loop, where `__CPROVER_assert(0, ...)` also passes.
+`claims` found that by running exactly that control. `make proof` now runs
+the caller a second time at one bind, with a reachability control that must
+fail, which is the unpaired-absence rule from `harness.md` applied to a
+proof.
 
 ### What it cost, including the wrong turns
 
