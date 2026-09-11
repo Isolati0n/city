@@ -47,9 +47,15 @@ against `NW_MAX_UNITS`, and neither should you. Report the commands
 disagreeing *among themselves*; do not report the scope against
 `NW_MAX_UNITS`. (`drift` did exactly that once, and the answer is that
 the cell is empty rather than that the numbers disagree.)
-The other still-hand-written number is Alloy's `but 12 Int` bitwidth, and
-that one *does* track the header — `test_specs_are_checked` asserts it
-covers `NW_MAX_FDS`.
+Alloy's `but 12 Int` bitwidth does track the header, and
+`test_specs_are_checked` asserts it covers `NW_MAX_FDS`. It is not "the
+other" one — that word was an exclusive claim and it was wrong. **The fd
+multiplier is hand-written in both specs and pinned by nothing**:
+`plan.als`'s `2.mul[#House]` and `Plan.tla`'s `2 * n` against `blob.h`'s
+`NW_MAX_UNITS * 2`. `claims` changed the header to `* 3` and both specs
+ran clean. Only the limit VALUES left the drift class; the arithmetic is
+still the four-place change invariant 3 describes, so **check it by
+hand — it is the live half of your job on this row.**
 
 *This paragraph sat between two rows of the table above until
 2026-09-11, which orphaned the length row from its header, and its
@@ -65,7 +71,10 @@ clone: without it the check fails naming *this brief*, for a file no brief
 is wrong about, and `.claude/agents/claims.md` and this file both tell a reviewer to run
 it directly. `control` found it. (`specs/Plan.cfg` needs no marker — the
 check only looks at `.c/.h/.py/.als/.tla/.md/.sh`, so a `.cfg` is invisible
-to it, and declaring one would assert a check that is not happening.)
+to it. An inert marker is not harmless: it reads as a declaration that
+something is checked. `.claude/agents/claims.md` already carries one for a `.txt` that
+both exists and is never looked at, which is the same class and is worth
+removing if anyone is in there.)
 
 **Struct layout** — the Python `struct.pack` format against the C structs.
 Check by size, not by reading, and **take the format from the baker rather

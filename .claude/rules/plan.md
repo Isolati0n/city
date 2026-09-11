@@ -85,11 +85,24 @@ Alloy checks. **Every Alloy check is shown failing on every run** — the
 suite breaks the thing each one is about and requires a counterexample.
 `Sealed` gets two probes, one per conjunct, because the bind half admits
 no counterexample at the scope the fd half fails at.
-The TLC invariants have no such probe: their controls were run by hand
-once and are recorded in `HISTORY.md` §41, which is weaker and is why
-this sentence separates them. (This pointed at §39 until 2026-09-11.
-§39 is the round the jars landed; the TLC hand-controls are §41.
-`claims`.)
+
+**The TLC invariants have probes too, as of 2026-09-11**, one per
+predicate, each listing only its own invariant in the cfg so a sibling
+cannot answer for it. Until that day they had none, and `control` showed
+the price: `LargestCityFits == TRUE` in `Plan.tla` left the entire suite
+green, under an `ok` line that read "4 invariants incl. the boundary".
+All four mutations — each invariant replaced by `TRUE`, and `TypeOK`'s
+`kind` range widened — now turn the suite red. A TLC run is under a
+second, which is the whole reason this was cheap and the reason its
+absence was indefensible.
+
+*Their hand-run controls are still in `HISTORY.md` §39 **and** §41, and
+that sentence has now been wrong twice: it pointed at §39, was
+"corrected" to §41 alone, and the correction was wrong — §39 carries a
+"Controls, all run" table with `NW_MAX_FDS = 100` violating
+`FdBudgetCovers`. "Run by hand once" was wrong in a second way: two
+rounds, not one. `claims` found the correction, having not been asked to
+check the thing being corrected* to.
 
 The limits both specs use are generated from `blob.h` by
 `tools/gen-spec-limits.py` — including the lid bits, as of 2026-09-11.
@@ -101,13 +114,31 @@ that sentence, because nothing in `blob.h` corresponds to it — this
 file declares no bound on `#House`. The suite requires the three
 commands to agree and imposes a floor of 2 (below which the binds
 must-fail probe cannot reach a counterexample); it does not derive the
-value, and the prose copies of "scope 8" — here, and in `HISTORY.md`
-§39 and §41 — are pinned by nothing.
+value, and the prose copies of "scope 8" are pinned by nothing — do not
+enumerate them here, because an enumeration is a count and the first
+one written was already short by two (`tools/jars/README.md` and a
+comment in `tests/run.py`). `grep -rn "scope 8"` is the answer.
+
+**And the qualifier is still too generous.** `plan.als:85` hand-writes
+the fd multiplier — `plus[nwReserved[], 2.mul[#House]]` — and that `2`
+*must* track `blob.h`, which is exactly what invariant 3's "the
+arithmetic appears in four places" says. Nothing pins it: `claims`
+changed `* 2` to `* 3` in both of `blob.h`'s `_Static_assert`s and both
+specs ran clean, because `tools/gen-spec-limits.py` generates the four limit
+values and the two lid bits and no arithmetic at all. So the honest
+count is not one; it is the bitwidth plus every hand-written operator
+in `fdNeed` and `FdNeed`. **This is a live gap, not a refusal** — the
+fix is to derive the multiplier the way the limits are derived, and it
+is unbuilt.
+
 (This said "neither file holds a limit to drift", which the same round's
 own work disproved three lines later in `plan.als`; then "one
 hand-written number remains", which `claims` disproved by pointing at
-`for 8`. Correcting a sentence into an absolute is how the last five of
-these went wrong.)
+`for 8`; then "one that must track the header", which `claims` disproved
+again by pointing at the multiplier. Correcting a sentence into an
+absolute is how the last six of these went wrong, and the pattern is
+now the most reliable thing in this file: **if a sentence here counts
+something, it is probably wrong.**)
 
 *This section said the opposite until 2026-09-11 — "you cannot verify by
 running … no `alloy`, no `tlc`, and nothing in the `Makefile` or

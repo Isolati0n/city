@@ -112,10 +112,17 @@ def cfg(vals):
 \\* is nothing here for a header change to disagree with. It does NOT
 \\* follow that a blob.h change fails the ASSUME: the ASSUME is a
 \\* non-emptiness check now, so every POSITIVE value satisfies it.
-\\* NW_MAX_UNITS 0 or NW_MAX_FDS 0 does still fail it, and a negative
-\\* Reserved would -- "it cannot" was the flat form of this sentence
-\\* and `claims` broke it with MaxUnits = 0. What a header change of a
-\\* sane value can break is the RELATIONSHIP between the limits, and
+\\* NW_MAX_UNITS 0 does still fail it, and "it cannot" was the flat
+\\* form of this sentence until `claims` broke it that way. The other
+\\* two cases this comment then claimed are both wrong, measured: with
+\\* NW_MAX_FDS 0 the ASSUME is false but TLC never says so -- it stops
+\\* first on `The invariant of LargestCityFits is equal to FALSE`,
+\\* which is the right problem under the wrong name, i.e. the very
+\\* thing the paragraph above warns about, reproduced by the sentence
+\\* warning about it. And a negative NW_FD_RESERVED never reaches TLC:
+\\* the generator refuses it, and TLC cannot parse a negative in a cfg
+\\* even hand-written. What a header change of a sane value can break
+\\* is the RELATIONSHIP between the limits, and
 \\* that is what the invariants are for. (This comment claimed the
 \\* opposite until 2026-09-11. The same sentence was corrected in
 \\* Plan.tla and left standing HERE, in the file the tool writes -- so

@@ -145,12 +145,14 @@ check Sealed for 8 but 12 Int
    costs solver time and proves nothing extra about a bound that is not
    stated.
 
-   `but 12 Int` IS a real limit, and it is the one hand-written number
-   left in this file THAT TRACKS THE HEADER. The qualifier matters:
-   `for 8` above is hand-written too, three times, and `claims` read
-   the unqualified sentence as claiming otherwise. The difference is
-   that the bitwidth has something in blob.h to be wrong about and the
-   scope does not. Alloy's signed 12-bit Int spans -2048..2047, so it
+   `but 12 Int` IS a real limit, and the suite pins it: it must cover
+   NW_MAX_FDS. Do not read that as "the last hand-written number" --
+   two rounds tried to write that sentence and both were wrong. `for 8`
+   above is hand-written three times and tracks nothing (no bound on
+   #House is declared here). Worse, `fdNeed`'s `2` tracks blob.h and is
+   pinned by NOTHING: `claims` changed NW_MAX_UNITS * 2 to * 3 in the
+   header and this file still checked clean, because the generator
+   emits limit values, not arithmetic. Alloy's signed 12-bit Int spans -2048..2047, so it
    must cover NW_MAX_FDS; at 2048 the value wraps and the failure
    presents as a counterexample to Sealed plus a vacuous model -- the
    right problem under two wrong names. test_specs_are_checked asserts

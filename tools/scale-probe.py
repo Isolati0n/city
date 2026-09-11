@@ -296,12 +296,59 @@ def probe(n_units, work, hold_ms=None):
     # and "slow" is the expected behaviour near the break given this
     # tool's own quadratic finding. `control`, from reading.
     if timed_out:
+        # SAY WHICH TIMEOUT. The condition was broadened from "never
+        # opened" to "never completed" and this sentence was not, so the
+        # case the broadening exists for -- a city that opens and is then
+        # too slow -- reported "did not open within 1s" one line under
+        # `open=0.25s`. A message that contradicts the line above it is
+        # worse than the conflation it replaced. `control`.
+        secs = max(120, 0.5 * n_units)
+        stage = ("did not open at all" if t_open is None else
+                 f"opened at {t_open:.2f}s and then did not finish "
+                 f"reporting")
         res.update(ok=False,
-                   why=f"the city did not open within "
-                       f"{max(120, 0.5 * n_units):.0f}s. This is a "
+                   why=f"the city {stage} within {secs:.0f}s. This is a "
                        f"TIMEOUT, not a content failure -- the log is "
                        f"partial and the counts below would be about "
                        f"nothing.")
+        return res
+
+    # A DEATH AFTER OPENING IS A DEATH, not lost units. `died` was used
+    # only to suppress the timeout label, so a city that opened and then
+    # halted fell through to the content checks and reported "N units
+    # never reported" -- which is the loss-and-duplication finding this
+    # tool exists to make trustworthy, produced by a city that simply
+    # stopped. The branch below catches deaths BEFORE open only, because
+    # it keys on the `houses=` line. `control`.
+    # NOT EXERCISED, and said so rather than left to be assumed from the
+    # code being here. Tried 2026-09-11: SIGKILL to nw-root at n=256,
+    # 2048 and 10240, timed off the first report, off `houses=N`, and off
+    # a report count short of N. Every attempt landed either BEFORE the
+    # `houses=N` line (which PID 1 prints after spawning, so t_open is
+    # None and the branch above catches it) or after the final log was
+    # already complete (so the guard below correctly declines). The
+    # closest was 2030 of 2048 reported, and the finished log still had
+    # all 2048 -- reported as a reap failure, which is the accurate
+    # diagnosis for that run. So this branch is a hypothesis: `control`
+    # demonstrated the STATE (died with t_open set) by an induced kill,
+    # and the message is what that state deserves, but nothing here has
+    # ever produced it with an incomplete log. Do not cite it as covered.
+    #
+    # ...and fire only when the log does NOT already show the city
+    # finished.
+    # The loop tests p.poll() BEFORE the completion match, so a city that
+    # reports everything and exits inside one 50ms poll window breaks with
+    # died=True and completed=False. Without this guard that correct run
+    # reports a DEATH. Ask the log, which is the record, rather than the
+    # order two branches happened to run in.
+    _w = max(4, len(str(n_units - 1)))
+    _done = (f"houses={n_units}" in o and
+             len(set(re.findall(rf"house=(u\d{{{_w}}})", o))) == n_units)
+    if died and t_open is not None and not _done:
+        res.update(ok=False,
+                   why=f"PID 1 exited after opening (rc={rc}); this is a "
+                       f"DEATH, not lost units. last: "
+                       f"{o.strip().splitlines()[-1][:160] if o.strip() else '(no output)'}")
         return res
 
     if f"houses={n_units}" not in o:

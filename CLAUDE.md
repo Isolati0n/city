@@ -54,14 +54,18 @@ sections after this one and are deliberately not numbered here.
    `specs/Plan.cfg`, generated out of `blob.h` by
    `tools/gen-spec-limits.py`, so those two cells cannot disagree with
    the header — the drift class is removed there rather than checked.
-   One hand-written number *that must track the header* survives in a
-   spec: Alloy's `but 12 Int` bitwidth, and `test_specs_are_checked`
-   asserts it covers `NW_MAX_FDS`. This said "one hand-written number"
-   flat until 2026-09-11, and `plan.als` also writes `for 8` three
-   times — a hand-written number with nothing in `blob.h` to track,
-   because the file declares no bound on `#House` at all. The suite
-   requires the three to agree and imposes a floor; it does not derive
-   the value. `claims`. (`Plan.tla` also hand-copied the lid bits until
+   **Do not count what is left hand-written here.** Two attempts on
+   2026-09-11 both got it wrong: "one hand-written number" ignored
+   `plan.als`'s `for 8` (written three times, and tracking nothing,
+   because that file declares no bound on `#House`); "one that must
+   track the header" then ignored the fd *multiplier*. `claims` changed
+   `* 2` to `* 3` in both of this header's `_Static_assert`s and both
+   specs ran clean — the generator emits the four limit values and the
+   two lid bits, and no arithmetic. So the arithmetic really is the
+   four-place change the paragraph above says it is, and only the
+   values were removed from that class. The one hand-written number
+   the suite *does* pin is Alloy's `but 12 Int` bitwidth, which
+   `test_specs_are_checked` asserts covers `NW_MAX_FDS`. (`Plan.tla` also hand-copied the lid bits until
    2026-09-11; nothing checked them and their only consumers are
    unchecked predicates, so `LidNewNS == 999` ran clean. Generated now.)
 4. **`nw-spawn` exits; its death is not a failure mode.** It forks one

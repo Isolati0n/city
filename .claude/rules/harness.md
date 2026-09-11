@@ -205,8 +205,13 @@ machine will not have it.
 ## Scale: measured 2026-09-11, and the numbers are in the tool
 
 The gap is closed by `tools/scale-probe.py`. It rebuilds the tree at a
-raised `NW_MAX_UNITS` — a full rebuild plus a re-bake, so far too slow
-for `make test` — bakes a city of N units, boots it under
+raised `NW_MAX_UNITS` — which is **not** why it stays out of `make
+test`: measured, `build_at()` is well under a second and flat in N, and
+a whole rung at 64 units costs about one second. What is too slow is the
+large rungs' quadratic boot, documented below. (This said "a four-place
+change", then "a full rebuild plus a re-bake"; `claims` timed the
+rebuild and both were wrong. The cost was two paragraphs down the whole
+time.) It — bakes a city of N units, boots it under
 `unshare --pid --fork --mount-proc`, and checks that every unit ran,
 reported exactly once, held no ungranted descriptor, and was reaped.
 
@@ -219,13 +224,23 @@ tenfold: at `ulimit -n 2000` the break moves to n = 1024 with the same
 message and 512 still passes. **It fails loudly** — a named halt, not a
 crash and not silent misrouting.
 
-**Boot cost is quadratic.** Time to every house having run: 0.46 s at
-256, 1.22 s at 512, 2.64 s at 1024, 12.4 s at 2048, 54.0 s at 4096,
-140 s at 8192. `close_others` reads `/proc/self/fd` in each spawned
-house and the spawner inherits PID 1's ~2n log pipes, so the sweep is
-n × 2n. Dividing the measured time by 2n² gives 1.26, 1.47 and 1.61 µs
-per swept descriptor at 1024/2048/4096 — consistent to within 30%, which
-a wrong model would not be.
+**Boot cost is quadratic, and that shape is the only part of it worth
+writing down here.** `close_others` reads `/proc/self/fd` in each
+spawned house and the spawner inherits PID 1's ~2n log pipes, so the
+sweep is n × 2n. Dividing time-to-all-reported by 2n² gives a roughly
+constant µs-per-swept-descriptor across 1024/2048/4096, which is what a
+correct model predicts and a wrong one would not.
+
+**The absolute figures are deliberately not here, because the ones that
+were did not reproduce.** A table of six timings was written from a
+single pass on 2026-09-11; `claims` re-ran three repetitions per rung
+the next day, on the same machine and the same stated limits, and got
+roughly half at every rung — and therefore half the derived
+µs-per-descriptor too. The shape held; the constants did not. This is
+the file whose own rule is never to put a count in it, and six of them
+were one day old and none reproducing. Run `tools/scale-probe.py` and
+quote its output, with the repetition count, the way `measurement`
+requires. A single sample of a timing is not a measurement.
 
 **The break is a DEATH, and a large-N harness has to tell three exits
 apart.** Its wait loop ends when every house has reported, when the

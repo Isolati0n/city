@@ -236,7 +236,12 @@ def boot(slot=None, plan=None, extra=None, hold=800):
     return p.returncode, out
 
 
-def strip_c_comments(src):
+def _blank(span):
+    """Spaces for a span, KEEPING its newlines so line numbers survive."""
+    return "".join(ch if ch == "\n" else " " for ch in span)
+
+
+def strip_c_comments(src, dashdash=False):
     """Blank out comments and string literals, keeping line structure.
 
     A source-level assertion that matches raw text is an assertion about
@@ -244,6 +249,23 @@ def strip_c_comments(src):
     comment containing "at fork time (" and another containing
     "deaths = 0" -- both describing history, neither changing behaviour,
     and one of them is the re-filing CLAUDE.md explicitly asks for.
+
+    LINE STRUCTURE IS A CONTRACT, not a convenience. The caller at the
+    spec test matches command lines in the blanked text and then edits
+    the RAW text by those line numbers, so a branch that drops a newline
+    silently shifts every index after it. The block-comment branch
+    always preserved newlines; the quote branch did not, and `control`
+    collapsed the file with one apostrophe -- `Alloy's` in a line
+    comment -- which made the probe stripper delete the wrong raw lines,
+    unterminate a comment, and report "the must-fail probe for Sealed
+    did not solve". A legal spec, a red suite, and a message naming the
+    wrong file. Every branch goes through _blank now.
+
+    `dashdash` adds Alloy's `--` line comment. It is off by default
+    because `--` is a decrement in C, and this function also reads
+    nwsup.c. Without it, a `/*` written inside an Alloy `--` comment
+    blanked everything to the next `*/` -- 33 lines in `control`'s case,
+    hiding two of three commands. `control`, both.
     """
     out, i, n = [], 0, len(src)
     while i < n:
@@ -251,19 +273,20 @@ def strip_c_comments(src):
         if c == "/" and i + 1 < n and src[i + 1] == "*":
             j = src.find("*/", i + 2)
             j = n if j < 0 else j + 2
-            out.append("".join(ch if ch == "\n" else " " for ch in src[i:j]))
+            out.append(_blank(src[i:j]))
             i = j
-        elif c == "/" and i + 1 < n and src[i + 1] == "/":
+        elif (c == "/" and i + 1 < n and src[i + 1] == "/") or \
+             (dashdash and c == "-" and i + 1 < n and src[i + 1] == "-"):
             j = src.find("\n", i)
             j = n if j < 0 else j
-            out.append(" " * (j - i))
+            out.append(_blank(src[i:j]))
             i = j
         elif c in "\"'":
             j, q = i + 1, c
             while j < n and src[j] != q:
                 j += 2 if src[j] == "\\" else 1
             j = min(j + 1, n)
-            out.append(" " * (j - i))
+            out.append(_blank(src[i:j]))
             i = j
         else:
             out.append(c)
@@ -2053,17 +2076,38 @@ def test_specs_are_checked():
     # invariant that mentions `kind`, `BindNeed` or the range of `n`.
     # `control`. Read the names out of the generated file's own
     # INVARIANTS block instead of retyping them, and require the set.
-    inv_block = cfg_text.split("INVARIANTS", 1)
-    expect(len(inv_block) == 2,
-           f"the generated Plan.cfg has no INVARIANTS block, so TLC "
-           f"checks nothing:\n{cfg_text}")
+    # ANCHOR ON THE KEYWORD'S OWN LINE. A bare split matches the word
+    # inside a comment, and the generated cfg's header is prose about
+    # what the INVARIANTS block names -- `control` added one sentence
+    # mentioning it and the check read the CONSTANTS block as the
+    # invariant list. TLC accepted that config and checked all four.
+    cfg_lines = cfg_text.splitlines()
+    anchor = [i for i, l in enumerate(cfg_lines) if l.strip() == "INVARIANTS"]
+    expect(len(anchor) == 1,
+           f"the generated Plan.cfg does not have exactly one INVARIANTS "
+           f"line, so TLC checks nothing or this check reads the wrong "
+           f"block:\n{cfg_text}")
+    inv_block = [None, "\n".join(cfg_lines[anchor[0] + 1:])]
     # Bare identifiers only. Reading to EOF meant any trailing line --
     # including a comment TLC ignores -- joined the set and failed the
     # assertion under a message claiming an invariant had been dropped.
     # `control` appended `\\* end of generated config` and watched it fire
     # on a config TLC checks completely.
-    named = {l.strip() for l in inv_block[1].splitlines()
-             if l.strip() and re.fullmatch(r"[A-Za-z_]\w*", l.strip())}
+    # STOP AT THE FIRST NON-NAME, rather than reading to EOF. Keeping
+    # only bare identifiers fixed the trailing-comment case and left the
+    # shape: `control` appended a two-line `CHECK_DEADLOCK` / `FALSE`
+    # and both joined the set, failing under a message claiming an
+    # invariant had been dropped from a config TLC checks completely.
+    # INVARIANTS is emitted last today, which is why this is a trap for
+    # the next generator edit rather than a live defect.
+    named = set()
+    for l in inv_block[1].splitlines():
+        t = l.strip()
+        if not t:
+            continue
+        if not re.fullmatch(r"[A-Za-z_]\w*", t):
+            break
+        named.add(t)
     expect(named == {"FdBudgetCovers", "FdNeedAgrees", "LargestCityFits",
                      "TypeOK"},
            f"the generated Plan.cfg names invariants {sorted(named)}. "
@@ -2086,6 +2130,69 @@ def test_specs_are_checked():
            f"per legal unit count ({vals['nwMaxUnits']}). If Init stopped "
            f"ranging over n, the invariant is being checked at one size "
            f"and the run says nothing about the others.\n{tout[-1200:]}")
+
+    # MUST-FAIL PROBES FOR THE TLC SIDE. The Alloy checks have had these
+    # since the jars landed; the TLC invariants had only hand-controls in
+    # HISTORY, and `control` showed what that costs: `LargestCityFits ==
+    # TRUE` in Plan.tla leaves the whole suite green, and the ok line
+    # still reads "4 invariants incl. the boundary". An announcement, not
+    # an effect -- which is the defect this project is named after.
+    #
+    # Each probe breaks ONE invariant's subject and lists ONLY that
+    # invariant in the cfg, so a neutered predicate cannot be covered by
+    # a sibling firing on the same mutation. A TLC run here is under a
+    # second, measured, which is why there are four rather than a note
+    # saying this would be nice.
+    #
+    # LargestCityFits is a CONSTANT invariant, so TLC evaluates it before
+    # exploring and says "The invariant of X is equal to FALSE" rather
+    # than "Invariant X is violated". Two different sentences for the
+    # same outcome; accept either, per name.
+    tla_src = open(os.path.join(ROOT, "Plan.tla")).read()
+    for nm, cfg_sub, tla_sub in (
+            ("TypeOK", None,
+             ("kind = [i \\in 1..n |-> 0]", "kind = [i \\in 1..n |-> 2]")),
+            ("FdBudgetCovers", ("MaxFds", 16), None),
+            ("LargestCityFits", ("MaxFds", 16), None),
+            ("FdNeedAgrees", None,
+             ("FdNeed == Reserved + 2 * n", "FdNeed == Reserved + n")),
+    ):
+        d = f"{lab}/mustfail-tlc-{nm}"
+        os.makedirs(d, exist_ok=True)
+        tt = tla_src
+        if tla_sub:
+            src, dst = tla_sub
+            # str.replace, not re.subn: the TLA+ replacement carries a
+            # backslash (`\in`) and re reads that as a template escape.
+            k = tt.count(src)
+            expect(k == 1,
+                   f"the {nm} probe found {k} occurrences of `{src}` in "
+                   f"Plan.tla, expected one. Fix the pattern; do not "
+                   f"delete the probe, it is the only thing showing this "
+                   f"invariant can fail.")
+            tt = tt.replace(src, dst)
+        # Only this invariant, so no sibling can answer for it.
+        ct = "\n".join(cfg_lines[:anchor[0] + 1]) + f"\n    {nm}\n"
+        if cfg_sub:
+            key, val = cfg_sub
+            ct, k = re.subn(rf"^(\s*{key} = )\d+$", rf"\g<1>{val}", ct,
+                            flags=re.M)
+            expect(k == 1,
+                   f"the {nm} probe rewrote {k} cfg constants named "
+                   f"{key}, expected one -- the generated cfg changed "
+                   f"shape; fix the pattern, not the probe.")
+        open(f"{d}/Plan.cfg", "w").write(ct)
+        open(f"{d}/Plan.tla", "w").write(tt)
+        v = run(["java", "-cp", tla, "tlc2.TLC", "-config", "Plan.cfg",
+                 "Plan.tla"], cwd=d)
+        vt = v.out + v.err
+        expect(f"Invariant {nm} is violated" in vt or
+               f"The invariant of {nm} is equal to FALSE" in vt,
+               f"TLC did NOT report {nm} when its subject was broken. "
+               f"The invariant passes above without being able to fail, "
+               f"so it is evidence of nothing -- `control` set "
+               f"LargestCityFits to TRUE and the whole suite stayed "
+               f"green.\n{vt[-1200:]}")
 
     shutil.copy(os.path.join(ROOT, "plan.als"), f"{lab}/plan.als")
 
@@ -2121,8 +2228,28 @@ def test_specs_are_checked():
     #
     # So decide it once, on the source with comments blanked out, and
     # carry the line NUMBERS so the stripper below drops exactly these.
+    #
+    # dashdash=True: this is Alloy, where `--` opens a line comment. A
+    # `/*` written inside one blanked 33 lines and hid two of three
+    # commands, and the suite then reported Sealed as vacuous -- a
+    # message whose every clause was false, on a spec Alloy accepts.
+    #
+    # THE PROBES ARE BUILT FROM THE BLANKED TEXT, not the raw. A probe
+    # needs the code, never the prose, and building from raw meant every
+    # comment in the file was a way to break a probe: a command sharing
+    # a line with a `*/` took the `*/` with it when the line was dropped,
+    # unterminating the comment in the probe copy only. There is nothing
+    # left to unterminate now. `control` found both.
     als_raw = open(f"{lab}/plan.als").read().splitlines()
-    als_bare = strip_c_comments("\n".join(als_raw)).splitlines()
+    als_bare = strip_c_comments("\n".join(als_raw), dashdash=True).splitlines()
+    # The line-number carry is only sound while blanking preserves line
+    # structure, so check it rather than trusting it: `control` broke it
+    # with a single apostrophe and the failure named the wrong file.
+    expect(len(als_bare) == len(als_raw),
+           f"strip_c_comments changed plan.als's line count "
+           f"({len(als_raw)} -> {len(als_bare)}). Every index below is "
+           f"then off, and the failure will name the probe rather than "
+           f"the blanking. Fix the stripper, not this assertion.")
     cmd_ix = [i for i, l in enumerate(als_bare)
               if l.lstrip().startswith(("check ", "run "))]
     cmds = [als_bare[i] for i in cmd_ix]
@@ -2263,7 +2390,8 @@ def test_specs_are_checked():
     ):
         d = f"{lab}/mustfail-{name}-{kind}"
         os.makedirs(d, exist_ok=True)
-        pl = open(f"{lab}/plan.als").read()
+        # The BLANKED text, so the probe carries code and no prose.
+        pl = "\n".join(als_bare)
         lm = open(f"{lab}/limits.als").read()
         if kind == "budget":
             lm, nsub = re.subn(r"fun nwMaxFds\[\]: Int \{[^}]*\}",
@@ -2281,8 +2409,9 @@ def test_specs_are_checked():
                f"this means the header changed shape -- fix the pattern; "
                f"do not delete the probe, it is the only thing showing "
                f"this check can fail.")
+        drop = set(cmd_ix)
         pl = "\n".join(l for i, l in enumerate(pl.splitlines())
-                        if i not in set(cmd_ix))
+                        if i not in drop)
         pl += f"\ncheck {name} for {scope} but {have} Int\n"
         open(f"{d}/plan.als", "w").write(pl)
         open(f"{d}/limits.als", "w").write(lm)
@@ -2300,10 +2429,16 @@ def test_specs_are_checked():
                f"antecedent is unsatisfiable in scope reads exactly like "
                f"one that holds.\n{vout[-800:]}")
 
+    # "each shown failing" now covers BOTH solvers. It said that while
+    # only the Alloy half had probes, and `control` neutered a TLC
+    # invariant to a green suite under this exact line. An ok line that
+    # overstates what ran is the announcement-not-effect defect on the
+    # reporting side.
     print(f"ok specs-are-checked (TLC: {vals['nwMaxUnits']} states, "
           f"{len(named)} invariants incl. the boundary; Alloy: {len(checks)} checks "
-          f"clean at {have}-bit Int, each shown failing when its "
-          f"subject is broken; "
+          f"clean at {have}-bit Int; every invariant and every check on "
+          f"both sides shown failing when its own subject is broken, "
+          f"one probe per predicate; "
           f"limits generated from blob.h)")
 
 

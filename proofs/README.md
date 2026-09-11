@@ -77,8 +77,14 @@ a checker that answers `NW_E_DUPNAME` to everything satisfies the first one.
   and was cited here as a difftest. `claims` read the test.
 - **A proof says nothing about the rest of the system.** Every real bug in
   this project has been in descriptor handling at runtime, which no harness
-  here touches. `plan.als` and `Plan.tla` constrain the plan *format* and
-  nothing executes them at all.
+  here touches. `plan.als` and `Plan.tla` constrain the plan *format*, and
+  say nothing about descriptor handling either. *This said "nothing
+  executes them at all" until 2026-09-11, for a day after `tools/jars/`
+  landed and `test_specs_are_checked` began running both inside
+  `make test`. That retracted sentence was corrected in `plan.als`, in
+  `Plan.tla` and in `.claude/rules/plan.md` and survived here, in the
+  file `CLAUDE.md` sends readers to before quoting a proof result —
+  a fourth copy, found by `claims`.*
 - **`--conversion-check` is off.** With it, `path_ok_len` fails on
   `(unsigned char)s[n]`, a value-changing signed-to-unsigned conversion. That
   is well-defined C and deliberate — it is how bytes ≥ 0x80 are accepted. The

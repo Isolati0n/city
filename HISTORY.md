@@ -3414,9 +3414,14 @@ third — PID 1 exiting on its own, which is what the documented break *is*
 — as a hang. Verified by running the breaking rung:
 
 ```
-FAIL n=10240 phase=boot     open=Nones all-ran=0.1s fds=20488 dupslots=16384
-     why: city did not open with 10240 houses; last: [nw-root] HALT: log pipe
+  FAIL n=10240 phase=boot     open=Nones all-ran=0.1s fds=20488 dupslots=16384 reported=None interleaved=None
+       why: city did not open with 10240 houses; last: [nw-root] HALT: log pipe
 ```
+*(That block was reflowed when first written here — two fields dropped and
+the indentation changed — under the word "verified". `claims` re-ran the
+rung and diffed it. The substance was right and the quote was not, which
+is this project's whole failure mode in miniature, committed inside the
+section describing it.)*
 
 Seconds, not the 5120 s deadline a timeout message would have claimed.
 A flag at each exit; nothing inferred.
@@ -3465,3 +3470,112 @@ among themselves, never the scope against `NW_MAX_UNITS`.
   1.01 s at n=10240, fine at every documented rung, minutes above ~32k.
 - A *different but working* Alloy version is untested. The parse is
   fail-safe (the arity guard trips), so no hash check was added.
+
+## 43. Round five: the fix for round four was broken three ways (2026-09-11)
+
+`control` and `claims` against `06fb70f`. Round four narrowed a guard from
+"match the whole file" to "match lines starting `check `/`run `, on the
+source with comments blanked". **Every part of that had a hole**, and all
+three were found by planting comments a competent agent would write.
+
+### The blanking did not preserve line structure
+
+`strip_c_comments` blanked block comments newline-for-newline and blanked
+**quotes** with flat spaces. The caller matched command lines in the blanked
+text and then edited the *raw* text by those line numbers, so one apostrophe
+— `Alloy's`, in a line comment — collapsed the file by a line and every
+index after it pointed one line early. The probe stripper then deleted the
+wrong raw lines, unterminated a comment, and the suite reported *the
+must-fail probe for Sealed did not solve*: a legal spec, a red suite, and a
+message naming the wrong file. That is verbatim the failure §42 records as
+fixed.
+
+Every branch goes through one `_blank()` now, and the caller **asserts the
+line count survived** rather than trusting it. With the pre-fix stripper and
+the same mutant the assertion fires and names the stripper — "fix the
+stripper, not this assertion" — instead of blaming the probe.
+
+### The stripper did not know Alloy
+
+`--` opens a line comment in Alloy and the stripper only knew `//`. A `/*`
+written inside a `--` comment blanked 33 lines and hid two of three
+commands; the suite then called `Sealed` vacuous, in a message whose every
+clause was false. `dashdash=True` at the spec caller only — `--` is a
+decrement in C and the same function reads `nwsup.c`.
+
+### The probes were built from the wrong text
+
+A real command sharing a line with a `*/` took the `*/` with it when that
+line was dropped, unterminating the comment in the probe copy alone. The
+probes are built from the **blanked** text now: a probe needs the code and
+never the prose, and there is nothing left to unterminate.
+
+All three mutants planted at once, in one file: Alloy accepts it (three
+commands, verdicts unchanged) and the suite is green. Reverting the
+stripper turns it red; breaking `fdNeed` with the mutants still in place
+turns it red for the right reason.
+
+### The TLC invariants could not fail
+
+The Alloy checks have had must-fail probes since the jars landed. The TLC
+side had hand-controls in a history file, and `control` showed the price:
+`LargestCityFits == TRUE` left the **entire suite green**, under an `ok`
+line reading "4 invariants incl. the boundary". Announcement, not effect.
+
+Four probes now, one per invariant, each listing only its own invariant in
+the cfg so a sibling cannot answer for it. All four mutations turn the suite
+red. A TLC run is 0.7 s measured, which is what makes the previous absence
+indefensible rather than expensive.
+
+### install-agents.sh lied twice more
+
+`--force` **silently reverted this round's `drift.md`**: the brief gained 40
+lines, the heredoc that owns it did not, and `--check` then printed OK. The
+script's header claims this cannot happen "by construction". It can: a
+second copy that nothing compares is the defect, so `--check` compares them
+now, and the control (edit the brief, not the heredoc) fails loudly where it
+used to revert silently.
+
+And the `cd "$(dirname "$0")"` added in §42 was half a fix: under a symlink
+`$0` is the link, so `--list` from elsewhere printed headings, no agents and
+exit 0 — the exact §42 symptom, through the door the §42 fix left open.
+`readlink -f`.
+
+### Four of my own corrections were wrong
+
+- The ASSUME note claimed `NW_MAX_FDS 0` fails the ASSUME. It does not:
+  TLC stops first on `The invariant of LargestCityFits is equal to FALSE`
+  — the wrong error for the right problem, which is what the paragraph
+  warns about, reproduced inside the warning. A negative `Reserved` is
+  unreachable in both directions.
+- "One hand-written number that must track the header" ignored the fd
+  **multiplier**. `claims` changed `* 2` to `* 3` in `blob.h` and both
+  specs ran clean. Only the limit *values* left the drift class; the
+  arithmetic is still a four-place change and is pinned by nothing. **A
+  live gap**, now written as one.
+- `harness.md` blamed the rebuild for the ladder being too slow for
+  `make test`. Measured: `build_at` is under a second and flat in N. The
+  cost is the quadratic boot, documented two paragraphs below.
+- The §41 pointer was wrong; §39 carries TLC controls too.
+
+### And the boot-cost table did not reproduce
+
+Six timings, written from a single pass, re-run three times per rung the
+next day on the same machine: **roughly half at every rung**, and therefore
+half the derived µs-per-descriptor. The shape held. The numbers are out of
+the brief now — it is the file whose own rule is never to put a count in it.
+`measurement` has not run on this; nothing should quote an absolute until
+it has.
+
+### Recorded, not fixed
+
+- The post-open-death branch in `scale-probe.py` is a **hypothesis**.
+  `control` demonstrated the state by an induced kill; three attempts here
+  at n=256, 2048 and 10240 landed either before the `houses=N` line or
+  after the log was already complete. The comment says so.
+- The `tr '\n' ' '` on `absent-ok` paths is correct and exercised by
+  nothing: no brief declares two paths. `control` deleted it and the suite
+  stayed green.
+- `install-agents.sh` still carries a second copy of four briefs. Comparing
+  them makes divergence loud; it does not remove the copy.
+

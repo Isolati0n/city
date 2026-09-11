@@ -355,15 +355,24 @@ Cheap first step available today with no new tools: build the existing suite
 with `-fsanitize=address,undefined` and run it. Any latent UB in the TCB
 surfaces immediately.
 
-## Tier F — make the specs execute
+## Tier F — make the specs execute — **LANDED 2026-09-11**
 
-`plan.als` and `Plan.tla` are the one part of this repository that cannot be
-verified by running, because nothing runs them. `java` is present and the
+*Everything below is how this read when it was proposed, kept because the
+reasoning is still the argument for it. It is no longer outstanding: both
+jars are committed in `tools/jars/`, `test_specs_are_checked` runs TLC and
+Alloy inside `make test`, and `HISTORY.md` §39 and §41 record what running
+them found. What actually landed differs from the proposal in one way worth
+noting — `BrickNeedsNewNS`, `BindsNeedBrick` and `LandlockNeedsBrick` are
+NOT state-checked, because they are acceptance rules a generated plan
+satisfies by construction; see the note in `Plan.tla`.*
+
+~~`plan.als` and `Plan.tla` are the one part of this repository that cannot
+be verified by running, because nothing runs them. `java` is present and the
 TLA+ tools are a single jar. Wiring TLC into `make test` to check `TypeOK`,
 `BrickNeedsNewNS`, `BindsNeedBrick` and `LandlockNeedsBrick` is what turns
-invariant 3 from a rule people remember into one the build enforces.
+invariant 3 from a rule people remember into one the build enforces.~~
 
-Until then the honest label on those files stays kind 3, not kind 1.
+~~Until then the honest label on those files stays kind 3, not kind 1.~~
 
 ## Tier G — a reproducible artifact
 

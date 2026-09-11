@@ -36,7 +36,14 @@ set -eu
 # sends an agent here to find out who to dispatch, and the answer was
 # "nobody". `control` found it from /tmp. --check was already loud
 # (it fails on the missing directory), which is why this went unnoticed.
-cd "$(dirname "$0")"
+# readlink -f, NOT dirname alone: under `sh /path/link.sh` the shell sets
+# $0 to the SYMLINK, so dirname gives the link's directory and the cd goes
+# somewhere with no .claude/agents in it -- reproducing, through a symlink,
+# the empty-roster-exit-0 bug the cd was added to fix. `control` found the
+# fix half-done the same round it landed. Fall back to $0 where readlink
+# has no -f.
+self=$(readlink -f "$0" 2>/dev/null || echo "$0")
+cd "$(dirname "$self")"
 
 DIR=.claude/agents
 MARK='<!-- nw-init:install-agents v1 -->'
@@ -122,6 +129,30 @@ into plan.md/runtime.md; two owners for one file)"
         [ -e "$RULEDIR/$n.md" ] || fail "$RULEDIR/$n.md missing (territory rules)"
         if [ -e "$DIR/$n.md" ]; then
             fail "$n.md is in $DIR: it is territory rules, not an agent"
+        fi
+    done
+
+    # THE SCRIPT'S OWN SECOND COPY. Every OWNED brief exists twice: as a
+    # file, and as a heredoc below that --force writes. The header above
+    # says this script cannot revert an edit "by construction"; that was
+    # false. drift.md gained 40 lines on 2026-09-11, the heredoc did not,
+    # and `--force` in a clean clone deleted every one of them -- the
+    # generated-columns paragraph, the scope carve-out and the absent-ok
+    # marker -- then `--check` printed OK. Silent reversion, which is
+    # exactly the setup-agents.sh failure mode this script replaced.
+    #
+    # A second copy that nothing compares is the defect. Compare them.
+    # This cannot be designed out without dropping the heredocs, which is
+    # a bigger decision than this round; making the divergence loud is
+    # what stops it being silent. `claims`.
+    for n in $OWNED; do
+        f="$DIR/$n.md"
+        [ -e "$f" ] || continue
+        if ! sed -n "/^put $n <<'NWEOF'\$/,/^NWEOF\$/p" "$0" \
+             | sed '1d;$d' | diff -q - "$f" >/dev/null 2>&1; then
+            fail "$n.md has diverged from the heredoc in install-agents.sh: \
+--force would silently revert the file to the script's copy. Sync the \
+heredoc (see HISTORY.md section 43), do not edit the brief back."
         fi
     done
 
@@ -322,6 +353,55 @@ remembering. You are the version that does not depend on that.
 | descriptors | `NW_MAX_FDS`, `NW_FD_RESERVED` | `MAX_FDS`, `FD_RESERVED` | `fdNeed` | `FdNeed`, `Reserved` |
 | binds | `NW_MAX_BINDS` | `MAX_BINDS` | `bindNeed` | `MaxBinds` |
 | name / path / brick lengths | `NW_NAME_LEN`, `NW_PATH_LEN`, `NW_BRICK_LEN` | `NAME_LEN`, `PATH_LEN`, `BRICK_LEN` | — | — |
+
+**The `plan.als` and `Plan.tla` columns are GENERATED as of 2026-09-11**,
+with one exception named below. `MaxUnits`, `MaxFds`, `Reserved` and
+`MaxBinds` come from `specs/Plan.cfg`, and `nwReserved[]` and friends from
+`specs/limits.als`, both written out of `blob.h` by
+`tools/gen-spec-limits.py`. Those cells cannot disagree with
+the header, so do not report them as a mismatch — `plan.als` already
+records the cost of that once. A *limit* change is now a two-place change
+(`blob.h`, `bakery/nw-cc.py`); the *arithmetic* still appears in four
+places and is what "change one, change all four" now means.
+
+**The exception is the `units` row's `plan.als` cell, and it is half
+generated.** `fdNeed` is derived; the **scope** (`for 8`) is hand-written on
+each of the three commands and is derived from nothing — `plan.als`
+declares no bound on `#House`, so there is no header value for it to
+disagree with. `test_specs_are_checked` requires the three commands to
+agree with each other and imposes a floor; it does not check the scope
+against `NW_MAX_UNITS`, and neither should you. Report the commands
+disagreeing *among themselves*; do not report the scope against
+`NW_MAX_UNITS`. (`drift` did exactly that once, and the answer is that
+the cell is empty rather than that the numbers disagree.)
+Alloy's `but 12 Int` bitwidth does track the header, and
+`test_specs_are_checked` asserts it covers `NW_MAX_FDS`. It is not "the
+other" one — that word was an exclusive claim and it was wrong. **The fd
+multiplier is hand-written in both specs and pinned by nothing**:
+`plan.als`'s `2.mul[#House]` and `Plan.tla`'s `2 * n` against `blob.h`'s
+`NW_MAX_UNITS * 2`. `claims` changed the header to `* 3` and both specs
+ran clean. Only the limit VALUES left the drift class; the arithmetic is
+still the four-place change invariant 3 describes, so **check it by
+hand — it is the live half of your job on this row.**
+
+*This paragraph sat between two rows of the table above until
+2026-09-11, which orphaned the length row from its header, and its
+blanket "do not report them as a mismatch" covered the one cell that is
+not generated. `claims` found both.*
+
+Both generated files live under `specs/`, which is gitignored and written
+by `make stage`. On a tree that has never been staged they are absent;
+that is not drift, it is an unbuilt tree. Run `make stage` first.
+<!-- nw-init:absent-ok specs/limits.als -->
+That marker is why `sh install-agents.sh --check` still passes on a fresh
+clone: without it the check fails naming *this brief*, for a file no brief
+is wrong about, and `.claude/agents/claims.md` and this file both tell a reviewer to run
+it directly. `control` found it. (`specs/Plan.cfg` needs no marker — the
+check only looks at `.c/.h/.py/.als/.tla/.md/.sh`, so a `.cfg` is invisible
+to it. An inert marker is not harmless: it reads as a declaration that
+something is checked. `.claude/agents/claims.md` already carries one for a `.txt` that
+both exists and is never looked at, which is the same class and is worth
+removing if anyone is in there.)
 
 **Struct layout** — the Python `struct.pack` format against the C structs.
 Check by size, not by reading, and **take the format from the baker rather
