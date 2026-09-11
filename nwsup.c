@@ -287,8 +287,14 @@ int main(int argc, char **argv)
     int deaths = 0;
 
     for (;;) {
+        /* TERM during the previous house, or before this fork: do not
+         * start another one so shutdown can finish. */
+        if (stopping)
+            _exit(0);
         pid_t p = fork();
         if (p < 0) die("fork house");
+        if (p > 0)
+            child = p;
         if (p == 0) {
             if (lids & NW_LID_NEWNET) lid_netns();
             if (lids & NW_LID_NEWNS) lid_newns();
@@ -302,8 +308,18 @@ int main(int argc, char **argv)
             execv(path, av);
             die("exec house");
         }
-        child = p;
+        /* child = p is set before this point so a TERM that arrives
+         * between fork returning and waitpid can still signal the
+         * house. If stopping is already set, do not block in waitpid
+         * on a house that was never asked to stop. */
         int st = 0;
+        if (stopping) {
+            if (p > 0)
+                kill(p, SIGTERM);
+            if (waitpid(p, &st, 0) < 0) die("wait house");
+            child = 0;
+            _exit(WIFEXITED(st) ? WEXITSTATUS(st) : 0);
+        }
         if (waitpid(p, &st, 0) < 0) die("wait house");
         child = 0;
 

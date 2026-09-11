@@ -317,14 +317,13 @@ if [ "$CHECK" -eq 1 ]; then
         exit 1
     fi
     # An unattended production boot NEVER shuts down. Seeing it is a
-    # failure, and until 2026-09-11 it was the one outcome this check
-    # could not see: with NW_HOLD_MS on the kernel command line -- the
-    # same channel that carries NW_ROOT -- PID 1 closed the city 800ms
-    # after opening it and powered the machine off, and every grep above
-    # still passed. The panic that the stay-up change removed became a
-    # silent power-off, which is worse than what it replaced: the old
-    # failure printed "Attempted to kill init" and this one printed a
-    # green line. tcb-review found it by putting NW_HOLD_MS in APPEND.
+    # failure. Until 2026-09-11 NW_HOLD_MS on the kernel command line
+    # -- the same channel that carries NW_ROOT -- reached dawn via
+    # getenv and forwarded --hold-ms. The city closed 800ms after
+    # opening and powered off; every grep above still passed. dawn
+    # no longer reads that variable. The check stays: a regression
+    # that puts a timer back on the production argv must not print
+    # green.
     if grep -q '\[nw-root\] closed' "$LOG"; then
         echo "FAIL: the city closed. PID 1 is not supposed to return on an" >&2
         echo "      unattended boot -- check whether NW_HOLD_MS reached the" >&2

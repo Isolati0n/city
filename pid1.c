@@ -158,12 +158,19 @@ static void shutdown_city(void)
      * codebase keeps losing to. Inside the suite the child is PID 1
      * of its namespace, so the guard passes and reboot still zaps
      * the ns. Outside one, a stray call now HALTs instead of
-     * powering the host off. */
+     * powering the host off.
+     *
+     * sync(2) first. reboot(RB_POWER_OFF) does not flush the page
+     * cache: kernel_power_off runs notifiers, device_shutdown and
+     * machine_power_off. systemd / busybox / util-linux halt all
+     * sync first. Without this every clean shutdown is an unclean
+     * ext4. The lab cannot see it: reboot inside a pid ns only
+     * zaps the ns. */
     if (getpid() != 1)
         halt_now("reboot: not PID 1");
+    sync();
     if (reboot(RB_POWER_OFF) < 0)
-        say("reboot", "failed");
-    _exit(0);
+        halt_now("reboot failed");
 }
 
 static void spawn_logger(uint32_t i)
@@ -171,6 +178,16 @@ static void spawn_logger(uint32_t i)
     pid_t p = fork();
     if (p < 0) halt_now("logger fork");
     if (p == 0) {
+        /* Logger is a long-lived fork, not an exec. It must not keep
+         * PID 1's blocked TERM/INT: a later drain pass that SIGTERMs
+         * the logger would otherwise sit pending forever (D11's
+         * shape). Default action is terminate; shutdown still
+         * SIGKILLs. Unblock here so that pass is not a trap. */
+        sigset_t allow;
+        sigemptyset(&allow);
+        sigaddset(&allow, SIGTERM);
+        sigaddset(&allow, SIGINT);
+        sigprocmask(SIG_UNBLOCK, &allow, NULL);
         close(houses[i].log_w);
         for (uint32_t j = 0; j < n_houses; j++) {
             if (j == i) continue;
@@ -258,7 +275,9 @@ int main(int argc, char **argv)
     /* 0 is production: poll until SIGTERM/SIGINT, then shutdown_city
      * which reboot(RB_POWER_OFF)s and does not return.
      * --hold-ms N is the same loop with a deadline. One body. Splitting
-     * the loops was how --hold-ms 800 reached production and panicked. */
+     * the loops was how --hold-ms 800 reached production and panicked.
+     * N must be a positive decimal. atoi("-1") and atoi("foo") used
+     * to become 0 and take the forever loop with no diagnostic. */
     int hold_ms = 0;
     const char *plan = NULL;
     const char *slot = NULL;
@@ -267,8 +286,23 @@ int main(int argc, char **argv)
     int kill_spawner_test = 0;
 
     for (int i = 1; i < argc; i++) {
-        if (!strcmp(argv[i], "--hold-ms") && i + 1 < argc)
-            hold_ms = atoi(argv[++i]);
+        if (!strcmp(argv[i], "--hold-ms") && i + 1 < argc) {
+            const char *s = argv[++i];
+            int v = 0;
+            if (!s || !s[0])
+                halt_now("hold-ms");
+            for (const char *p = s; *p; p++) {
+                if (*p < '0' || *p > '9')
+                    halt_now("hold-ms");
+                int next = v * 10 + (*p - '0');
+                if (next < v)
+                    halt_now("hold-ms");
+                v = next;
+            }
+            if (v <= 0)
+                halt_now("hold-ms");
+            hold_ms = v;
+        }
         else if (!strcmp(argv[i], "--kill-spawner"))
             kill_spawner_test = 1;
         else if (!strcmp(argv[i], "--slot") && i + 1 < argc)
@@ -318,9 +352,6 @@ int main(int argc, char **argv)
     sigaddset(&mask, SIGPIPE);
     sigprocmask(SIG_BLOCK, &mask, NULL);
 
-    int sfd = signalfd(-1, &mask, SFD_CLOEXEC);
-    if (sfd < 0) halt_now("signalfd");
-
     int fd = open(plan, O_RDONLY);
     if (fd < 0) halt_now("open plan");
     struct stat st;
@@ -367,6 +398,14 @@ int main(int argc, char **argv)
 
     for (uint32_t i = 0; i < n_houses; i++)
         spawn_logger(i);
+
+    /* After the loggers exist. signalfd is SFD_CLOEXEC, which does
+     * nothing for a child that never execs; creating it first left
+     * every logger holding PID 1's signalfd for the life of the
+     * machine. Signals are already blocked, so anything raised in
+     * the gap stays pending and lands when this fd is created. */
+    int sfd = signalfd(-1, &mask, SFD_CLOEXEC);
+    if (sfd < 0) halt_now("signalfd");
 
     int report[2];
     if (pipe2(report, O_CLOEXEC) < 0) halt_now("report pipe");

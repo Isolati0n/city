@@ -188,27 +188,26 @@ int main(void)
 
     /* /oldroot only exists after a successful pivot_root. The MS_MOVE
      * path overmounts / and leaves no oldroot to detach; ENOENT is
-     * that path, not a failed detach. */
-    if (umount2("/" NW_OLD_ROOT, MNT_DETACH) < 0 &&
-        errno != ENOENT && errno != EINVAL && errno != ENODEV)
+     * that path, not a failed detach. EINVAL ("not a mount point")
+     * and ENODEV are a failed detach: oldroot is still mounted under
+     * the new root. Do not swallow those. */
+    if (umount2("/" NW_OLD_ROOT, MNT_DETACH) < 0 && errno != ENOENT)
         die("umount oldroot", NULL);
     if (rmdir("/" NW_OLD_ROOT) < 0 &&
         errno != EBUSY && errno != ENOTEMPTY && errno != ENOENT)
         die("rmdir oldroot", NULL);
 
     say("exec", NW_INIT_AT);
-    /* Production argv is --slots only. --hold-ms is a lab timer; PID 1
-     * without it reaps forever. The harness sets NW_HOLD_MS so
-     * dawn-real-boot can still observe shutdown_city. A kernel command
-     * line must not grow that variable. */
-    {
-        const char *hold = getenv("NW_HOLD_MS");
-        if (hold && hold[0])
-            execl(NW_INIT_AT, "nw-root", "--hold-ms", hold,
-                  "--slots", NW_SLOTS_AT, (char *)0);
-        else
-            execl(NW_INIT_AT, "nw-root", "--slots", NW_SLOTS_AT, (char *)0);
-    }
+    /* Production argv is --slots only. --hold-ms is a lab flag on
+     * nw-root, passed by the suite's boot() helper which execs
+     * nw-root directly. Dawn used to forward getenv("NW_HOLD_MS"):
+     * the kernel hands unrecognised cmdline tokens to init as
+     * environment, so NW_HOLD_MS=800 on the bootloader line shut
+     * the city and powered off. Detection in mkboot --check was
+     * hardened; the mechanism was left alone. The mechanism is
+     * gone. dawn-real-boot must SIGTERM PID 1 (or stop going
+     * through dawn for the timer) — that test is Claude's file. */
+    execl(NW_INIT_AT, "nw-root", "--slots", NW_SLOTS_AT, (char *)0);
     die("exec nw-root", NW_INIT_AT);
     return 80;
 }

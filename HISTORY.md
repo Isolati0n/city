@@ -2961,3 +2961,41 @@ Reported, not fixed, because `pid1.c`, `dawn.c` and the restart loop in
   change exists to remove.
 - `budget-hard-total` is green against a 30-second window, so it pins "no
   reset inside a 7s hold" rather than "hard total".
+
+## 38. Eight findings on 20bad4d, fixed in the files that own them (2026-09-11)
+
+Base `20bad4d`. pid1.c, dawn.c, nwsup.c restart loop, tools/. Not
+blob.h, not the baker, not tests/run.py, not lid_brick.
+
+1. `sync()` before `reboot(RB_POWER_OFF)`. reboot does not flush.
+   systemd/busybox/util-linux halt all sync first. Lab reboot
+   inside a pid ns cannot show a dirty ext4; see the qemu fsck
+   note in the landing packet.
+2. Failed `reboot()` is `halt_now("reboot failed")`, not `_exit(0)`.
+   The failure path of the panic fix no longer reintroduces the panic.
+3. dawn no longer reads `NW_HOLD_MS`. That variable is a kernel
+   command-line token. `--hold-ms` remains a lab flag on nw-root
+   argv, which `boot()` already passes. `dawn-real-boot` still
+   sets the env var — that test is Claude's file; the handoff is
+   `tools/HANDOFF-claude-tests.md`.
+4. `--hold-ms` rejects anything that is not a positive decimal.
+   `-1`, `0`, `foo` HALT with `hold-ms` instead of becoming the
+   forever loop.
+5. oldroot detach survives `ENOENT` only. EINVAL and ENODEV were
+   a failed detach the comment did not defend.
+6. `signalfd()` is created after `spawn_logger`. Loggers no longer
+   inherit a descriptor they were not granted. Signals were
+   already blocked.
+7. nw-sup records `child = p` as soon as fork returns in the
+   parent, checks `stopping` before waitpid, and does not fork
+   another house once stopping is set.
+8. Logger children unblock TERM/INT. Shutdown still SIGKILLs
+   them. A drain pass that switches to SIGTERM will not sit
+   pending (D11). Drain itself is not this pass.
+
+`budget-hard-total` stays Claude's test. Shape of a pin that
+actually means hard-total: deaths spaced further apart than any
+window the old field could have named, or a mutation that puts
+`window_s` back and watches the test go red. Cost of the slow
+fixture is the design call; a 7s hold against 1.2s deaths is
+not that pin.
