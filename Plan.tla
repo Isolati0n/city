@@ -153,6 +153,27 @@ FdNeedAgrees == FdNeed = Reserved + n + n
    only case FdBudgetCovers exists for -- the largest legal city -- was
    never checked. This is a constant, so it holds regardless of what
    Init does. *)
+(* THE PROBE FOR THIS LIVES IN tests/run.py AND ITS CONSTANT IS THE
+   WHOLE TEST. It lowers MaxFds and requires a violation. At MaxFds = 16
+   -- the value it used until 2026-09-11 -- `control` weakened this to
+   `Reserved + MaxUnits <= MaxFds` and then to `MaxUnits <= MaxFds` and
+   got a GREEN suite from each, because at 16 every form is false, so the
+   probe could not tell a halved boundary from the real one. The
+   multiplier is the whole content of "PID 1 holds TWO log pipes per
+   house".
+
+   The probe now uses Reserved + 2*MaxUnits - 1, derived from the
+   generated limits rather than typed: the honest predicate misses by
+   exactly one there, and every weakening that drops the multiplier or
+   Reserved still holds, so the two are separated.
+
+   A second-way invariant was tried first and does NOT work -- recorded
+   because it looks like the obvious fix and is not. `LargestCityFitsAgrees
+   == LargestCityFits = (Reserved + MaxUnits + MaxUnits <= MaxFds)` is
+   true at the real limits whatever the weakening, because both forms
+   hold whenever MaxFds is large. Two predicates that agree throughout
+   the legal range cannot pin each other; only a constant that separates
+   them can. *)
 LargestCityFits == Reserved + 2 * MaxUnits <= MaxFds
 
 (* NoLiveRewrite is deliberately NOT restated as a predicate here.

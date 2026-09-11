@@ -2149,11 +2149,20 @@ def test_specs_are_checked():
     # than "Invariant X is violated". Two different sentences for the
     # same outcome; accept either, per name.
     tla_src = open(os.path.join(ROOT, "Plan.tla")).read()
+    tight = vals["nwReserved"] + 2 * vals["nwMaxUnits"] - 1
     for nm, cfg_sub, tla_sub in (
             ("TypeOK", None,
              ("kind = [i \\in 1..n |-> 0]", "kind = [i \\in 1..n |-> 2]")),
-            ("FdBudgetCovers", ("MaxFds", 16), None),
-            ("LargestCityFits", ("MaxFds", 16), None),
+            # NOT 16. Derived: the honest predicate misses by exactly
+            # one at Reserved + 2*MaxUnits - 1, while every weakening
+            # `control` found -- `n <= MaxFds`, `Reserved + MaxUnits <=
+            # MaxFds`, `MaxUnits <= MaxFds` -- still holds there. At 16
+            # all of them are false, so the probe certified the
+            # invariant's NAME and a green suite came back from a halved
+            # boundary. Derived rather than typed so it tracks the
+            # header; 135 today.
+            ("FdBudgetCovers", ("MaxFds", tight), None),
+            ("LargestCityFits", ("MaxFds", tight), None),
             ("FdNeedAgrees", None,
              ("FdNeed == Reserved + 2 * n", "FdNeed == Reserved + n")),
     ):
@@ -2244,14 +2253,6 @@ def test_specs_are_checked():
     # left to unterminate now. `control` found both.
     als_raw = open(f"{lab}/plan.als").read().splitlines()
     als_bare = strip_c_comments("\n".join(als_raw), dashdash=True).splitlines()
-    # The line-number carry is only sound while blanking preserves line
-    # structure, so check it rather than trusting it: `control` broke it
-    # with a single apostrophe and the failure named the wrong file.
-    expect(len(als_bare) == len(als_raw),
-           f"strip_c_comments changed plan.als's line count "
-           f"({len(als_raw)} -> {len(als_bare)}). Every index below is "
-           f"then off, and the failure will name the probe rather than "
-           f"the blanking. Fix the stripper, not this assertion.")
     cmd_ix = [i for i, l in enumerate(als_bare)
               if l.lstrip().startswith(("check ", "run "))]
     cmds = [als_bare[i] for i in cmd_ix]
@@ -2392,8 +2393,23 @@ def test_specs_are_checked():
     ):
         d = f"{lab}/mustfail-{name}-{kind}"
         os.makedirs(d, exist_ok=True)
-        # The BLANKED text, so the probe carries code and no prose.
-        pl = "\n".join(als_bare)
+        # DROP THE COMMAND LINES FIRST, while cmd_ix still describes this
+        # text. The union probe rewrites `fun fdNeed[]: Int {[^}]*}` and
+        # `[^}]*` spans newlines, so a definition written across three
+        # lines -- a cosmetic reformat Alloy accepts -- collapsed `pl` by
+        # two lines AFTER the indices were computed. The drop then removed
+        # three innocent lines and left every real command in the probe,
+        # which found its counterexample and was reported as "FdArithmetic
+        # did NOT find a counterexample" beside solver output showing SAT.
+        # Round five's line-count assertion did not catch this and could
+        # not: `_blank` preserves newlines on every branch and `als_bare`
+        # comes from splitlines()-normalised text, so it was an identity
+        # -- a guard that had never been seen failing because it cannot
+        # fail. Deleted rather than kept as decoration; the ordering below
+        # is what makes the carry sound, so there is nothing left to
+        # assert. `control`.
+        pl = "\n".join(l for i, l in enumerate(als_bare)
+                        if i not in set(cmd_ix))
         lm = open(f"{lab}/limits.als").read()
         if kind == "budget":
             lm, nsub = re.subn(r"fun nwMaxFds\[\]: Int \{[^}]*\}",
@@ -2411,9 +2427,6 @@ def test_specs_are_checked():
                f"this means the header changed shape -- fix the pattern; "
                f"do not delete the probe, it is the only thing showing "
                f"this check can fail.")
-        drop = set(cmd_ix)
-        pl = "\n".join(l for i, l in enumerate(pl.splitlines())
-                        if i not in drop)
         pl += f"\ncheck {name} for {scope} but {have} Int\n"
         open(f"{d}/plan.als", "w").write(pl)
         open(f"{d}/limits.als", "w").write(lm)

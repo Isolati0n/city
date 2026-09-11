@@ -3699,3 +3699,133 @@ mutations red; `make test` green; `build_at` 0.56–0.58 s across
 the 10240 output quoted character-for-character; the `absent-ok` marker
 and `tr` claims. A round where the code claims all held and every finding
 was a sentence is the outcome this process is for.
+
+## 45. Round seven: the probes certified names, not arithmetic (2026-09-11)
+
+`control` against `a8f2686`. Three HIGH, two of them holes in round
+five's own fixes, one of them in the function round five fixed.
+
+### A cosmetic reformat turned the suite red and blamed the solver
+
+Wrapping `fun fdNeed` over three lines — legal Alloy, verdicts unchanged
+— gave:
+
+```
+FAIL: FdArithmetic did NOT find a counterexample when given the `+` set-union form of fdNeed (['SAT', 'UNSAT', 'SAT']).
+00. check FdArithmetic             0    1/1     SAT
+```
+
+Read the message against line `00.` printed beneath it. It **did** find
+the counterexample.
+
+The union probe rewrites `fun fdNeed\[\]: Int \{[^}]*\}`, `[^}]*` spans
+newlines, and the replacement is one line — so the substitution shrank
+the probe text by two lines *after* `cmd_ix` was computed on it. The
+drop then removed three innocent lines and left all three real commands
+in the probe. Verbatim the failure §43 records as fixed, reached by a
+different route.
+
+**And round five's line-count assertion could not have caught it,
+because it can never fail.** `_blank` preserves newlines on every
+branch and `als_bare` derives from `splitlines()`-normalised text, so
+`len(als_bare) == len(als_raw)` is an identity. A guard that has never
+been seen failing because it *cannot* fail, sitting in front of an index
+carry that desyncs by another mechanism entirely. Deleted rather than
+kept as decoration: the fix is to drop the command lines *before*
+substituting, which makes the carry sound by construction and leaves
+nothing to assert.
+
+### The TLC probes pinned the invariant's name
+
+`control` ran three weakenings, each on its own, each **green**:
+
+```
+FdBudgetCovers  == n <= MaxFds                        -> green
+LargestCityFits == Reserved + MaxUnits <= MaxFds      -> green
+LargestCityFits == MaxUnits <= MaxFds                 -> green
+```
+
+The probes lower `MaxFds` to 16 and require a violation. At 16 every
+form is false, so the probe distinguished "the invariant exists and
+mentions `MaxFds`" from "the invariant was replaced by `TRUE`" — the
+control run last round — and nothing in between. The multiplier is the
+entire content of *PID 1 holds **two** log pipes per house*, and a
+halved boundary passed under an `ok` line saying the boundary is checked.
+
+This is round three's finding (`FdBudgetCovers` gets easier as `FdNeed`
+shrinks) reproduced one level up, **in the probe added to prevent it.**
+
+**The fix is the probe's constant, derived rather than typed:**
+`Reserved + 2*MaxUnits - 1` — 135 today — where the honest predicate
+misses by exactly one and every weakening still holds. All five
+mutations now fail, and they fail in the probe rather than in a pattern
+guard, so the message names the invariant.
+
+**A second-way invariant was tried first and does not work.** It is the
+obvious fix — `FdNeedAgrees` has that shape — so the failure is recorded
+rather than the attempt quietly dropped: `LargestCityFits = (Reserved +
+MaxUnits + MaxUnits <= MaxFds)` holds at the real limits under every
+weakening, because both forms are true whenever `MaxFds` is large. *Two
+predicates that agree throughout the legal range cannot pin each other;
+only a constant that separates them can.* Written into `Plan.tla` beside
+the invariant.
+
+### `--check` false-FAILed on a relative invocation
+
+`sh city/install-agents.sh --check` from `/home/user`:
+
+```
+sed: can't read city/install-agents.sh: No such file or directory
+install-agents: FAIL tcb-review.md has diverged from the heredoc ...
+```
+
+Four briefs reported as diverged from heredocs that are byte-identical,
+under a message telling the reader to go and sync them. The script cd's
+to its own directory and the new comparison then read `"$0"`, which no
+longer resolves. Round five's fix three screens above says "readlink -f,
+NOT dirname alone" and the same round's next addition read `$0`.
+`make test` survived only because it invokes the script as a bare name
+from the root it cd's to.
+
+Also fixed with it: a `sed` range **restarts**, so a brief quoting
+`put control <<'NWEOF'` — and these briefs quote the script's machinery
+constantly — made the extraction span two ranges and report an untouched
+file as diverged. `awk` taking the first range only.
+
+### The death branch is reachable after all
+
+§43 recorded it as a hypothesis after three failed attempts. `control`
+found the recipe: houses report *during* spawning and `houses=N` prints
+*after* it, so the window is the ~0.1 s tail of reports — kill on the
+**appearance of `houses=N`**, not on a report count. At n=2048, 2021 of
+2048 reported, the branch fired with the right message on a genuinely
+incomplete log. No longer a hypothesis, and the recipe is in the comment.
+
+### And a fourth place for the same conflation
+
+A PID 1 SIGKILLed *after* every house reported came back as `reaped ? of
+2048` — a killed init reported as a reap failure, with `rc` sitting in
+the result, printed nowhere and read by nothing. Twice now it has moved
+one branch further along when the branch in front of it was fixed.
+
+**Two classifying branches were written for it and neither fires.** On
+`died`: false here, because the wait loop breaks on a complete log
+before `poll()` notices the exit. On `termed`: the probe TERMs the
+instant the log completes, so "PID 1 gone before our TERM" is a
+sub-millisecond window that could not be constructed at any size. Both
+were removed. **An unexercised branch that classifies is precisely what
+this project keeps paying for**, so the message carries the facts
+instead — `rc` and whether a TERM was sent — and says which reading is
+which. Measured: `rc=-2` on a healthy run, `rc=1` after a kill, at one
+size, which is why it is reported and not branched on.
+
+### What `control` confirmed clean
+
+Four "false command" shapes planted at once produced no false command;
+blanking cannot produce one, because Alloy rejects every construct where
+the stripper is stricter than the parser (a lone `'` is a syntax error,
+so the runaway-quote path is unreachable in legal Alloy). CRLF
+normalises before the stripper. TLC does not echo the cfg, so the probe
+cfgs — which contain the accepted failure string in a header comment —
+cannot pass for free. `--check` detects real divergence, a stripped
+trailing newline and CRLF.

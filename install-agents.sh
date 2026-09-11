@@ -160,8 +160,27 @@ into plan.md/runtime.md; two owners for one file)"
     for n in $OWNED; do
         f="$DIR/$n.md"
         [ -e "$f" ] || continue
-        if ! sed -n "/^put $n <<'NWEOF'\$/,/^NWEOF\$/p" "$0" \
-             | sed '1d;$d' | diff -q - "$f" >/dev/null 2>&1; then
+        # "$self", NOT "$0". The script has already cd'd to its own
+        # directory, so a relative $0 -- `sh city/install-agents.sh`, or a
+        # relatively-invoked symlink -- no longer resolves. sed then
+        # printed "can't read", produced nothing, and every owned brief
+        # was reported as diverged from a heredoc that is byte-identical,
+        # under a message telling the reader to go and sync four files
+        # that need no syncing. `make test` survived only because it
+        # invokes the script as a bare name from the root it cd's to.
+        # The round-five fix three screens up says "readlink -f, NOT
+        # dirname alone" and this line, added by the same round, read $0.
+        #
+        # awk, not sed: a sed range RESTARTS on a later opener, so a brief
+        # that quotes `put control <<'NWEOF'` -- and the briefs here quote
+        # this script's machinery constantly -- made the extraction for
+        # `control` span two ranges and report an untouched file as
+        # diverged. `control` planted exactly that. awk takes the FIRST
+        # range and stops.
+        if ! awk -v tag="put $n <<'NWEOF'" \
+                 'BEGIN{st=0} st==2{next} $0==tag&&st==0{st=1;next} \
+                  st==1&&$0=="NWEOF"{st=2;next} st==1{print}' "$self" \
+             | diff -q - "$f" >/dev/null 2>&1; then
             fail "$n.md has diverged from the heredoc in install-agents.sh: \
 --force would silently revert the file to the script's copy. Sync the \
 heredoc (see HISTORY.md section 43), do not edit the brief back."

@@ -140,13 +140,29 @@ Each *is* pinned against a second hand-written copy in its own file:
 — reads as licence to change a spec to match a `* 3` header and then be
 surprised by a red suite.
 
-**The one that is pinned in neither direction is `LargestCityFits`'s
-`2 * MaxUnits` in `Plan.tla`.** `claims` changed it to `* 3` and TLC
-reported `Model checking completed. No error has been found.` Its probe
-lowers `MaxFds`, which a *larger* multiplier only makes easier to
-violate, so the probe cannot see it. **That is the live gap** — a
-second-way assertion of the shape `FdNeedAgrees` already has would
-close it, and it is unbuilt.
+**`LargestCityFits`'s `2 * MaxUnits` was pinned in neither direction,
+and half of that is now fixed.** `claims` changed it to `* 3` for a
+clean run; `control` then weakened it the other way — to
+`Reserved + MaxUnits <= MaxFds`, and to `MaxUnits <= MaxFds` — and got a
+green suite from each, along with `FdBudgetCovers == n <= MaxFds`. The
+probe lowered `MaxFds` to 16, where *every* form is false, so it
+certified the invariant's name and nothing about its arithmetic.
+
+**The fix is the probe's constant, and it is derived:**
+`Reserved + 2*MaxUnits - 1`, where the honest predicate misses by
+exactly one and every weakening still holds. All five mutations now
+turn the suite red. **A second-way invariant was tried first and does
+not work** — `LargestCityFits = (Reserved + MaxUnits + MaxUnits <=
+MaxFds)` is true at the real limits whatever the weakening, because both
+forms hold whenever `MaxFds` is large. *Two predicates that agree
+throughout the legal range cannot pin each other; only a constant that
+separates them can.* That is the general lesson and it is worth more
+than the fix.
+
+What remains open is the other direction: nothing propagates `blob.h`'s
+arithmetic into either spec, so a `* 3` in the header still runs clean.
+Deriving the multiplier the way the limits are derived would close it,
+and it is unbuilt.
 
 (This said "neither file holds a limit to drift", which the same round's
 own work disproved three lines later in `plan.als`; then "one

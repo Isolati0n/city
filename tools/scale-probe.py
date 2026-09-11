@@ -208,7 +208,7 @@ def probe(n_units, work, hold_ms=None):
     # nothing closes the city but this probe.
     log = os.path.join(work, f"c{n_units}.log")
     t_open = t_reaped = None
-    completed = died = False
+    completed = died = termed = False
     deadline = time.time() + max(120, 0.5 * n_units)
     with open(log, "wb") as fh:
         p = subprocess.Popen(
@@ -264,6 +264,13 @@ def probe(n_units, work, hold_ms=None):
             # INSTEAD OF REPORTING THE BREAK. A harness whose job is to
             # find the breaking point must not crash when it finds one.
             kid = _children(p.pid)
+            # Record whether WE shut the city down. If PID 1 is already
+            # gone there is nobody to TERM, and a missing reap line then
+            # means "it died before shutdown", not "it failed to reap".
+            # This is the direct signal; `rc` was the tempting one and is
+            # a heuristic (-2 healthy, 1 after a kill, measured at one
+            # size only), so it is reported rather than branched on.
+            termed = bool(kid)
             if kid:
                 try:
                     os.kill(kid[0], 15)
@@ -320,22 +327,17 @@ def probe(n_units, work, hold_ms=None):
     # tool exists to make trustworthy, produced by a city that simply
     # stopped. The branch below catches deaths BEFORE open only, because
     # it keys on the `houses=` line. `control`.
-    # NOT EXERCISED, and said so rather than left to be assumed from the
-    # code being here. Tried 2026-09-11: SIGKILL to nw-root at n=256,
-    # 2048 and 10240, timed off the first report, off `houses=N`, and off
-    # a report count short of N. Every attempt landed either BEFORE the
-    # `houses=N` line (which PID 1 prints after spawning, so t_open is
-    # None, and the `houses={n} not in o` branch BELOW catches it) or
-    # after the final log was already complete (so the guard below
-    # correctly declines). "The branch above catches it" was written
-    # here and is wrong in a way that matters: the branch above is
-    # `if timed_out:`, and `timed_out = not completed and not died`
-    # means a death can never reach it. Reading it the other way
-    # re-creates exactly the death/timeout conflation the `and not died`
-    # clause exists to remove, two paragraphs from the clause. `claims`.
-    # The closest attempt was 2030 of 2048 reported, and the finished log
-    # still had all 2048 -- reported as a reap failure, which is the
-    # accurate diagnosis for that run. So this branch is a hypothesis: `control`
+    # EXERCISED, as of 2026-09-11, and the recipe matters because three
+    # attempts here missed it. Houses report DURING spawning and PID 1
+    # prints `houses=N` AFTER it, so the window where t_open is set and
+    # the log is still incomplete is the ~0.1s tail of reports. Killing
+    # on a report count lands before `houses=N` (t_open is None, and the
+    # `houses={n} not in o` branch BELOW catches that -- not the branch
+    # above, which is `if timed_out:` and unreachable for a death since
+    # `timed_out = not completed and not died`). Killing on the INSTANT
+    # `houses=N` appears lands inside the window. `control` did that at
+    # n=2048 with 2021 of 2048 reported and got this branch, with this
+    # message, on a genuinely incomplete log. So this branch is a hypothesis: `control`
     # demonstrated the STATE (died with t_open set) by an induced kill,
     # and the message is what that state deserves, but nothing here has
     # ever produced it with an incomplete log. Do not cite it as covered.
@@ -412,8 +414,30 @@ def probe(n_units, work, hold_ms=None):
                        f"(first: {dirty[:3]})")
     elif f"houses_reaped={n_units}" not in o:
         m = re.search(r"houses_reaped=(\d+)", o)
+        # CARRY THE FACTS, DO NOT CLASSIFY. `control` SIGKILLed PID 1
+        # once every house had reported and got a bare "reaped ? of
+        # 2048" -- a killed init reported as a reap failure, with `rc`
+        # already in `res`, printed nowhere and read by nothing. That is
+        # the death/lost conflation reappearing one branch further along
+        # for the third time.
+        #
+        # Two branches to classify it were written and neither fires: on
+        # `died`, which is False here because the wait loop breaks on a
+        # complete log before poll() notices the exit; and on `termed`,
+        # because the probe TERMs the instant the log completes, so
+        # "PID 1 gone before our TERM" is a sub-millisecond window I
+        # could not construct at any size. An unexercised branch that
+        # classifies is exactly what this project keeps paying for, so
+        # there is no branch -- the message carries what a reader needs
+        # to tell the two apart, and says which is which. rc is -2 on a
+        # healthy run here and 1 after a kill, measured at one size, so
+        # it is reported and not branched on.
         res.update(ok=False,
-                   why=f"reaped {m.group(1) if m else '?'} of {n_units}")
+                   why=f"reaped {m.group(1) if m else '?'} of {n_units} "
+                       f"(rc={rc}, we sent TERM: {termed}). If TERM was "
+                       f"not sent, or rc is not the shutdown's own, PID 1 "
+                       f"was gone before shutdown and this is a DEATH "
+                       f"rather than a reap failure.")
     elif "orphans=0" not in o:
         m = re.search(r"orphans=(\d+)", o)
         res.update(ok=False, why=f"orphans={m.group(1) if m else '?'}")
