@@ -534,6 +534,25 @@ Two corollaries worth stating, because both have been got wrong:
   `O_CLOEXEC` is dropped and stays green if the `close()` calls are dropped;
   only removing both fails it. Ask what single change would still leave it
   passing.
+- **Silence is the expensive failure, not noise.** A mechanism that is
+  correct and routed around is worse than a broken one, because it looks
+  like it is working. The first `tools/rules-hook.sh` matched only
+  `Edit|Write`, was correct, and **fired zero times** — nearly every edit
+  here goes through `Bash` with a python heredoc, so it never matched.
+  Nothing failed; nothing was reported; the territory rules simply never
+  arrived. It was found by noticing an absence, not a fault.
+
+  This generalises well past hooks, and every instance in this file's
+  record is a case of it: a test that never runs (`lid-landlock`, green on
+  every machine for its whole life), a guard that cannot fail (round five's
+  line-count assertion, an identity in front of the desync it was written
+  for), a probe that certifies a name instead of a behaviour (the TLC
+  probes at `MaxFds = 16`), a proof kept where it cannot be re-run, a
+  control that passes. **Every one of those reads as working.**
+
+  So the question to ask of any mechanism is not "does it pass?" but
+  **"when did it last fire, and what made it fire?"** If the answer is
+  "never", that is the finding — not the reassurance it resembles.
 
 ## The rule that matters most
 

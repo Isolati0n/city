@@ -188,6 +188,35 @@ static void spawn_logger(uint32_t i)
         sigaddset(&allow, SIGTERM);
         sigaddset(&allow, SIGINT);
         sigprocmask(SIG_UNBLOCK, &allow, NULL);
+        /* OWN PROCESS GROUP, so a signal aimed at the CITY cannot take
+         * the loggers with it. Unblocking TERM just above is what makes
+         * a future drain pass possible (D11: a blocked TERM makes that
+         * pass a silent no-op) and it is also what makes a logger die on
+         * a group-directed TERM, where the default action is terminate.
+         * Measured, 6 runs each: a TERM to PID 1 alone relays 5 of a
+         * house's 5 final lines; the same TERM sent to the process group
+         * relays 0 of 5. The house still writes them -- its reader is
+         * simply gone.
+         *
+         * That matters beyond tidiness. The restart budget is a hard
+         * total (invariant 4), so a house that exhausts it stays dead
+         * until reboot, and that was only acceptable because the death
+         * is VISIBLE. Discard the last lines and it is a black screen
+         * with no explanation, which is the property that made a hard
+         * total unsafe before.
+         *
+         * setpgid, not SIG_IGN and not re-blocking: both of those would
+         * survive the group signal by making an explicit TERM do nothing
+         * too, which is D11's exact shape and is laid directly across
+         * the natural fix. Here the signal never arrives, while
+         * `kill(logger, SIGTERM)` from a drain pass still works.
+         *
+         * Not reachable on real hardware as far as this can be shown:
+         * PID 1 there is its own session and nothing outside is placed
+         * to group-signal it. It is reachable in the lab and under any
+         * supervisor that signals a group, and the cost of being wrong
+         * about that is silence. */
+        setpgid(0, 0);
         close(houses[i].log_w);
         for (uint32_t j = 0; j < n_houses; j++) {
             if (j == i) continue;

@@ -3829,3 +3829,93 @@ normalises before the stripper. TLC does not echo the cfg, so the probe
 cfgs — which contain the accepted failure string in a header comment —
 cannot pass for free. `--check` detects real divergence, a stripped
 trailing newline and CRLF.
+
+## 46. The log regression: loggers die on a group TERM (2026-09-11)
+
+First item of the reordered boot-chain queue (§39), ahead of the orphan
+race. `sync()` stays landed at `pid1.c` before `reboot` and stays
+**blocked rather than pending** — its consequence needs real hardware.
+
+### Reproduced before it was fixed, and the recorded number was not the one measured
+
+A new fixture, `houses/lastwords.c`, writes five numbered lines from its
+SIGTERM handler using five **separate** `write(2)` calls — separate
+because one large write could be relayed by a single `read` in the
+logger, which would pass while a drain that stops after one chunk is
+still broken. Every line self-tags, because PID 1's logger prefixes a
+write *chunk* and not a line.
+
+Six runs each, on this machine:
+
+```
+TERM to nested PID 1    relayed [5, 5, 5, 5, 5, 5] of 5
+TERM to its own GROUP   relayed [0, 0, 0, 0, 0, 0] of 5
+```
+
+§39 recorded "0 of 5 relayed, against 3 of 5 before". The 0 reproduces;
+**the 3 does not** — the TERM-to-PID-1 path relays all five here. That
+figure came from a different fixture and is not re-derivable, so it is
+superseded by the block above rather than carried forward.
+
+Two wrong answers were produced on the way, both worth recording because
+each looked like the regression:
+
+- **TERM to the `unshare` parent relays nothing** — but the city never
+  shut down at all. Signalling the parent leaves the namespace's init
+  running. The right answer for the wrong reason is still wrong.
+- **A group TERM killed the test runner.** `os.getpgid(init)` from
+  outside the namespace returns *our* group. Exit 143 was me. The city
+  needs its own session before anyone signals a group.
+
+### The cause is a correct fix one round earlier
+
+§38's eighth finding unblocked TERM/INT in the logger children, so that a
+future drain pass could TERM them instead of having the signal sit
+pending forever — D11's shape, and the right call. It also made every
+logger die on a signal aimed at the *group*, where the default action is
+terminate.
+
+### The fix is a process group, not a handler
+
+`setpgid(0, 0)` in `spawn_logger`. The signal does not arrive; an
+explicit `kill(logger, SIGTERM)` from a drain pass still works.
+
+`SIG_IGN` and re-blocking were both rejected: each survives the group
+signal by making the explicit TERM do nothing too, which is D11 laid
+directly across the natural fix — and §37 had already flagged the blocked
+TERM as "a trap laid across the natural fix for the log drain".
+
+After, six runs each: `[5,5,5,5,5,5]` and `[5,5,5,5,5,5]`.
+
+### Why this was first in the queue
+
+The restart budget is a hard total, so a house that exhausts it stays
+dead until reboot. That was only acceptable because the death is
+visible. Discard the last lines and it is a black screen with no
+explanation, which is the property that made a hard total unsafe.
+
+### Honest scope
+
+**Not shown reachable on real hardware.** PID 1 there is its own session
+and nothing outside is placed to group-signal it. It is reachable in the
+lab and under any supervisor that signals a process group. The fix is
+kept anyway because the cost of being wrong about that is silence, which
+is the failure this project is worst at seeing — now written into
+`CLAUDE.md` beside the other corollaries.
+
+### Controls
+
+- `setpgid` removed: `FAIL: [group] the house wrote 5 final lines and 5
+  never reached the console (missing [1, 2, 3, 4, 5])`.
+- Fixture neutered so the house never reaches its handler: the **paired**
+  assertion fires first — `FAIL: [init] the house never started, so the
+  line count below would be about nothing` — rather than a count failure
+  that would read as a drain defect.
+
+### Ownership
+
+**`pid1.c` is Grok's file this week and this change crosses that line.**
+Flagged loudly here as the narrow rule requires. It is not the
+boot-breaking case that rule was written for; it was done because the
+queue ordering put it first. One line plus its comment in
+`spawn_logger`, no other part of `pid1.c` touched. Grok reviews after.

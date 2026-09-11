@@ -986,6 +986,117 @@ def test_term_signal():
     print("ok term-signal")
 
 
+def test_last_words_survive_group_term():
+    """A house's FINAL output must survive shutdown, including a shutdown
+    that arrives as a signal to the whole process group.
+
+    THIS IS A PRECONDITION OF A DECISION, not a nicety. The restart budget
+    is a hard total (CLAUDE.md invariant 4), so a house that exhausts it
+    stays dead until reboot -- accepted only because the death is visible.
+    Discard the lines a house writes on its way out and an operator gets a
+    black screen with no explanation, which is the property that made a
+    hard total unsafe in the first place.
+
+    The regression: `spawn_logger` unblocks TERM/INT so that a future drain
+    pass can TERM the loggers rather than sitting pending forever (D11's
+    shape). That is right, and it also made every logger die on a
+    GROUP-directed TERM, where the default action is terminate -- before it
+    had drained the pipe. Measured on this machine before the fix, six runs
+    each: TERM to PID 1 alone relayed 5 of 5; the same TERM to the process
+    group relayed 0 of 5. The house wrote them all either way; its reader
+    was gone.
+
+    Both directions are asserted here, in one boot each, because the pair
+    is the test: the PID-1 case alone passes against a tree where nothing
+    works at shutdown, and the group case alone cannot distinguish "the
+    lines survived" from "the city never started".
+    """
+    lw = f"{BIN}/unit-lastwords"
+    city = f"{WORK}/lastwords.city"
+    open(city, "w").write(f"house lw {lw} kind=longrun lids=none\n")
+    blob = f"{WORK}/lastwords.blob"
+    b = run(["python3", CC, "--city", city, "--out", blob])
+    expect(b.returncode == 0, f"bake\n{b.out}{b.err}")
+
+    def shutdown_by(mode):
+        """Boot, wait until the house is up, then TERM it one of two ways.
+
+        start_new_session=True is NOT tidiness. Without it the city shares
+        THIS PROCESS'S group, and the group-directed TERM below kills the
+        test runner -- measured, exit 143, while writing the reproduction.
+        The city gets its own session so the signal reaches the city and
+        nothing else.
+
+        The TERM goes to the NESTED PID 1, never to `unshare`: signalling
+        the parent leaves the namespace's init running and the city never
+        shuts down at all, which reads as "no lines relayed" and is the
+        wrong answer for the right reason. Both mistakes were made while
+        building this test.
+        """
+        p = subprocess.Popen(
+            ["unshare", "--pid", "--fork", "--mount-proc", "--",
+             f"{BIN}/nw-root", blob],
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            start_new_session=True)
+        init = None
+        try:
+            os.set_blocking(p.stdout.fileno(), False)
+            buf = b""
+            t0 = time.time()
+            while b"waiting for TERM" not in buf and time.time() - t0 < 20:
+                try:
+                    buf += p.stdout.read() or b""
+                except Exception:
+                    pass
+                time.sleep(0.02)
+            init = nested_init(p.pid)
+            expect(init is not None,
+                   f"no nested PID 1; the city never booted\n"
+                   f"{buf.decode('utf-8', 'replace')}")
+            time.sleep(0.3)
+            if mode == "group":
+                os.killpg(os.getpgid(p.pid), signal.SIGTERM)
+            else:
+                os.kill(init, signal.SIGTERM)
+            t0 = time.time()
+            while time.time() - t0 < 6:
+                try:
+                    c = p.stdout.read()
+                    if c:
+                        buf += c
+                except Exception:
+                    pass
+                time.sleep(0.02)
+            return buf.decode("utf-8", "replace")
+        finally:
+            for x in (init, p.pid):
+                if x:
+                    try:
+                        os.kill(x, 9)
+                    except ProcessLookupError:
+                        pass
+            p.wait()
+
+    for mode in ("init", "group"):
+        out = shutdown_by(mode)
+        # PAIRED. "all five lines are present" is satisfied by the drain
+        # working AND by a fixture that never ran at all, and those are
+        # opposite outcomes. The house announcing itself is what makes the
+        # count below a claim about the drain.
+        expect("waiting for TERM" in out,
+               f"[{mode}] the house never started, so the line count below "
+               f"would be about nothing\n{out[-1200:]}")
+        missing = [i for i in range(1, 6) if f"bye {i} of 5" not in out]
+        expect(not missing,
+               f"[{mode}] the house wrote 5 final lines and "
+               f"{len(missing)} never reached the console "
+               f"(missing {missing}). A house that exhausts its hard-total "
+               f"budget stays dead until reboot; that is only safe while "
+               f"the death is visible.\n{out[-1500:]}")
+    print("ok last-words-survive (TERM to PID 1 and to the whole group; "
+          "5 of 5 lines each, written as 5 separate write(2) calls)")
+
+
 def test_crash_does_not_halt():
     """Nothing a house does halts the city. A house that crashes past its
     budget stays dead; the city carries on and shuts down normally."""
@@ -3047,6 +3158,7 @@ def main():
         test_hash_pin, test_difftest, test_lids_are_not_advisory,
         test_baker_rejects, test_fuzz_checker, test_happy, test_slot_b,
         test_rescue, test_halt_spawner, test_bad_crc,
+        test_last_words_survive_group_term,
         test_crash_does_not_halt, test_budget_is_hard_total,
         test_shutdown_does_not_restart, test_term_signal, test_dawn_real_boot,
         test_kind_required, test_kind_exit0, test_seccomp_kills,

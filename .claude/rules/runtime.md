@@ -94,6 +94,28 @@ environment — so a change to any link is a change to everything below it.
   policy.
 - **Shutdown is bounded by the grace period, not grace × units.** Do not
   serialise it.
+- **Loggers live in their own process group, and a house's last words are
+  a correctness property.** `spawn_logger` calls `setpgid(0, 0)`. The
+  loggers unblock TERM/INT — they must, or a drain pass that TERMs them
+  sits pending forever, which is D11 — and that same unblocking makes
+  them die on a **group-directed** TERM, where the default action is
+  terminate, before they have drained the pipe. Measured, six runs each:
+  TERM to PID 1 alone relayed 5 of a house's 5 final lines; the same TERM
+  to the process group relayed **0 of 5**. The house wrote them all; its
+  reader was gone.
+
+  This is not tidiness. The budget is a hard total, so a house that
+  exhausts it **stays dead until reboot**, and that was only acceptable
+  because the death is visible. Lose the last lines and it is a black
+  screen with no explanation — the property that made a hard total unsafe
+  before. `test_last_words_survive_group_term` pins both directions;
+  removing the `setpgid` turns it red naming the drain.
+
+  Do not "fix" this by re-blocking TERM in the logger or by `SIG_IGN`.
+  Both survive the group signal by making an *explicit* TERM do nothing
+  as well, which is D11's exact shape laid across the natural fix. The
+  process group makes the signal not arrive while
+  `kill(logger, SIGTERM)` still works.
 - **Signal-safety:** writes go through `write(2, ...)` directly. No
   `printf` in a signal or post-fork path.
 

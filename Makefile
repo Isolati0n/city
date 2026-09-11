@@ -13,7 +13,7 @@ CFLAGS = -Wall -Wextra -O2 -g -std=gnu11 -ffile-prefix-map=$(CURDIR)=.
 # the stage a parallel run is using.
 STAGE ?= /tmp/nw-init-run
 
-all: nw-dawn nw-root nw-spawn nw-check nw-sup nw-rescue unit-probe unit-boom unit-badcall unit-term unit-brick unit-slowdie unit-dieterm
+all: nw-dawn nw-root nw-spawn nw-check nw-sup nw-rescue unit-probe unit-boom unit-badcall unit-term unit-brick unit-slowdie unit-dieterm unit-lastwords
 
 nw-dawn: dawn.c
 	$(CC) $(CFLAGS) -o $@ dawn.c
@@ -60,12 +60,16 @@ unit-slowdie: houses/slowdie.c
 unit-dieterm: houses/dieterm.c
 	$(CC) $(CFLAGS) -o $@ houses/dieterm.c
 
+unit-lastwords: houses/lastwords.c
+	$(CC) $(CFLAGS) -o $@ houses/lastwords.c
+
 stage: all
 	rm -rf $(STAGE)
 	mkdir -p $(STAGE)/nw/bin $(STAGE)/nw/bricks $(STAGE)/nw/stores
 	mkdir -p $(STAGE)/efi/slots/A $(STAGE)/efi/slots/B $(STAGE)/work
 	cp -f nw-dawn nw-root nw-spawn nw-check nw-sup nw-rescue \
-	      unit-probe unit-boom unit-badcall unit-term unit-brick unit-slowdie unit-dieterm $(STAGE)/nw/bin/
+	      unit-probe unit-boom unit-badcall unit-term unit-brick unit-slowdie unit-dieterm \
+	      unit-lastwords $(STAGE)/nw/bin/
 	chmod +x $(STAGE)/nw/bin/*
 	# The sources the staged binaries were built from, staged with them.
 	# tests/run.py's hash probe compiles nwcheck.c to ask which slot a name
