@@ -19,8 +19,18 @@ set -eu
 DIR=.reviews
 TCB='dawn.c pid1.c nwspawn.c nwcheck.c nwcheck_main.c nwsup.c lids.c blob.h rescue.c'
 SUITE='tests/run.py unit_probe.c houses'
+# CLAUDE.md's dispatch table has owed a `claims` review for a brief or an
+# environment claim since it was written, and this gate did not watch a
+# single prose file -- so "dispatch before you push" was mechanical for
+# code and honour-system for the statements that tell an agent what the
+# code does. `claims` demonstrated the gap by watching a CLAUDE.md change
+# get pushed, gate reporting ok throughout, while its own review of that
+# change was still running. Kind-1 statements rot silently; that is the
+# whole reason the reviewer exists.
+PROSE='CLAUDE.md .claude/rules .claude/agents'
 TCB_REVIEWERS='tcb-review fd-auditor'
 SUITE_REVIEWERS='control'
+PROSE_REVIEWERS='claims'
 
 id_of() {   # sha of the current content of a component's files
     for f in $1; do [ -e "$f" ] && find "$f" -type f -exec cat {} +; done \
@@ -60,6 +70,11 @@ if printf '%s\n' "$CH" | touches "$SUITE"; then
         [ -e "$DIR/suite.$(id_of "$SUITE").$a" ] || owed="$owed suite:$a"
     done
 fi
+if printf '%s\n' "$CH" | touches "$PROSE"; then
+    for a in $PROSE_REVIEWERS; do
+        [ -e "$DIR/prose.$(id_of "$PROSE").$a" ] || owed="$owed prose:$a"
+    done
+fi
 
 case "${1:---check}" in
 --record)
@@ -68,6 +83,7 @@ case "${1:---check}" in
     shift
     for a in "$@"; do
         case " $TCB_REVIEWERS " in *" $a "*) : > "$DIR/tcb.$(id_of "$TCB").$a" ;; esac
+        case " $PROSE_REVIEWERS " in *" $a "*) : > "$DIR/prose.$(id_of "$PROSE").$a" ;; esac
         case " $SUITE_REVIEWERS " in *" $a "*) : > "$DIR/suite.$(id_of "$SUITE").$a" ;; esac
     done
     echo "review-gate: recorded$(printf ' %s' "$@")"

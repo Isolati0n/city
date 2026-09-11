@@ -200,38 +200,63 @@ you are.**
    hash, at the top.
 
 This is a rule because it has already cost a divergence. On 2026-09-11
-there were three lines of work and no agreed trunk: `main` was at
-`1974a08`, ten commits sat on `claude/agent-setup-script-ax93ee`, and a
+there were three lines of work and no agreed trunk: `origin/main` was at
+`1974a08` (local `main` was further along and unpushed, which is the same
+defect in miniature), the pushed branch carried everything since, and a
 full PID 1 stay-up pass — production reap loop, `RB_POWER_OFF` shutdown,
-the D18 budget fix, the shutdown-restart race, a `make qemu` target —
-existed only inside a tarball based on `d84da58`. `main` had none of it,
-the branch had half, the tarball had the other half, and **none of this
-was visible until someone cloned the repository and looked.** A tarball
-hides divergence in a way a branch does not: nothing about it shows up in
-`git log`, `git status`, or a fetch.
+a budget fix, the shutdown-restart race, a `make qemu` target — existed
+only inside a tarball based on `d84da58`. Each of the three had a
+different part, and **none of it was visible until someone cloned the
+repository and looked.** A tarball hides divergence in a way a branch
+does not: nothing about it shows up in `git log`, `git status`, or a
+fetch.
 
-Resolved by fast-forwarding `main` to the branch — no rebase, no squash,
-no force-push, deliberately, because the tarball names its base by hash
-and rewriting history would have stranded it.
+The branch half is resolved: `main` was fast-forwarded to it — no rebase,
+no squash, no force-push, deliberately, because the tarball names its
+base by hash and rewriting history would have stranded it.
+
+**The tarball half is not resolved, and nothing here should be read as
+saying it is.** `grep` for `RB_POWER_OFF`, `reboot(` or `qemu` across the
+C sources and the `Makefile` returns nothing: none of that work is in the
+tree. It is one agent's next task, and until it lands as commits, the
+section you are reading is describing a delivery that has not happened.
 
 ### Who owns which file
 
-Everything divides cleanly except one file:
+**The territory scopes in `.claude/rules/plan.md`, `runtime.md` and
+`harness.md` are the map.** Read those rather than a second copy here — a
+competing table was written in this file on 2026-09-11 and immediately
+contradicted them, giving `bakery/nw-cc.py` to bricks when `plan.md` owns
+it and splitting `dawn.c` when `runtime.md` owns all of it. `claims` found
+that within minutes. Two ownership maps is the same defect as two copies
+of a limit.
 
-| workstream | owns |
-|---|---|
-| bricks | `bakery/nw-cc.py`, the mount path in `dawn.c`, `docs/options/08`, `docs/plans/01` |
-| lifecycle | `pid1.c`, the restart loop, shutdown, the boot glue |
-| plan/proofs | `nwcheck.c`, `blob.h`, `proofs/`, `plan.als`, `Plan.tla` |
-| harness | `tests/run.py`, `houses/`, `unit_probe.c` |
+What the scopes do **not** settle, and what this section is actually for:
 
-**`nwsup.c` is touched by two workstreams — bricks and lifecycle — and
-needs a single owner.** It holds `lid_brick()` and the bind application,
-which is brick work, and the restart budget and death handling, which is
-lifecycle work. Without one owner the next collision happens inside a
-file instead of between branches, where a fast-forward cannot fix it.
-**Waiting on a prerequisite:** the prerequisite is a decision about which
-workstream owns it, and it is not made yet.
+- **`nwsup.c` and `nwspawn.c` are each touched by two workstreams.**
+  `nwsup.c` holds `lid_brick()` and the bind mounts (bricks) beside the
+  restart budget and death handling (lifecycle). `nwspawn.c` never
+  mounts — it hands the brick and binds on through `setenv("NW_BRICK",…)`
+  and `NW_BIND_n` (bricks) beside the budget handoff and the mid-fork
+  reap (lifecycle). A first pass here claimed `nwsup.c` was the only such
+  file, because it grepped for `lid_brick|MS_BIND` and `nwspawn.c` calls
+  neither. **Grepping for the mechanism misses the file that passes the
+  data on**, which is worth remembering the next time a claim about "the
+  only file that…" rests on one pattern.
+- **`bakery/nw-cc.py` cannot move.** Invariant 3 makes a limit change
+  atomic across `blob.h`, the baker, `plan.als` and `Plan.tla`; the plan
+  territory owns all four, and any split puts a required-atomic change
+  across a boundary.
+- Unassigned by every scope: `lids.c`, `nwcheck_main.c`, `rescue.c`,
+  `Makefile`, `install-agents.sh`, `tools/`. `lids.c` is the awkward one
+  — the TCB table above makes it half of `nw-sup`, whose other half is
+  one of the two contested files.
+
+**Waiting on a prerequisite:** who owns `nwsup.c` and `nwspawn.c` is a
+decision nobody has made. **It lives in this list** — whoever makes it
+records it here, in the same commit as the change that forced it. Until
+then the next collision happens inside a file rather than between
+branches, where a fast-forward cannot fix it.
 
 ## Dispatching agents
 
