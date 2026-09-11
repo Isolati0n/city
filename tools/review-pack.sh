@@ -22,6 +22,37 @@ BASE=${1:-$(git rev-parse --verify --quiet '@{u}' 2>/dev/null \
             || git rev-parse --verify --quiet origin/main 2>/dev/null \
             || git rev-parse HEAD)}
 
+# A base equal to HEAD produces an empty diff, an empty file list, and
+# "(none)" under TCB files -- a packet that positively asserts nothing
+# changed. That happened: the branch was pushed before the review, so
+# `@{u}` resolved to HEAD, and two reviewers were handed a packet claiming
+# no TCB file had changed while the round's HIGH finding sat in pid1.c.
+# Both went and derived the diff themselves, which is the cost this script
+# exists to remove.
+#
+# So when the upstream has caught up with HEAD, fall back to where this
+# branch left the default one -- which is what a reviewer means by "this
+# change" -- and refuse only when the packet would genuinely be empty. The
+# test is on the CONTENT, not on the base: an empty diff and "nothing
+# changed" must not be spelled the same way, and that is the same defect as
+# the empty environment block below, with the same cause -- a command that
+# SUCCEEDS and produces nothing.
+if [ -z "${1:-}" ] \
+   && [ "$(git rev-parse "$BASE")" = "$(git rev-parse HEAD)" ]; then
+    mb=$(git merge-base HEAD origin/main 2>/dev/null || true)
+    [ -n "$mb" ] && [ "$mb" != "$(git rev-parse HEAD)" ] && BASE=$mb
+fi
+if [ -z "$(git diff --name-only "$BASE" 2>/dev/null)" ] \
+   && [ -z "$(git status --porcelain 2>/dev/null)" ]; then
+    echo "review-pack: there is nothing between $(git rev-parse --short "$BASE")" \
+         "and HEAD, and the working tree is clean." >&2
+    echo "review-pack: a packet here would say 'no TCB file changed', which" \
+         "reads as a fact rather than as 'I could not tell'." >&2
+    echo "review-pack: name the base explicitly --" \
+         "sh tools/review-pack.sh [-] <base>" >&2
+    exit 1
+fi
+
 if [ -n "$OUT" ]; then
     mkdir -p .reviews
     OUT=".reviews/packet-$(git rev-parse --short HEAD)-$(date +%H%M%S).md"

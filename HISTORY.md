@@ -2288,3 +2288,139 @@ content, correctly. The reasons were a stop hook asking for a push and an
 ephemeral container, and neither is what the rule is about. The re-review
 was dispatched immediately after the push, which is the ordering the rule
 exists to prevent. Written down rather than quietly reversed.
+
+## 32. A HIGH of my own making: the cast that truncated (2026-09-11)
+
+`NW_BLOB_MAX` (§30) replaced five hand-written blob-size numbers with one
+derived constant, and the change that fixed a latent drift **introduced a
+live memory-safety bug**. Both reviewers found it independently, with the
+same reproduction.
+
+The old code compared `off_t` against an `int` literal, which promotes:
+
+```c
+if (st.st_size <= 0 || st.st_size > 1 << 16) halt_now("plan size");
+```
+
+The new code cast:
+
+```c
+if (st.st_size <= 0 || (uint32_t)st.st_size > NW_BLOB_MAX)
+```
+
+`st_size` is 64-bit. The cast discards the top bits **before** the
+comparison and the `read` then uses the untruncated value, so every size in
+`[2^32, 2^32 + NW_BLOB_MAX]` — and the same window at every 4 GiB multiple
+— compares small and is accepted. A `truncate -s 4G` file, which is sparse
+and costs nothing to make:
+
+```
+$ ./nw-check big.blob        # HEAD
+*** buffer overflow detected ***: terminated      exit=134
+$ ./nw-check-old big.blob    # the code it replaced
+blob size                                         exit=1
+```
+
+**The abort was luck.** This distro predefines `_FORTIFY_SOURCE`; the
+Makefile sets no hardening flags of its own. Built without it, the same
+source silently writes past the object and then halts naming something
+else:
+
+```
+sizeof blob = 33428, read() returned 36800  -> 3372 bytes written PAST it
+HALT: plan read
+```
+
+3372 bytes of file content over PID 1's `.bss`, and a message pointing at
+I/O rather than at the plan. PID 1 *dying* also breaks the rule that
+exactly two things halt the city — on a real boot it is `Attempted to kill
+init`.
+
+Fixed by removing the cast, not by widening it: `st.st_size > (off_t)
+NW_BLOB_MAX`. There is no `-Wsign-compare` warning either way, so the cast
+bought nothing at all.
+
+A second, quieter regression in the same change: `nw-spawn` reads without
+an `fstat`, and shrinking its buffer to exactly `NW_BLOB_MAX` meant a
+maximal legal blob with arbitrary bytes appended truncated to precisely the
+length `nw_check` expects and **passed the recheck** — the check that
+exists to catch a file that is not the one PID 1 read. `NW_BLOB_BUF` is one
+byte larger than any legal blob, so a full read is proof of an oversized
+file.
+
+**The gap that let both in: nothing in the suite had ever exercised a blob
+near the ceiling.** The largest plan anything booted was 64 units with no
+binds, half of `NW_BLOB_MAX`. So a constant whose entire purpose is to
+admit every legal blob and refuse everything larger arrived with neither
+half asserted. `test_blob_size_ceiling` bakes a maximal 64-unit/128-bind
+plan and boots it, appends one byte and requires every reader to refuse it,
+and hands a 4 GiB sparse file to `nw-check` and to PID 1 expecting `blob
+size` and `HALT: plan size`. Restoring the cast fails it; removing the
+sentinel byte fails it.
+
+The lesson is not "be careful with casts". It is that **a change which
+derives a limit is still a change to every site that used to declare it**,
+and the round that removes a drift hazard needs the test the constant never
+had. §30 got the constant right and the comparison wrong, and coverage,
+three reviewers and a green suite all passed it through.
+
+### Also this round
+
+- **The type did not reach two of its three callers.** `struct nw_dup_tab`
+  removed the size from `nw_check`; the slot probe in `tests/run.py` and
+  `proofs/leaf_name_dup.c` both still passed a bare `int *`, which is an
+  implicit pointer conversion — a warning on gcc 13, **an error on gcc 14**,
+  and accepted silently by CBMC. So the suite was one compiler upgrade from
+  losing the test that pins `NW_DUP_SLOTS`, and the proof was running
+  against a signature that no longer existed. The gcc signature gate added
+  earlier covered `caller_nw_check.c` only: a gate over one of four files is
+  the shape of a mechanism that looks like it is working. It covers every
+  harness now, at `-Werror`, and so do the suite's throwaway compiles.
+- **`%.31s` was `NW_NAME_LEN - 1` written out at three sites, slack zero.**
+  At `NW_NAME_LEN = 33` two distinct, legal, non-duplicate houses log under
+  identical prefixes and every line either produces is attributed to
+  whichever one the reader guesses — bug 13's shape moved from descriptors
+  to labels, on the channel the suite reads to decide which unit did what.
+  Measured: at 48, `prefixes identical=1` with the literal and `=0` with the
+  precision derived from the macro.
+- **`lids.c` sized its BPF program by hand** as `2 + NALLOW + 2` against an
+  emitter that writes `1 + NALLOW + 2`, and the jump offset is a `__u8`
+  that truncates at 256 allowed calls — which would drop the *first*
+  allowed syscall, killing a house for calling `read()` with nothing
+  reporting a malformed filter. Now one expression, a sentinel slot, a
+  length check and a static assert. The first version of the check sat
+  after the overflow it was meant to catch; the control caught that.
+- **`blob_h()` read `ROOT/blob.h` while the probes compiled
+  `STAGE/src/blob.h`** — the staging trap for *values*, one line above the
+  place it had just been closed for code.
+- **`review-pack.sh` handed both reviewers an empty packet**, asserting no
+  TCB file had changed while this round's HIGH sat in `pid1.c`. Pushing
+  before the review made `@{u}` equal `HEAD`, so the diff was empty and
+  "nothing changed" and "I could not tell" were spelled the same way —
+  the identical defect to the empty environment block fixed twenty lines
+  below it, with the identical cause. It falls back to the merge-base now
+  and refuses when the packet would genuinely be empty.
+
+That the packet was empty is a direct consequence of pushing before the
+review (§31a). The cost was two reviewers rediscovering the diff — which is
+exactly the cost the script exists to remove — and it is the second thing
+that went wrong because of that ordering.
+
+### Recorded, not fixed
+
+- **`NW_MAX_FDS` is declared and not enforced.** `close_others`' fallback
+  path sweeps `fd < NW_FD_SWEEP` (1024) while the kernel's limit here is
+  20000, so a descriptor above 1024 would survive into a house. The
+  fallback only runs when `open("/proc/self/fd")` fails, `dawn` mounts
+  `/proc` and the suite uses `--mount-proc`, so it is unreachable today and
+  `fd-auditor` claims no repro. The structural fix is `setrlimit(
+  RLIMIT_NOFILE, NW_MAX_FDS)` in `nw-spawn`, which would make the declared
+  budget the enforced one — but it changes a limit inherited by every house
+  on a live path to close a defect on a dead one, and that trade wants to
+  be made deliberately rather than folded into a fix round. **Waiting on a
+  prerequisite**, and the prerequisite is a decision, not code.
+- Four remaining hand-written sizes with slack 2 or more (`av[8 + ...]`,
+  `logstr[16]`, `wbuf[8]`, the difftest's `buf[4096]`), enumerated in
+  `fd-auditor`'s third report. `wbuf[8]` is the closest to the class: if
+  `window_s` ever widens past `uint16_t`, `snprintf` truncates and `nw-sup`
+  parses a *different* restart window, silently.

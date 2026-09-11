@@ -64,13 +64,17 @@ int main(void)
             __CPROVER_assume(u[i].name[k - 1] != 0 || u[i].name[k] == 0);
     }
 
-    int slot[NW_DUP_SLOTS];
-    for (int i = 0; i < NW_DUP_SLOTS; i++) slot[i] = -1;
+    /* Through the type, and initialised the way nw_check initialises it.
+     * This passed a bare int* until 2026-09-11 -- an implicit pointer
+     * conversion CBMC accepts silently, so the proof ran against a
+     * signature that no longer existed. Found by fd-auditor. */
+    struct nw_dup_tab t;
+    name_dup_init(&t);
 
     /* Exactly what nw_check does: scan in order, stop at the first report. */
     int reported = 0;
     for (uint32_t i = 0; i < PROOF_UNITS; i++)
-        if (name_dup(slot, u, i)) { reported = 1; break; }
+        if (name_dup(&t, u, i)) { reported = 1; break; }
 
     int exists = 0;
     for (int a = 0; a < PROOF_UNITS; a++)

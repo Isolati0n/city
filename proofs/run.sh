@@ -48,18 +48,29 @@ python3 proofs/mkcomp.py nwcheck.c "$OUT/nwcheck_comp.c"
 # same file outright. proofs/README.md claimed the collision "would fail the
 # compile"; that was true of a compiler nothing was running. Found by
 # changing name_dup's signature and watching the proof proceed.
+# EVERY harness, not just the caller. This ran on caller_nw_check.c alone
+# until 2026-09-11, and leaf_name_dup.c was meanwhile calling
+# name_dup(int *, ...) after the parameter had become struct nw_dup_tab * --
+# an implicit pointer conversion, accepted silently by CBMC, so the proof
+# ran against a signature that no longer existed. A gate that covers one of
+# four files is the shape of a mechanism that looks like it is working.
+# Found by fd-auditor.
 echo "proofs: signature check (gcc, not cbmc -- cbmc does not enforce this)"
-gcc -fsyntax-only -std=gnu11 -Wall -Wextra -DPROOF_SIGCHECK \
-    -D'__CPROVER_havoc_object(x)=(void)0' \
-    -D'__CPROVER_assume(x)=(void)0' \
-    -D'__CPROVER_assert(x,y)=(void)0' \
-    -I"$ROOT" -I"$OUT" proofs/caller_nw_check.c || {
-    echo "proofs: the caller harness does not type-check against the" >&2
-    echo "proofs: generated nwcheck_comp.c -- a stub's signature no longer" >&2
-    echo "proofs: matches the function it abstracts. Fix the stub; do not" >&2
-    echo "proofs: run cbmc, which would accept it." >&2
-    exit 1
-}
+for h in proofs/leaf_path_ok.c proofs/leaf_name_ok.c proofs/leaf_name_dup.c \
+         proofs/caller_nw_check.c; do
+    gcc -fsyntax-only -std=gnu11 -Wall -Wextra -Werror -DPROOF_SIGCHECK \
+        -Wno-type-limits \
+        -D'__CPROVER_havoc_object(x)=((void)(x))' \
+        -D'__CPROVER_assume(x)=((void)(x))' \
+        -D'__CPROVER_assert(x,y)=((void)(x))' \
+        -I"$ROOT" -I"$OUT" "$h" || {
+        echo "proofs: $h does not type-check against the code it proves --" >&2
+        echo "proofs: a stub or a call site no longer matches the function" >&2
+        echo "proofs: it stands for. Fix it; do not run cbmc, which would" >&2
+        echo "proofs: accept it." >&2
+        exit 1
+    }
+done
 
 CHECKS="--bounds-check --pointer-check --signed-overflow-check
         --undefined-shift-check --div-by-zero-check --unwinding-assertions"

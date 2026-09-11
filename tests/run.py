@@ -48,15 +48,38 @@ CC = os.path.join(ROOT, "bakery", "nw-cc.py")
 
 
 def blob_h(name):
-    """Read a #define out of blob.h. Limits are derived, never declared
-    twice -- that includes here: a test that hardcodes NW_MAX_UNITS stops
-    testing the maximum the day the maximum moves."""
-    for line in open(os.path.join(ROOT, "blob.h")):
+    """Read a #define out of the STAGED blob.h. Limits are derived, never
+    declared twice -- that includes here: a test that hardcodes
+    NW_MAX_UNITS stops testing the maximum the day the maximum moves.
+
+    From {STAGE}/src, not ROOT. The binaries under test were built from
+    those bytes, so the number a test expects and the number the code was
+    compiled with come from one file. Reading ROOT/blob.h was the staging
+    trap for *values* -- the same one closed for nwcheck.c when the slot
+    probe started compiling from the stage, still open one line above it.
+    Found by fd-auditor. _stage_limit() below is the exception and must
+    stay on ROOT: it runs at import to validate NW_STAGE itself, before
+    there is a stage to read."""
+    staged = os.path.join(STAGE, "src", "blob.h")
+    if not os.path.exists(staged):
+        raise SystemExit(
+            f"{staged} is missing: the suite reads its limits from the "
+            f"sources the staged binaries were built from. Run make stage.")
+    for line in open(staged):
         f = line.split()
         if len(f) >= 3 and f[0] == "#define" and f[1] == name:
             return f[2]
     raise SystemExit(f"blob.h has no {name}")
 
+
+# Flags for every throwaway that #includes a TCB source. -Werror because a
+# warning in one of these is never acceptable noise: the slot probe kept
+# calling name_dup(int *, ...) after the parameter became struct
+# nw_dup_tab *, which built with a warning here and is a hard error on gcc
+# 14 -- so the test that pins NW_DUP_SLOTS was one compiler upgrade from
+# failing for a reason unrelated to the property it tests. Found by
+# fd-auditor and tcb-review, independently.
+PROBE_CFLAGS = ["-std=gnu11", "-Wall", "-Wextra", "-Werror"]
 
 SKIPPED = []
 
@@ -284,7 +307,7 @@ def test_difftest():
         '                                      buf + cut, (uint32_t)(n - cut)));\n'
         '    (void)argc;\n    return 0;\n}\n')
     cexe = f"{WORK}/crcdiff"
-    c = run(["gcc", "-std=gnu11", f"-I{srcdir}", "-o", cexe, csrc])
+    c = run(["gcc"] + PROBE_CFLAGS + [f"-I{srcdir}", "-o", cexe, csrc])
     expect(c.returncode == 0, f"crc difftest build\n{c.out}{c.err}")
     for n in (0, 1, 2, 19, 255, 256, 257, 1024, 4095):
         buf = bytes(((i * 37 + 11) & 0xFF) for i in range(n))
@@ -919,14 +942,14 @@ def c_name_slots(names):
                 'static int where(const char *nm)\n'
                 '{\n'
                 '    static struct nw_unit u[1];\n'
-                '    int slot[NW_DUP_SLOTS];\n'
+                '    struct nw_dup_tab t;\n'
                 '    memset(u, 0, sizeof u);\n'
                 '    strncpy(u[0].name, nm, NW_NAME_LEN - 1);\n'
-                '    for (int i = 0; i < NW_DUP_SLOTS; i++) slot[i] = -1;\n'
-                '    if (name_dup(slot, u, 0)) return -2;\n'
+                '    name_dup_init(&t);\n'
+                '    if (name_dup(&t, u, 0)) return -2;\n'
                 '    int seen = -1;\n'
                 '    for (int i = 0; i < NW_DUP_SLOTS; i++)\n'
-                '        if (slot[i] >= 0) { if (seen >= 0) return -3; seen = i; }\n'
+                '        if (t.slot[i] >= 0) { if (seen >= 0) return -3; seen = i; }\n'
                 '    return seen;\n'
                 '}\n'
                 'int main(void){\n')
@@ -936,7 +959,7 @@ def c_name_slots(names):
             f.write(f'  printf("%d\\n", where("{nm}"));\n')
         f.write("  return 0;\n}\n")
     exe = f"{WORK}/slotprobe"
-    c = run(["gcc", "-std=gnu11", f"-I{srcdir}", "-o", exe, src])
+    c = run(["gcc"] + PROBE_CFLAGS + [f"-I{srcdir}", "-o", exe, src])
     expect(c.returncode == 0, f"slot probe build\n{c.out}{c.err}")
     p = run([exe])
     expect(p.returncode == 0, f"slot probe\n{p.out}{p.err}")
@@ -1163,6 +1186,89 @@ def test_checker_rejects_crafted_fields():
                f"\n{r.out}{r.err}")
     print("ok checker-rejects-crafted (every illegal kind and lid bit "
           "refused, every legal one accepted)")
+
+
+def test_blob_size_ceiling():
+    """NW_BLOB_MAX must admit every legal blob and refuse everything larger,
+    and nothing in the suite checked either half.
+
+    The largest plan anything here booted was 64 units with no binds -- half
+    the ceiling -- so when the ceiling arrived, both of its claims were
+    asserted by no test that runs. It shipped with a `(uint32_t)st.st_size`
+    comparison that truncates: a 4 GiB file compared small, was accepted,
+    and aborted PID 1 inside read(). On a real boot that is `Attempted to
+    kill init`, in place of the orderly `HALT: plan size` the code it
+    replaced produced. tcb-review found it; this is the test that would
+    have.
+
+    Three cases, and the sizes are derived from blob.h so the test cannot
+    drift away from the limit it is about:
+
+    * the largest legal blob is accepted and boots;
+    * one byte more is refused for its size, by every reader;
+    * a file 4 GiB + 1 byte long -- the truncation window -- is refused,
+      not aborted on.
+    """
+    NAME, PATH, BRICK = (int(blob_h(x)) for x in
+                         ("NW_NAME_LEN", "NW_PATH_LEN", "NW_BRICK_LEN"))
+    nu, nb = int(blob_h("NW_MAX_UNITS")), int(blob_h("NW_MAX_BINDS"))
+    HDR, USZ, BSZ = 20, NAME + PATH + BRICK + 6, 2 + PATH
+    biggest = HDR + nu * USZ + nb * BSZ
+
+    # A maximal plan: every unit has a brick (a bind requires one) and the
+    # bind table is full. The baker refuses a bind whose unit has no brick,
+    # so this is the shape, not a crafted blob.
+    brick = f"{STAGE}/nw/bricks/deadbeef"
+    city = f"{WORK}/maxblob.city"
+    with open(city, "w") as f:
+        for i in range(nu):
+            binds = "".join(f" bind=/etc/hosts{'' if j == 0 else ''}"
+                            for j in range(nb // nu + (1 if i < nb % nu else 0)))
+            f.write(f"house m{i:02d} /bin/true kind=oneshot "
+                    f"lids=newns brick={brick}{binds}\n")
+    good = f"{WORK}/maxblob.blob"
+    b = run(["python3", CC, "--city", city, "--out", good])
+    expect(b.returncode == 0, f"bake a maximal plan\n{b.out}{b.err}")
+    got = os.path.getsize(good)
+    expect(got == biggest,
+           f"the maximal plan is {got} bytes, blob.h says the largest legal "
+           f"blob is {biggest} -- this test is not testing the ceiling")
+
+    r = run([f"{BIN}/nw-check", good])
+    expect(r.returncode == 0,
+           f"nw-check refused the largest legal blob\n{r.out}{r.err}")
+
+    # One byte over. Refused for its size by nw-check and by PID 1, and --
+    # the half that regressed -- nw-spawn's recheck must not accept the
+    # truncated prefix either.
+    over = f"{WORK}/maxblob-plus.blob"
+    open(over, "wb").write(open(good, "rb").read() + b"\\x00")
+    r = run([f"{BIN}/nw-check", over])
+    expect(r.returncode != 0 and "blob size" in (r.out + r.err),
+           f"nw-check accepted a blob one byte over the ceiling"
+           f"\\n{r.out}{r.err}")
+    p = run([f"{BIN}/nw-spawn", over, "9", "1", "9"],
+            env={**os.environ, "NW_SUP": "/bin/true"})
+    expect(p.returncode != 0 and "blob size" in (p.out + p.err),
+           f"nw-spawn's recheck accepted a maximal blob with bytes appended "
+           f"-- a truncated read that lands exactly on a legal length"
+           f"\\n{p.out}{p.err}")
+
+    # The truncation window: 2^32 compares as 0 through a uint32_t cast.
+    huge = f"{WORK}/huge.blob"
+    with open(huge, "wb") as f:
+        f.truncate(1 << 32)
+    r = run([f"{BIN}/nw-check", huge])
+    expect(r.returncode == 1 and "blob size" in (r.out + r.err),
+           f"a 4 GiB file must be refused for its size, not crash: "
+           f"exit {r.returncode}\\n{r.out}{r.err}")
+    rc, out = boot(plan=huge, hold=400)
+    expect("HALT: plan size" in out,
+           f"PID 1 must halt on plan size, not die: rc={rc}\\n{out[-800:]}")
+    os.unlink(huge)
+
+    print(f"ok blob-size-ceiling ({biggest} bytes: accepted, +1 refused, "
+          f"4 GiB refused)")
 
 
 def test_non_provision_at_max():
@@ -1402,6 +1508,7 @@ def main():
         test_kind_required, test_kind_exit0, test_seccomp_kills,
         test_brick_is_a_root, test_brick_needs_newns,
         test_path_traversal_refused, test_dupname_refused,
+        test_blob_size_ceiling,
         test_checker_rejects_crafted_fields,
         test_non_provision_at_max,
         test_landlock_confines,

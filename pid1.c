@@ -72,8 +72,19 @@ static void reap_all(int block)
                 houses[i].pid = 0;
                 houses_reaped++;
                 known = 1;
-                char b[80];
-                snprintf(b, sizeof b, "%.31s status=%d", houses[i].name, st);
+                /* NW_NAME_LEN, not a hand-written precision. "%.31s" was
+                  * NW_NAME_LEN - 1 written out at three sites with zero
+                  * slack: at NW_NAME_LEN = 33 two distinct houses -- legal,
+                  * not duplicates, separate pipes -- log under identical
+                  * names, and every line either produces is attributed to
+                  * whichever one the reader guesses. Silent wrong routing
+                  * on the channel the suite reads to decide which unit did
+                  * what, which is bug 13's shape moved from descriptors to
+                  * labels. %s is safe because name_ok already guaranteed a
+                  * terminator inside the field. fd-auditor. */
+                char b[NW_NAME_LEN + 48];
+                snprintf(b, sizeof b, "%.*s status=%d", NW_NAME_LEN - 1,
+                         houses[i].name, st);
                 say("house exit", b);
                 /* Nothing a house does halts the city. Only two things do:
                  * the plan fails validation at boot, or PID 1 itself dies.
@@ -142,8 +153,9 @@ static void spawn_logger(uint32_t i)
             close(houses[j].log_r);
             close(houses[j].log_w);
         }
-        char prefix[64];
-        int pn = snprintf(prefix, sizeof prefix, "[%.31s] ", houses[i].name);
+        char prefix[NW_NAME_LEN + 4];
+        int pn = snprintf(prefix, sizeof prefix, "[%.*s] ",
+                          NW_NAME_LEN - 1, houses[i].name);
         char buf[256];
         for (;;) {
             ssize_t n = read(houses[i].log_r, buf, sizeof buf);
@@ -287,10 +299,21 @@ int main(int argc, char **argv)
     if (fstat(fd, &st) < 0) halt_now("stat plan");
     /* NW_BLOB_MAX, not a hand-written ceiling: this and nwcheck_main.c
      * disagreed by a factor of sixteen, and neither matched what the
-     * format permits. blob.h computes it. */
-    if (st.st_size <= 0 || (uint32_t)st.st_size > NW_BLOB_MAX)
+     * format permits. blob.h computes it.
+     *
+     * Compared in off_t, NOT through a cast to uint32_t. The cast was here
+     * for one day and it truncated: st_size is 64-bit, so every size in
+     * [2^32, 2^32 + NW_BLOB_MAX] -- and the same window at every 4 GiB
+     * multiple -- compared small and was accepted. A 4 GiB sparse file made
+     * PID 1 abort inside read(), which on a real boot is `Attempted to kill
+     * init`, where the code it replaced printed HALT: plan size. The abort
+     * was luck: the distro predefines _FORTIFY_SOURCE, and without it the
+     * same source silently wrote 3372 bytes past this object and then
+     * halted naming `plan read`. Found by tcb-review, reproduced. */
+    if (st.st_size <= 0 || st.st_size > (off_t)NW_BLOB_MAX)
         halt_now("plan size");
-    static unsigned char blob[NW_BLOB_MAX];
+    /* One byte more than any legal blob: see NW_BLOB_BUF. */
+    static unsigned char blob[NW_BLOB_BUF];
     ssize_t n = read(fd, blob, (size_t)st.st_size);
     close(fd);
     if (n != st.st_size) halt_now("plan read");

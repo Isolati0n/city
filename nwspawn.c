@@ -145,10 +145,17 @@ int main(int argc, char **argv)
 
     int bfd = open(blob_path, O_RDONLY);
     if (bfd < 0) die("open blob");
-    static unsigned char blob[NW_BLOB_MAX];
+    /* NW_BLOB_BUF, and the size is checked against NW_BLOB_MAX rather than
+     * against sizeof blob. The recheck exists to catch a file that is not
+     * the one PID 1 read; with a buffer of exactly NW_BLOB_MAX, a maximal
+     * legal blob with arbitrary bytes appended truncated to precisely the
+     * length nw_check expects and passed. The sentinel byte makes a full
+     * read proof of an oversized file. tcb-review, reproduced. */
+    static unsigned char blob[NW_BLOB_BUF];
     ssize_t n = read(bfd, blob, sizeof blob);
     close(bfd);
     if (n <= 0) die("read blob");
+    if ((uintmax_t)n > (uintmax_t)NW_BLOB_MAX) die("blob size");
     if (nw_check(blob, (uint32_t)n) != NW_OK) die("blob recheck");
 
     const struct nw_hdr *h = nw_hdr(blob);
@@ -209,9 +216,12 @@ int main(int argc, char **argv)
         close(pp[0]);
         if (waitpid(mid, NULL, 0) < 0) die("reap mid");
         pids[i] = house;
-        char line[96];
-        snprintf(line, sizeof line, "spawned %.31s pid=%d lids=%u",
-                 u[i].name, (int)house, (unsigned)u[i].lids);
+        /* Width from NW_NAME_LEN, not a hand-written precision -- see the
+         * comment in pid1.c's house-exit line. */
+        char line[NW_NAME_LEN + 64];
+        snprintf(line, sizeof line, "spawned %.*s pid=%d lids=%u",
+                 NW_NAME_LEN - 1, u[i].name, (int)house,
+                 (unsigned)u[i].lids);
         say(line);
     }
 

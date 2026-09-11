@@ -10,6 +10,7 @@
  "passed": [
   "bad-crc",
   "baker-rejects",
+  "blob-size-ceiling",
   "brick-is-a-root",
   "brick-needs-newns",
   "build-is-reproducible",

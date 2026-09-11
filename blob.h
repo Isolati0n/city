@@ -116,6 +116,17 @@ struct nw_hdr {
  * that shipped -- and the class is what invariant 3 is about. */
 #define NW_BLOB_MAX ((uint32_t)NW_BLOB_SIZE(NW_MAX_UNITS, NW_MAX_BINDS))
 
+/* Buffer size for a blob reader: one byte more than the largest legal blob,
+ * so a read that fills the buffer is proof the file is too big. Without the
+ * sentinel byte a buffer of exactly NW_BLOB_MAX silently truncates an
+ * oversized file to precisely the length a maximal legal blob has, and
+ * nw_check's `len != need` then agrees with it -- nw-spawn's recheck, which
+ * exists to catch a file that is not the one PID 1 read, started accepting
+ * a maximal blob with arbitrary bytes appended the moment its buffer shrank
+ * to NW_BLOB_MAX. Found by tcb-review, reproduced. A reader compares the
+ * count it got against NW_BLOB_MAX; it never reasons about `sizeof buf`. */
+#define NW_BLOB_BUF (NW_BLOB_MAX + 1u)
+
 enum {
     NW_OK = 0,
     NW_E_MAGIC = 1,

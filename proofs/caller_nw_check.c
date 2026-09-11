@@ -42,7 +42,7 @@ uint32_t nondet_u32(void);
 #ifdef PROOF_SIGCHECK
 /* Signature-only build: gcc cannot parse __CPROVER_exists, and the point of
  * this build is the types, not the assumptions. See proofs/run.sh. */
-#define PROOF_ASSUME_NUL(s, max) (void)0
+#define PROOF_ASSUME_NUL(s, max) ((void)(s), (void)(max))
 #else
 #define PROOF_ASSUME_NUL(s, max) \
     __CPROVER_assume(__CPROVER_exists { int i; i >= 0 && i < (max) \
