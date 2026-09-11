@@ -223,53 +223,36 @@ section you are reading is describing a delivery that has not happened.
 
 ### Who owns which file
 
-**The territory scopes in `.claude/rules/plan.md`, `runtime.md` and
-`harness.md` are the map, and `sh tools/ownership.sh` derives the rest
-from them.** Do not write a second list here. One was written on
-2026-09-11 and contradicted the scopes; its replacement — a hand-kept
-list of what the scopes leave unclaimed — was wrong on two of six entries
-and silently dropped `proofs/`. Both were caught by `claims`, the second
-inside the fix for the first. A list that must agree with another list is
-the shape invariant 3 exists to prevent, so the tool computes it:
+**`.claude/rules/{plan,runtime,harness}.md` are the map. Do not write a
+second one here.** One was written on 2026-09-11 and contradicted the
+scopes; so did its replacement; so did the tool written to derive the
+replacement, which reported files as owned by substring-matching their
+names against a prose line and silently un-owned the entire boot chain
+when that line was rewrapped. Three attempts, three wrong answers, all
+found by `claims`. The map is in one place and this file points at it.
 
-```
-sh tools/ownership.sh          # what no scope claims
-sh tools/ownership.sh --all    # every tracked file and its territory
-```
-
-What the scopes genuinely do not settle:
+What the map does not settle, because it is not a map question:
 
 - **Territories are not workstreams, and the collision is inside one.**
-  `runtime` owns the whole boot chain — `dawn.c`, `pid1.c`, `nwspawn.c`,
-  `nwsup.c`, `lids.c` — so the map has no gap. But *bricks* work and
-  *lifecycle* work are concurrent workstreams that both land in that one
-  territory, and specifically in two files: `nwsup.c` holds `lid_brick()`
-  and the bind mounts beside the restart budget and death handling, and
-  `nwspawn.c` hands the brick and binds on through `setenv("NW_BRICK",…)`
-  and `NW_BIND_n` beside the budget handoff and the mid-fork reap. **A
-  territory map does not prevent two agents colliding inside a
-  territory.**
-- A first pass claimed `nwsup.c` was the only such file, because it
-  grepped for `lid_brick|MS_BIND` and `nwspawn.c` calls neither — it
-  passes the data on rather than mounting. **Grepping for the mechanism
-  misses the file that forwards it**, which is worth remembering the next
-  time a claim about "the only file that…" rests on one pattern.
+  `runtime` owns the boot chain, so the collision is not two territories
+  meeting at an edge — *bricks* and *lifecycle* are concurrent
+  workstreams that both land in that single territory, and specifically
+  in `nwsup.c` (which holds `lid_brick()` and the bind mounts beside the
+  restart budget and death handling) and `nwspawn.c` (which never mounts,
+  and hands the brick and binds on through `setenv("NW_BRICK",…)` and
+  `NW_BIND_n` beside the budget handoff and the mid-fork reap). **A
+  territory map does not stop two agents colliding inside a territory.**
 - **`bakery/nw-cc.py` cannot move out of `plan`.** Invariant 3 makes a
   limit change atomic across `blob.h`, the baker, `plan.als` and
   `Plan.tla`; `plan.md`'s scope names all four, and any split puts a
   required-atomic change across a boundary.
-- **`proofs/` is claimed by no scope**, and `tools/`, `rescue.c`,
-  `lids.h` and `install-agents.sh` are not either. That is a statement
-  about the scopes rather than a defect — but an unclaimed file is one
-  two agents can edit at once.
 
-**Waiting on a prerequisite:** which workstream owns `nwsup.c` and
-`nwspawn.c` while both are in flight. It is not a territory question, so
-`.claude/rules/` cannot answer it; the decision belongs in a
-`docs/options/` entry alongside the other open design questions, and
-whoever opens that file records the answer in this section in the same
-commit. Until then the next collision happens inside a file rather than
-between branches, where a fast-forward cannot fix it.
+**Waiting on a prerequisite:** who owns `nwsup.c` and `nwspawn.c` while
+both workstreams are in flight. The decision lives in
+`docs/options/09-who-owns-a-file.md`, which states the question and the
+options and settles none of them. The prerequisite is evidence rather
+than argument — the first genuine conflicting edit to `nwsup.c` — and
+that is also the day it stops being optional.
 
 ## Dispatching agents
 
