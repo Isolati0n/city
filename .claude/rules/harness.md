@@ -205,15 +205,19 @@ machine will not have it.
 ## Scale: measured 2026-09-11, and the numbers are in the tool
 
 The gap is closed by `tools/scale-probe.py`. It rebuilds the tree at a
-raised `NW_MAX_UNITS` — which is **not** why it stays out of `make
-test`: measured, `build_at()` is well under a second and flat in N, and
-a whole rung at 64 units costs about one second. What is too slow is the
-large rungs' quadratic boot, documented below. (This said "a four-place
-change", then "a full rebuild plus a re-bake"; `claims` timed the
-rebuild and both were wrong. The cost was two paragraphs down the whole
-time.) It — bakes a city of N units, boots it under
+raised `NW_MAX_UNITS`, bakes a city of N units, boots it under
 `unshare --pid --fork --mount-proc`, and checks that every unit ran,
 reported exactly once, held no ungranted descriptor, and was reaped.
+
+**The rebuild is not why it stays out of `make test`.** Measured,
+`build_at()` is well under a second and flat in N, and a whole rung at
+64 units costs about one second. What is too slow is the large rungs'
+quadratic boot, documented below. (This said "a four-place change", then
+"a full rebuild plus a re-bake"; `claims` timed the rebuild and both
+were wrong. The correction was then inserted mid-sentence, severing the
+list of what the probe checks and leaving the same wrong reason standing
+in the section's closing paragraph — so the correction had to be made
+twice, and the second time by moving it out of the sentence it broke.)
 
 **Where it breaks and why.** On this machine (`ulimit -n` 20000,
 `pid_max` 32768, 4 CPUs): clean at 8192 units; at 10240 PID 1 stops with
@@ -233,14 +237,22 @@ correct model predicts and a wrong one would not.
 
 **The absolute figures are deliberately not here, because the ones that
 were did not reproduce.** A table of six timings was written from a
-single pass on 2026-09-11; `claims` re-ran three repetitions per rung
-the next day, on the same machine and the same stated limits, and got
-roughly half at every rung — and therefore half the derived
-µs-per-descriptor too. The shape held; the constants did not. This is
-the file whose own rule is never to put a count in it, and six of them
-were one day old and none reproducing. Run `tools/scale-probe.py` and
-quote its output, with the repetition count, the way `measurement`
-requires. A single sample of a timing is not a measurement.
+single pass on 2026-09-11; `claims` re-ran three repetitions per rung on
+the same machine and the same stated limits and none of the six came
+back. The shape held; the constants did not.
+
+**Run-to-run variation on this machine approaches a factor of two, and
+that is the durable finding.** Not a ratio between the two passes — the
+sentence here said "roughly half at every rung" and `claims` disproved
+that too on the next round: the ratios ranged across the rungs and were
+not a constant, and the spread *within* a single rung reached about 1.5x
+on its own. So a second number replaced the first inside the paragraph
+whose whole point was that the first number should not have been there.
+**Third time. Do not put one here.**
+
+Run `tools/scale-probe.py` and quote its output with the repetition
+count, the way `measurement` requires. A single sample of a timing is
+not a measurement, and neither is a ratio between two of them.
 
 **The break is a DEATH, and a large-N harness has to tell three exits
 apart.** Its wait loop ends when every house has reported, when the
@@ -301,11 +313,20 @@ the probe still does not exercise it. The numbers say nothing about
 per-unit loop devices, namespaces or seccomp filters at scale. `control`
 caught the mismatch between the tool and the sentence justifying it.
 
-**Still open, and now with a number attached:** nothing in `make test`
-runs above `NW_MAX_UNITS`, because getting there costs a rebuild. The
-suite's contribution is exactly-once at `NW_MAX_UNITS` (read from the
-header, not written down here), in
+**Still open:** nothing in `make test` runs above `NW_MAX_UNITS`. Not
+because of the rebuild — that is under a second, see the top of this
+section — but because the boot above a few thousand units is quadratic
+and would dominate the suite. The suite's contribution is exactly-once
+at `NW_MAX_UNITS` (read from the header, not written down here), in
 `test_non_provision_at_max`; the ladder is a tool you run by hand.
+
+*This read "and now with a number attached ... because getting there
+costs a rebuild" until 2026-09-11. Both halves went stale in one edit:
+the rebuild reason was corrected ninety lines above and left standing
+here, and the number it pointed at was removed by the same edit. A
+correction applied to the top of a section and not its foot is the
+survived-by-not-being-moved shape, which this repository has now
+produced in five separate files. `claims`.*
 
 ## Definition of done
 

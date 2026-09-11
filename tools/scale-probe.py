@@ -325,11 +325,17 @@ def probe(n_units, work, hold_ms=None):
     # 2048 and 10240, timed off the first report, off `houses=N`, and off
     # a report count short of N. Every attempt landed either BEFORE the
     # `houses=N` line (which PID 1 prints after spawning, so t_open is
-    # None and the branch above catches it) or after the final log was
-    # already complete (so the guard below correctly declines). The
-    # closest was 2030 of 2048 reported, and the finished log still had
-    # all 2048 -- reported as a reap failure, which is the accurate
-    # diagnosis for that run. So this branch is a hypothesis: `control`
+    # None, and the `houses={n} not in o` branch BELOW catches it) or
+    # after the final log was already complete (so the guard below
+    # correctly declines). "The branch above catches it" was written
+    # here and is wrong in a way that matters: the branch above is
+    # `if timed_out:`, and `timed_out = not completed and not died`
+    # means a death can never reach it. Reading it the other way
+    # re-creates exactly the death/timeout conflation the `and not died`
+    # clause exists to remove, two paragraphs from the clause. `claims`.
+    # The closest attempt was 2030 of 2048 reported, and the finished log
+    # still had all 2048 -- reported as a reap failure, which is the
+    # accurate diagnosis for that run. So this branch is a hypothesis: `control`
     # demonstrated the STATE (died with t_open set) by an induced kill,
     # and the message is what that state deserves, but nothing here has
     # ever produced it with an incomplete log. Do not cite it as covered.

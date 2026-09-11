@@ -138,14 +138,30 @@ mattered during debugging). Unit shrinks 262 → 198 or 230. `struct nw_bind`
 loses `path[128]` and becomes 4–20 bytes depending on the id width, so
 `NW_MAX_BINDS` stops being a meaningful memory constraint.
 
-**The four places.** The fd formula does not move: it is `8 + 2n` and depends
-on unit count, not on field widths, so `blob.h`'s `_Static_assert`,
+**The four places.** The fd formula does not move: it depends on unit
+count, not on field widths, so `blob.h`'s `_Static_assert`,
 `bakery/nw-cc.py`, `fdNeed` in `plan.als` and `FdNeed` in `Plan.tla` are
 **untouched**. What does move is `NW_BRICK_LEN` and `NW_PATH_LEN`, which live
 in `blob.h` and `bakery/nw-cc.py` only. The specs gain a `Hash` sig and a
-`BindKind` enum in place of `Path` — small, and neither is executed by
-anything, so neither can be verified (see `plan.md`). Cost: two real places,
-two unverifiable ones.
+`BindKind` enum in place of `Path`, which is small. Cost: four places, all
+of them real.
+
+> **Corrected 2026-09-11.** This paragraph said the fd formula "is `8 + 2n`"
+> and that the two spec changes are "neither executed by anything, so
+> neither can be verified (see `plan.md`)", and costed the option as "two
+> real places, two unverifiable ones". Both halves are now false and the
+> second was load-bearing for the costing. `tools/jars/` holds TLC and
+> Alloy and `test_specs_are_checked` runs both inside `make test`, so a
+> spec change here is a change to something that executes — and `plan.md`,
+> cited above as corroboration, is one of the files whose copy of that
+> sentence was already corrected. **This is the fifth file to carry it**;
+> `claims` found the others in `plan.als`, `Plan.tla`, `.claude/rules/plan.md`
+> and `proofs/README.md` over two earlier rounds. The `8 + 2n` was a sixth
+> prose copy of both the reserved value and the multiplier, in a file
+> nothing checks, so it is gone rather than updated.
+>
+> The option itself is unaffected — this is a costing correction, not a
+> change of recommendation.
 
 **Error codes.** `NW_E_BRICK` changes meaning (not-64-hex rather than bad
 path). `NW_E_BINDPATH` is replaced by `NW_E_BINDKIND`. The enum and `errs[]`

@@ -20,8 +20,11 @@ stands". Nothing checked them, and they rotted anyway:
 - a brief cited `NoLiveRewrite` in `Plan.tla` months after it was
   withdrawn;
 - an agent brief existed for a binary that had been deleted;
-- `init-test-run.txt` still describes a stack with an electrician, edges and
-  a `critical` flag, none of which exist.
+- `init-test-run.txt` described a stack with an electrician, edges and a
+  `critical` flag, none of which exist. It is now headed `SUPERSEDED
+  RECORD -- read as history, not as a description of this tree` and names
+  all three as gone, so it is a fixed example rather than live rot; the
+  word "still" outlived the fix. `claims`, on itself.
 
 Each was found by someone opening the file for an unrelated reason. That is
 not a process.

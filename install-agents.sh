@@ -9,11 +9,23 @@
 # PID 1 brief — and silently reverted every correction. Two sources of truth
 # where one is never consulted is the shape of bug 1.
 #
-# This script does not have that failure mode, by construction:
+# This script HAD that failure mode until 2026-09-11, and this header said
+# it could not, "by construction", for the whole time it did. `--force`
+# rewrote a script-owned brief from a heredoc 40 lines out of date, and
+# `--check` then printed OK: silent reversion, which is exactly what
+# setup-agents.sh was removed for. The retraction used to live 125 lines
+# below, inside a function, while the guarantee stood here where everyone
+# reads it. `claims` found it standing.
+#
+# What is true now:
 #
 #   * It never overwrites a file it did not write. Script-owned briefs carry a
 #     provenance marker; anything without one is a hand-edited file and is left
 #     alone even under --force.
+#   * --force STILL reverts a script-owned brief to the heredoc, silently.
+#     What changed is that --check now compares the two and fails first, so
+#     the divergence is loud before anyone runs --force. A second copy that
+#     nothing compares was the defect; the copy is still here.
 #   * --check verifies what is installed rather than replacing it, so the
 #     script is a test rather than a generator. `make test` runs it.
 #   * It carries text only for the briefs it owns. fd-auditor.md and
@@ -485,8 +497,11 @@ stands". Nothing checked them, and they rotted anyway:
 - a brief cited `NoLiveRewrite` in `Plan.tla` months after it was
   withdrawn;
 - an agent brief existed for a binary that had been deleted;
-- `init-test-run.txt` still describes a stack with an electrician, edges and
-  a `critical` flag, none of which exist.
+- `init-test-run.txt` described a stack with an electrician, edges and a
+  `critical` flag, none of which exist. It is now headed `SUPERSEDED
+  RECORD -- read as history, not as a description of this tree` and names
+  all three as gone, so it is a fixed example rather than live rot; the
+  word "still" outlived the fix. `claims`, on itself.
 
 Each was found by someone opening the file for an unrelated reason. That is
 not a process.

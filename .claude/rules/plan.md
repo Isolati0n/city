@@ -114,22 +114,39 @@ that sentence, because nothing in `blob.h` corresponds to it — this
 file declares no bound on `#House`. The suite requires the three
 commands to agree and imposes a floor of 2 (below which the binds
 must-fail probe cannot reach a counterexample); it does not derive the
-value, and the prose copies of "scope 8" are pinned by nothing — do not
-enumerate them here, because an enumeration is a count and the first
-one written was already short by two (`tools/jars/README.md` and a
-comment in `tests/run.py`). `grep -rn "scope 8"` is the answer.
+value, and the prose copies of the scope are pinned by nothing — do not
+enumerate them here, because an enumeration is a count and the first one
+written was already short by two. Nor is a grep the answer: `grep -rn
+"scope 8"` was offered as one and misses `tools/jars/README.md`, which
+writes it as "Alloy's scope is 8 of each signature". Two attempts to
+avoid a count both failed, so: **read the commands in `plan.als`, and
+treat any number in prose as unverified.**
 
-**And the qualifier is still too generous.** `plan.als:85` hand-writes
-the fd multiplier — `plus[nwReserved[], 2.mul[#House]]` — and that `2`
-*must* track `blob.h`, which is exactly what invariant 3's "the
-arithmetic appears in four places" says. Nothing pins it: `claims`
-changed `* 2` to `* 3` in both of `blob.h`'s `_Static_assert`s and both
-specs ran clean, because `tools/gen-spec-limits.py` generates the four limit
-values and the two lid bits and no arithmetic at all. So the honest
-count is not one; it is the bitwidth plus every hand-written operator
-in `fdNeed` and `FdNeed`. **This is a live gap, not a refusal** — the
-fix is to derive the multiplier the way the limits are derived, and it
-is unbuilt.
+**And the qualifier is still too generous — but say what it is pinned
+*against*.** `plan.als` hand-writes the fd multiplier
+(`plus[nwReserved[], 2.mul[#House]]`) and so does `Plan.tla`
+(`FdNeed == Reserved + 2 * n`), and that `2` must track `blob.h`, which
+is exactly what invariant 3's "the arithmetic appears in four places"
+says. Nothing pins it **against the header**: `claims` changed `* 2` to
+`* 3` in both of `blob.h`'s `_Static_assert`s and both specs ran clean,
+because `tools/gen-spec-limits.py` emits the four limit values and the
+two lid bits and no arithmetic at all — the generated files come out
+byte-identical.
+
+Each *is* pinned against a second hand-written copy in its own file:
+`assert FdArithmetic` for Alloy, `FdNeedAgrees` for TLC, and each turns
+`make test` red on its own. That is a weaker pin and a real one, and
+"nothing pins it" — written here for one round without the preposition
+— reads as licence to change a spec to match a `* 3` header and then be
+surprised by a red suite.
+
+**The one that is pinned in neither direction is `LargestCityFits`'s
+`2 * MaxUnits` in `Plan.tla`.** `claims` changed it to `* 3` and TLC
+reported `Model checking completed. No error has been found.` Its probe
+lowers `MaxFds`, which a *larger* multiplier only makes easier to
+violate, so the probe cannot see it. **That is the live gap** — a
+second-way assertion of the shape `FdNeedAgrees` already has would
+close it, and it is unbuilt.
 
 (This said "neither file holds a limit to drift", which the same round's
 own work disproved three lines later in `plan.als`; then "one

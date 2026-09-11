@@ -2230,8 +2230,10 @@ def test_specs_are_checked():
     # carry the line NUMBERS so the stripper below drops exactly these.
     #
     # dashdash=True: this is Alloy, where `--` opens a line comment. A
-    # `/*` written inside one blanked 33 lines and hid two of three
-    # commands, and the suite then reported Sealed as vacuous -- a
+    # `/*` written inside one blanked everything to the next `*/` and
+    # hid commands below it (how many depends on where it is written,
+    # which is why no count is given), and the suite then reported
+    # Sealed as vacuous -- a
     # message whose every clause was false, on a spec Alloy accepts.
     #
     # THE PROBES ARE BUILT FROM THE BLANKED TEXT, not the raw. A probe

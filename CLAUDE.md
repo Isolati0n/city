@@ -63,9 +63,19 @@ sections after this one and are deliberately not numbered here.
    specs ran clean — the generator emits the four limit values and the
    two lid bits, and no arithmetic. So the arithmetic really is the
    four-place change the paragraph above says it is, and only the
-   values were removed from that class. The one hand-written number
-   the suite *does* pin is Alloy's `but 12 Int` bitwidth, which
-   `test_specs_are_checked` asserts covers `NW_MAX_FDS`. (`Plan.tla` also hand-copied the lid bits until
+   values were removed from that class.
+
+   **Say what a number is pinned *against*, or the sentence is wrong
+   again.** The bitwidth is the only one pinned against `blob.h`.
+   Others are pinned against a second hand-written copy in their own
+   file — `plan.als`'s `2.mul[#House]` against `assert FdArithmetic`,
+   `Plan.tla`'s `2 * n` against `FdNeedAgrees` — which is a weaker pin
+   and a real one: each turns `make test` red on its own. And at least
+   one is pinned in neither direction: `Plan.tla`'s `2 * MaxUnits` in
+   `LargestCityFits`, which `claims` changed to `* 3` for a clean run.
+   The fifth attempt at this sentence over-claimed what was *unpinned*
+   after four attempts over-claimed what was *derived*; the fix is the
+   preposition, not another count. (`Plan.tla` also hand-copied the lid bits until
    2026-09-11; nothing checked them and their only consumers are
    unchecked predicates, so `LidNewNS == 999` ran clean. Generated now.)
 4. **`nw-spawn` exits; its death is not a failure mode.** It forks one

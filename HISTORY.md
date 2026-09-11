@@ -3524,8 +3524,11 @@ line reading "4 invariants incl. the boundary". Announcement, not effect.
 
 Four probes now, one per invariant, each listing only its own invariant in
 the cfg so a sibling cannot answer for it. All four mutations turn the suite
-red. A TLC run is 0.7 s measured, which is what makes the previous absence
-indefensible rather than expensive.
+red. A TLC run is under a second, which is what makes the previous absence
+indefensible rather than expensive. (Written as "0.7 s measured", which
+was the minimum of three; the other two were 0.82 and 0.96. A low-sample
+figure stated as the value, one paragraph from a finding about exactly
+that. `claims`.)
 
 ### install-agents.sh lied twice more
 
@@ -3543,11 +3546,15 @@ exit 0 — the exact §42 symptom, through the door the §42 fix left open.
 
 ### Four of my own corrections were wrong
 
-- The ASSUME note claimed `NW_MAX_FDS 0` fails the ASSUME. It does not:
-  TLC stops first on `The invariant of LargestCityFits is equal to FALSE`
-  — the wrong error for the right problem, which is what the paragraph
-  warns about, reproduced inside the warning. A negative `Reserved` is
-  unreachable in both directions.
+- The ASSUME note claimed `NW_MAX_FDS 0` fails the ASSUME. The ASSUME
+  *is* false there — `MaxFds \in Nat \ {0}` — but **TLC never says so**:
+  it stops first on `The invariant of LargestCityFits is equal to FALSE`,
+  the wrong error for the right problem, which is what the paragraph
+  warns about, reproduced inside the warning. (Written here as a flat
+  "it does not", which compressed away the distinction the generator's
+  own comment states correctly — the same one-word absolute that started
+  this whole thread, committed in the bullet recording it. `claims`.) A
+  negative `Reserved` is unreachable in both directions.
 - "One hand-written number that must track the header" ignored the fd
   **multiplier**. `claims` changed `* 2` to `* 3` in `blob.h` and both
   specs ran clean. Only the limit *values* left the drift class; the
@@ -3579,3 +3586,116 @@ it has.
 - `install-agents.sh` still carries a second copy of four briefs. Comparing
   them makes divergence loud; it does not remove the copy.
 
+
+## 44. Round six: ten findings, and the fifth copy of one sentence (2026-09-11)
+
+`claims` against `a8f2686`. Nothing here is a code defect; all ten are
+sentences. That is the point — this is the failure mode the project is
+named after, and it is now the only kind of finding these rounds produce.
+
+### The sentence that will not die
+
+> "neither is executed by anything, so neither can be verified (see
+> `plan.md`)" — `docs/options/07-identifiers-not-paths.md`
+
+**Fifth file.** It has been corrected in `plan.als`, in `Plan.tla`, in
+`.claude/rules/plan.md` and in `proofs/README.md` over three rounds, and
+this copy cites `plan.md` — one of the already-corrected files — as
+corroboration. It was also load-bearing: the option costs itself as "two
+real places, two unverifiable ones", and there are no unverifiable ones.
+Corrected in place, with the old text quoted, in that file's own house
+style. A sixth copy was searched for and not found.
+
+### Say what a number is pinned *against*
+
+Round five wrote "nothing pins the fd multiplier" in four files. Wrong in
+a new direction, after four rounds of being wrong in the old one:
+
+- `plan.als`'s `2.mul[#House]` **is** pinned, by `assert FdArithmetic`
+  43 lines below it. `Plan.tla`'s `2 * n` **is** pinned, by
+  `FdNeedAgrees`. Each turns `make test` red on its own.
+- What is unpinned is the relationship to `blob.h`. `claims` changed
+  `* 2` to `* 3` in both `_Static_assert`s and the generated files came
+  out **byte-identical** — the decisive evidence, because it shows no
+  probe downstream can see it.
+- Only `.claude/agents/drift.md` carried the preposition ("pinned by
+  nothing *against* `blob.h`") and only that copy was correct.
+
+So the fix is the preposition, not another count. This matters
+operationally: `drift.md` sends a reviewer to check that row by hand, and
+one who reads "pinned by nothing" would fix a spec to match a `* 3`
+header and be surprised by a red suite.
+
+### And the enumeration was short again
+
+`Plan.tla`'s `LargestCityFits == Reserved + 2 * MaxUnits <= MaxFds` is
+hand-written and pinned in **neither** direction: `claims` changed it to
+`* 3` and TLC reported `Model checking completed. No error has been
+found.` Its new probe lowers `MaxFds`, and a *larger* multiplier only
+makes the invariant easier to violate, so the probe cannot see it. The
+paragraph that missed it closes with "if a sentence here counts
+something, it is probably wrong."
+
+**Held, not fixed:** a second-way assertion of the shape `FdNeedAgrees`
+already has would close it. `control` is mid-round against the four
+probes as this lands, and adding a fifth would move the tree under it —
+which this session has already done to a reviewer once.
+
+### Three numbers that replaced three numbers
+
+- "roughly half at every rung" — the ratio was 0.61 to 0.87 and not
+  constant, and the spread *within* one rung reached 1.5x. A second
+  number, inside the paragraph whose point was that the first should not
+  have been there. Third generation of one mistake. What survives is:
+  **run-to-run variation here approaches a factor of two**, so no
+  absolute from a single pass is worth writing.
+- "A TLC run is 0.7 s measured" — the minimum of three (0.71, 0.82,
+  0.96) stated as the value, one paragraph from a finding about that.
+- "blanked 33 lines" — a property of where the mutant was planted, not
+  of the code, so not re-derivable. Gone.
+
+The µs-per-descriptor *shape* was re-derived on the new numbers and
+holds to ~15%, which is what the rewritten section now claims and all it
+claims.
+
+### Corrections that survived by not being moved
+
+- `harness.md` corrected "too slow because of the rebuild" at the top of
+  a section and left the same reason standing in its closing paragraph,
+  ninety lines down — along with "now with a number attached", pointing
+  at a number the same edit had deleted. The mid-sentence insertion had
+  also severed the list of what the probe checks.
+- `install-agents.sh`'s header still promised the failure mode is
+  impossible "by construction". §43 retracted that — 125 lines below,
+  inside a function, while the guarantee stood where everyone reads it.
+  The header now says what is actually true: `--force` still reverts a
+  script-owned brief silently; what changed is that `--check` fails
+  first.
+- `tools/scale-probe.py` said a pre-open death is caught by "the branch
+  above". It is caught by the branch *below*: the branch above is
+  `if timed_out:`, and `timed_out = not completed and not died` means a
+  death can never reach it. Reading it the other way re-creates the
+  death/timeout conflation that clause exists to remove, two paragraphs
+  from the clause.
+- `claims.md` said `init-test-run.txt` "still describes" a stack with an
+  electrician. That file has been headed `SUPERSEDED RECORD` since; the
+  word "still" outlived the fix. `claims`, on itself.
+- The §43 bullet compressed "TLC does not report it" into "it does not",
+  which is the one-word absolute that started this thread, committed in
+  the bullet recording it.
+
+### Two attempts to avoid a count both failed
+
+An enumeration of the prose copies of the scope was short by two. It was
+replaced with `grep -rn "scope 8"` — which misses `tools/jars/README.md`,
+because that file writes "Alloy's scope is 8 of each signature". A grep
+is only as good as the phrasing it assumes. Read the commands.
+
+### Verified true, and worth recording as such
+
+The three ASSUME cases, re-derived independently; all four TLC probe
+mutations red; `make test` green; `build_at` 0.56–0.58 s across
+64/256/1024/4096; the break arithmetic and the `ulimit -n 2000` control;
+the 10240 output quoted character-for-character; the `absent-ok` marker
+and `tr` claims. A round where the code claims all held and every finding
+was a sentence is the outcome this process is for.
