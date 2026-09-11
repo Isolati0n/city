@@ -227,9 +227,9 @@ section you are reading is describing a delivery that has not happened.
 second one here.** One was written on 2026-09-11 and contradicted the
 scopes; so did its replacement; so did the tool written to derive the
 replacement, which reported files as owned by substring-matching their
-names against a prose line and silently un-owned the entire boot chain
-when that line was rewrapped. Three attempts, three wrong answers, all
-found by `claims`. The map is in one place and this file points at it.
+names against a prose line and silently un-owned the boot chain when that
+line was rewrapped. Each was found by `claims`. The map is in one place
+and this file points at it.
 
 What the map does not settle, because it is not a map question:
 

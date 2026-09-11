@@ -6,11 +6,7 @@ is decided.**
 ## The question
 
 `.claude/rules/{plan,runtime,harness}.md` divide the tree into
-territories, and that division is clean — `runtime` owns the whole boot
-chain, `dawn.c`, `pid1.c`, `nwspawn.c`, `nwsup.c` and `lids.c`. It has no
-gap for two agents to fall into.
-
-Territories are not workstreams. On 2026-09-11 two concurrent
+territories. Territories are not workstreams. On 2026-09-11 two concurrent
 workstreams — bricks and lifecycle — both landed inside `runtime`, and
 inside two files:
 
@@ -26,8 +22,8 @@ That is the whole problem and no amount of redrawing the map fixes it.
 ## Why it is not urgent yet, and when it becomes urgent
 
 Phase 1 of `docs/plans/01` is baker-only and touches neither file. Phase 2
-touches `nwsup.c`. The lifecycle work already in flight touches both. The
-day both are in flight at once is the day this has to be answered.
+rewrites `lid_brick()` in `nwsup.c`. The day a second workstream is editing
+that file at the same time is the day this has to be answered.
 
 ## The options, unargued
 
@@ -41,9 +37,9 @@ day both are in flight at once is the day this has to be answered.
 - **C. Serialise instead of dividing.** Only one workstream touches the
   boot chain at a time. Costs parallelism, needs no code change, and is
   the only option that is free to reverse.
-- **D. Nothing.** Accept the collision and resolve it in review. This is
-  what happened on 2026-09-11 and it worked, because the two halves were
-  in different files. It will not work when they are in the same one.
+- **D. Nothing.** Accept the collision and resolve it in review. That is
+  what happened on 2026-09-11, and it worked. Whether it keeps working is
+  the open question, not a settled no.
 
 ## What would settle it
 
