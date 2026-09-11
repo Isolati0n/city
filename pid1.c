@@ -8,11 +8,13 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/reboot.h>
 #include <sys/signalfd.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
+#include <linux/reboot.h>
 
 static void say(const char *s, const char *a)
 {
@@ -139,6 +141,28 @@ static void shutdown_city(void)
     char b[80];
     snprintf(b, sizeof b, "houses_reaped=%d orphans=%d", houses_reaped, orphans_reaped);
     say("closed", b);
+    /* Production end: power off. Do not return — returning is
+     * Attempted to kill init. reboot(RB_POWER_OFF) on real hardware
+     * does not return.
+     *
+     * Measured 2026-09-11 inside unshare --pid --fork (the suite):
+     * reboot() does not return there either; the pid namespace is
+     * zapped and the unshare parent exits 130 (SIGINT). Same shape
+     * as unshare --mount: the lab syscall is not the machine syscall.
+     * The suite accepts 130 after "closed", not as a second shutdown
+     * mode. A probe run *outside* a pid namespace powered the
+     * sandbox off.
+     *
+     * getpid() == 1 is the mechanical rule. A comment that says
+     * "never call this except as PID 1" is the failure mode this
+     * codebase keeps losing to. Inside the suite the child is PID 1
+     * of its namespace, so the guard passes and reboot still zaps
+     * the ns. Outside one, a stray call now HALTs instead of
+     * powering the host off. */
+    if (getpid() != 1)
+        halt_now("reboot: not PID 1");
+    if (reboot(RB_POWER_OFF) < 0)
+        say("reboot", "failed");
     _exit(0);
 }
 
@@ -231,7 +255,11 @@ static int slot_from_current(const char *slots, char *out, size_t outsz)
 
 int main(int argc, char **argv)
 {
-    int hold_ms = 800;
+    /* 0 is production: poll until SIGTERM/SIGINT, then shutdown_city
+     * which reboot(RB_POWER_OFF)s and does not return.
+     * --hold-ms N is the same loop with a deadline. One body. Splitting
+     * the loops was how --hold-ms 800 reached production and panicked. */
+    int hold_ms = 0;
     const char *plan = NULL;
     const char *slot = NULL;
     const char *slots = NULL;
@@ -421,11 +449,20 @@ int main(int argc, char **argv)
         say("city open", b);
     }
 
-    long long t_end = now_ms() + hold_ms;
-    while (now_ms() < t_end) {
+    /* One loop. hold_ms only changes the poll timeout. SIGTERM, SIGINT
+     * and a lab deadline all take the same break into shutdown_city. */
+    long long t_end = hold_ms > 0 ? now_ms() + hold_ms : 0;
+    for (;;) {
         struct pollfd p = { .fd = sfd, .events = POLLIN };
-        int wait = (int)(t_end - now_ms());
-        if (wait < 1) wait = 1;
+        int wait = -1;
+        if (hold_ms > 0) {
+            long long left = t_end - now_ms();
+            if (left <= 0)
+                break;
+            wait = left > 1000000 ? 1000000 : (int)left;
+            if (wait < 1)
+                wait = 1;
+        }
         int pr = poll(&p, 1, wait);
         if (pr > 0 && (p.revents & POLLIN)) {
             struct signalfd_siginfo si;
@@ -439,7 +476,5 @@ int main(int argc, char **argv)
             reap_all(0);
         }
     }
-
     shutdown_city();
-    return 0;
 }

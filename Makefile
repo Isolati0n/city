@@ -13,7 +13,7 @@ CFLAGS = -Wall -Wextra -O2 -g -std=gnu11 -ffile-prefix-map=$(CURDIR)=.
 # the stage a parallel run is using.
 STAGE ?= /tmp/nw-init-run
 
-all: nw-dawn nw-root nw-spawn nw-check nw-sup nw-rescue unit-probe unit-boom unit-badcall unit-term unit-brick
+all: nw-dawn nw-root nw-spawn nw-check nw-sup nw-rescue unit-probe unit-boom unit-badcall unit-term unit-brick unit-slowdie
 
 nw-dawn: dawn.c
 	$(CC) $(CFLAGS) -o $@ dawn.c
@@ -54,12 +54,15 @@ unit-term: houses/term.c
 unit-brick: houses/brick.c
 	$(CC) $(CFLAGS) -static -o $@ houses/brick.c
 
+unit-slowdie: houses/slowdie.c
+	$(CC) $(CFLAGS) -o $@ houses/slowdie.c
+
 stage: all
 	rm -rf $(STAGE)
 	mkdir -p $(STAGE)/nw/bin $(STAGE)/nw/bricks $(STAGE)/nw/stores
 	mkdir -p $(STAGE)/efi/slots/A $(STAGE)/efi/slots/B $(STAGE)/work
 	cp -f nw-dawn nw-root nw-spawn nw-check nw-sup nw-rescue \
-	      unit-probe unit-boom unit-badcall unit-term unit-brick $(STAGE)/nw/bin/
+	      unit-probe unit-boom unit-badcall unit-term unit-brick unit-slowdie $(STAGE)/nw/bin/
 	chmod +x $(STAGE)/nw/bin/*
 	# The sources the staged binaries were built from, staged with them.
 	# tests/run.py's hash probe compiles nwcheck.c to ask which slot a name
@@ -92,7 +95,17 @@ test: stage
 proof:
 	sh proofs/run.sh
 
+# Real bootloader-style boot. Needs qemu-system-x86_64, a kernel with
+# virtio-blk/ext4/vfat, mkfs.vfat, and root for loop mounts. Fails if
+# the console has HALT or Attempted to kill init, or lacks city open.
+# KERNEL= selects the image. This is not `make test`.
+qemu:
+	KERNEL=$(KERNEL) OUT=$(or $(QEMU_OUT),/tmp/nw-boot) \
+	    sh tools/mkboot.sh --run --check
+
+KERNEL ?= /boot/vmlinuz
+
 clean:
 	rm -f lids.o nw-dawn nw-root nw-spawn nw-check nw-sup nw-rescue \
-	      unit-probe unit-boom unit-badcall unit-term unit-brick
+	      unit-probe unit-boom unit-badcall unit-term unit-brick unit-slowdie
 	rm -rf $(STAGE)

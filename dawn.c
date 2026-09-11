@@ -141,10 +141,34 @@ int main(void)
     mkpath(NW_ROOT_MNT "/nw/stores");
     mkpath(NW_ROOT_MNT "/" NW_OLD_ROOT);
 
+    /* A bootloader-supplied root is MS_SHARED; pivot_root and MS_MOVE
+     * both refuse that with EINVAL. unshare --mount (dawn-real-boot)
+     * already made the namespace private, so the harness never saw it.
+     * This remount is mount-stage work. */
+    if (mount(NULL, "/", NULL, MS_REC | MS_PRIVATE, NULL) < 0)
+        die("make-private", "/");
+
     if (chdir(NW_ROOT_MNT) < 0) die("chdir", NW_ROOT_MNT);
-    if (syscall(SYS_pivot_root, ".", NW_OLD_ROOT) < 0) die("pivot_root", NULL);
+    if (syscall(SYS_pivot_root, ".", NW_OLD_ROOT) == 0) {
+        say("pivoted", "pivot_root");
+    } else {
+        /* The current root is the kernel's initramfs rootfs. pivot_root
+         * is defined to fail there (EINVAL: "the current root is on the
+         * rootfs mount"). Measured 2026-09-11 under QEMU -kernel/-initrd:
+         * both disks mounted, then FAIL pivot_root errno=22. The
+         * documented sequence is MS_MOVE of the new root onto / plus
+         * chroot. See Documentation/filesystems/ramfs-rootfs-initramfs.rst
+         * and pivot_root(2) NOTES. The lab harness is not on rootfs, so
+         * dawn-real-boot takes the pivot_root path above and does not
+         * exercise this branch. */
+        say("pivot_root unavailable, MS_MOVE", NULL);
+        if (mount(".", "/", NULL, MS_MOVE, NULL) < 0)
+            die("move-root", NULL);
+        if (chroot(".") < 0)
+            die("chroot", NULL);
+        say("pivoted", "MS_MOVE");
+    }
     if (chdir("/") < 0) die("chdir", "/");
-    say("pivoted", NULL);
 
     /* Kernel filesystems, now in the real root. */
     ensure_mount("proc", "/proc", "proc", 0);
@@ -162,12 +186,29 @@ int main(void)
      * exists in nw-sup and none should be added until that work. */
     ensure_mount("cgroup2", "/sys/fs/cgroup", "cgroup2", 0);
 
-    if (umount2("/" NW_OLD_ROOT, MNT_DETACH) < 0) die("umount oldroot", NULL);
-    if (rmdir("/" NW_OLD_ROOT) < 0 && errno != EBUSY && errno != ENOTEMPTY)
+    /* /oldroot only exists after a successful pivot_root. The MS_MOVE
+     * path overmounts / and leaves no oldroot to detach; ENOENT is
+     * that path, not a failed detach. */
+    if (umount2("/" NW_OLD_ROOT, MNT_DETACH) < 0 &&
+        errno != ENOENT && errno != EINVAL && errno != ENODEV)
+        die("umount oldroot", NULL);
+    if (rmdir("/" NW_OLD_ROOT) < 0 &&
+        errno != EBUSY && errno != ENOTEMPTY && errno != ENOENT)
         die("rmdir oldroot", NULL);
 
     say("exec", NW_INIT_AT);
-    execl(NW_INIT_AT, "nw-root", "--slots", NW_SLOTS_AT, (char *)0);
+    /* Production argv is --slots only. --hold-ms is a lab timer; PID 1
+     * without it reaps forever. The harness sets NW_HOLD_MS so
+     * dawn-real-boot can still observe shutdown_city. A kernel command
+     * line must not grow that variable. */
+    {
+        const char *hold = getenv("NW_HOLD_MS");
+        if (hold && hold[0])
+            execl(NW_INIT_AT, "nw-root", "--hold-ms", hold,
+                  "--slots", NW_SLOTS_AT, (char *)0);
+        else
+            execl(NW_INIT_AT, "nw-root", "--slots", NW_SLOTS_AT, (char *)0);
+    }
     die("exec nw-root", NW_INIT_AT);
     return 80;
 }

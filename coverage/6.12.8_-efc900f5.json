@@ -3,10 +3,10 @@
   "erofs": true,
   "landlock": false,
   "loop": true,
-  "squashfs": true,
-  "vfat": false
+  "squashfs": false,
+  "vfat": true
  },
- "kernel": "6.18.44-fc-v24",
+ "kernel": "6.12.8+",
  "passed": [
   "bad-crc",
   "baker-rejects",
@@ -38,7 +38,7 @@
   "term-signal"
  ],
  "skipped": {
-  "dawn-real-boot:vfat-esp": "kernel has no FAT driver (/proc/filesystems lists none), so the ESP is ext4 and FAT's execute bit, ownership and 4 GiB cap stay untested -- which is what docs/options/06 reasons from",
+  "dawn-real-boot:vfat-esp": "ESP is ext4 this run: need both a FAT driver in /proc/filesystems and mkfs.vfat to build a real ESP. mountable=True mkfs_vfat=False",
   "landlock-confines": "kernel has no Landlock (landlock_create_ruleset -> ENOSYS); the lid cannot be exercised here at all"
  }
 }

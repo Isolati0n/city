@@ -72,10 +72,9 @@ struct nw_unit {
     char     exec_path[NW_PATH_LEN];   /* resolved inside the brick, if any */
     char     brick[NW_BRICK_LEN];      /* "" = no brick: shares the machine root */
     uint8_t  kind;       /* NW_KIND_* — was 'critical' until 2026-09-10 */
-    uint8_t  budget;
-    uint16_t window_s;
+    uint8_t  budget;     /* deaths for the life of nw-sup; 0 = no restart */
     uint8_t  lids;
-    uint8_t  _pad;
+    uint8_t  _pad;       /* must stay zero; nwcheck rejects a dirty spare */
 } __attribute__((packed));
 
 /* A path made visible inside a house's brick before it pivots. Bind mounts of
@@ -97,6 +96,22 @@ struct nw_hdr {
     uint32_t n_binds;
     uint32_t crc32;
 } __attribute__((packed));
+
+/* NWPLAN05 and sizeof(nw_unit) are one agreement. window_s left the
+ * trailer (kind, budget, lids, pad = 4 bytes) and the magic stayed
+ * NWPLAN05 only because the baker and this struct moved together.
+ * There was no compile-time pin: two editors could change the
+ * trailer and the magic independently and both builds would be
+ * green against different on-disk layouts. Found empty 2026-09-11
+ * while rebasing stay-up onto the proofs work that was editing
+ * the same struct. */
+#define NW_UNIT_SIZE (NW_NAME_LEN + NW_PATH_LEN + NW_BRICK_LEN + 4)
+_Static_assert(sizeof(struct nw_unit) == NW_UNIT_SIZE,
+               "NWPLAN05 unit size drifted from the magic");
+_Static_assert(sizeof(NW_MAGIC) - 1 == 8,
+               "magic must fill nw_hdr.magic");
+_Static_assert(sizeof(struct nw_hdr) == 20,
+               "hdr is magic[8] + 3 * u32");
 
 #define NW_BLOB_SIZE(nu, nb) \
     (sizeof(struct nw_hdr) + (nu) * sizeof(struct nw_unit) \

@@ -2587,18 +2587,143 @@ The suite pins the comparison out to the byte where its colliding pair
 first differs, chosen as late as the candidate set allows and printed in
 the `ok` line so the bound is visible rather than assumed.
 
-**Measured afterwards, because the division of labour between the two
-artifacts was a hypothesis until it was run:**
+## 35. One loop, a hard budget, a qemu target (2026-09-11)
+
+Three defects, one session. None of them grew PID 1's job.
+
+### Shutdown is reboot, and there is one poll loop
+
+`--hold-ms` and production used to be two loop bodies. The 800 ms lab
+timer reached a real boot through that split and PID 1 `_exit`ed:
+`Attempted to kill init`. There is one loop now. `hold_ms == 0` polls
+forever; `--hold-ms N` is the same body with a deadline. SIGTERM,
+SIGINT, and the lab deadline all fall into `shutdown_city`, which
+sends TERM, waits 400 ms, KILLs what remains, prints `closed`, and
+calls `reboot(RB_POWER_OFF)`.
+
+`reboot()` was measured before it was trusted. Inside `unshare --pid
+--fork` (the suite) it does not return; the namespace is zapped and
+the unshare parent exits 130 (SIGINT). The same syscall on the host
+without a pid namespace powers the machine off — measured, accidentally,
+when a probe ran outside unshare. The suite therefore accepts 130 after
+`closed`, not as a second shutdown mode. Production qemu uses
+`-no-reboot` so a guest power-off is a clean qemu exit.
+
+`--hold-ms` stays for the harness. dawn forwards `NW_HOLD_MS` only when
+the lab sets it; the qemu command line does not.
+
+### Supervisors stop restarting when they hear TERM
+
+`on_term` already ran (D11). It now sets `stopping` and the wait loop
+exits instead of forking again. No new channel: the same SIGTERM PID 1
+already sends. Control: `test_shutdown_does_not_restart` — unit-term as
+a longrun with budget=20; handler ran; `restart stay` is absent.
+Delete the `if (stopping)` branch and that line appears.
+
+### D18 — the budget did not bound anything
+
+Reproduced with `unit-slowdie` (exit after 1.2 s) against the old
+`budget=3 window=1` rule: deaths slower than the window reset the
+tally. Seventeen restarts in twenty seconds was the shape the clone
+saw; the fixture here is the same interval.
+
+The field is gone. `nw_unit` is kind, budget, lids, pad. Baker rejects
+`window=`. `nw-sup` counts `deaths` for its own life and stops when
+`deaths > budget` (budget 0 means never restart). Control:
+`test_budget_is_hard_total` — death=1,2,3 present, death=4 absent,
+exactly three `restart drip` lines in a 7 s hold. A sliding window
+logs death=4 inside that hold.
+
+Consequence, recorded rather than built: a house that exhausts its
+budget is dead for the session. Silent recovery only helps an operator
+who is not there. This machine is a daily driver; most failures are
+real (wrong brick, bad path, lid too tight) and do not heal. Hard-total
+is only safe once the death is visible. Logging that makes it visible
+is queued behind this. Do not ship hard-total as if that work existed.
+
+The §32 note that `window_s` widening past `uint16_t` would truncate
+`snprintf` is discharged: there is no window to print.
+
+### `make qemu`
+
+`tools/mkboot.sh --run --check` is a Makefile target. It fails on
+`HALT`, on `Attempted to kill init`, or on a console with no
+`city open`. It is not `make test`. The unshare suite still cannot
+see the MS_MOVE branch or a dirty ext4 from the previous power cut.
+
+## 36. Landing stay-up: guards, NLS, and two measured gaps (2026-09-11)
+
+Work from the first bootloader boot landed as commits, not a tarball.
+Rebase base named in the commit: `4e11c20` is what the operator
+verified as main. This file records what that landing added on top
+of §35, because a comment with no record is the next tarball.
+
+### `reboot()` is a hazard; the guard is `getpid() == 1`
+
+Inside `unshare --pid --fork`, `reboot(RB_POWER_OFF)` zaps the
+namespace and the parent exits 130. Outside a pid namespace the
+same syscall powers the host off — measured by doing it. A comment
+that said "never call this except as PID 1" was a rule in prose
+with nothing enforcing it. `shutdown_city` now refuses unless
+`getpid() == 1`, then calls `reboot`. The suite child is PID 1 of
+its namespace, so the happy path is unchanged. A stray call from a
+helper on the host HALTs instead of taking the lab down.
+
+### Format version pinned to `sizeof(struct nw_unit)`
+
+There was no `_Static_assert` tying `NWPLAN05` to the unit size.
+`window_s` leaving the trailer changed the on-disk layout; the
+proofs work was editing the same struct. `NW_UNIT_SIZE` and the
+assert live in `blob.h`. Changing the trailer without changing the
+constant fails the build.
+
+### NLS stays in mkboot, with the reason written there
+
+Ubuntu 6.8 generic: `CONFIG_VFAT_FS=y`, `CONFIG_NLS_ISO8859_1=m`.
+dawn mounts the ESP with `data=NULL`, so vfat uses iocharset
+iso8859-1. Without the module:
 
 ```
-n < 31 against the proof:  leaf_name_dup  PASS  ** 0 of 344 failed  102s
-n < 30 against the proof:  leaf_name_dup  FAIL  ** 1 of 344 failed   64s
-  [main.assertion.1] a duplicate is reported exactly when one exists: FAILURE
+FAT-fs (vdb): IO charset iso8859-1 not found
+[dawn] FAIL mount /sysroot/efi errno=22
 ```
 
-So the cover is complete and the seam is exactly where it looked: the
-suite pins bytes 0 through 29 (its colliding pair differs at 29), the
-proof pins byte 30, and byte 31 cannot distinguish two accepted names
-because `name_ok` forces it to zero — which is why both artifacts accept
-that truncation and are right to. No byte of the field is unguarded, and
-the gap I assumed existed did not.
+`tools/mkboot.sh` `finit_module`s `nls_iso8859_1` and `nls_utf8`
+in the initrd wrapper. That is image-build glue for one kernel's
+Kconfig, not TCB. Dawn must not learn which charset a distro
+modularised. The comment in mkboot is the reason; moving the load
+into dawn "for convenience" puts a kernel-config workaround in the
+mount stage.
+
+### Console interleaving is a measured requirement for the logging pass
+
+Do not fix it here. The first QEMU console already smashed
+prefixes:
+
+```
+[alpha] [beta] [gamma] [nw-sup] lid seccomp
+```
+
+The logger does `write(2, prefix)` then `write(2, buf)` — two
+calls, no atomicity. On the pipe the suite reads, lines stay
+whole. On a real serial console, lines from different houses
+become unattributable at the moment they are needed. The logging
+pass has to deliver **one write per line**. Recorded so that pass
+does not start from a blank page.
+
+### Green suite, unbootable plan
+
+`make test` will stay green on a host that cannot run the lids the
+plan names. Lids are fatal now: a plan declaring Landlock on a 6.8
+host (ENOSYS) means that house dies at boot. The suite prints
+`landlock: UNAVAILABLE` and a named skip, then PASSED WITH SKIPS.
+Green suite, unbootable plan. Live gap between what the harness
+proves and what the machine will do. Nothing in this landing
+fixes it. The environment block is the only thing that makes the
+green line honest, and only if someone reads it.
+
+### A tarball is not a delivery
+
+The stay-up tree lived in `artifacts/*.tar.gz` while `main` moved
+from `d84da58` to `4e11c20`. The divergence was invisible until
+someone cloned the repo. CLAUDE.md now says the same sentence.

@@ -119,8 +119,7 @@ def bake(path, houses):
         unit += pad(h["brick"], BRICK_LEN)
         # kind (the byte that was "critical" until 2026-09-10), then _pad,
         # which must stay zero -- nwcheck.c rejects a nonzero spare.
-        unit += struct.pack("<BBHBB", h["kind"], h["budget"], h["window"],
-                            h["lids"], 0)
+        unit += struct.pack("<BBBB", h["kind"], h["budget"], h["lids"], 0)
     table = b""
     for u, p in binds:
         table += struct.pack("<H", u) + pad(p, PATH_LEN)
@@ -135,18 +134,17 @@ def bake(path, houses):
           f"crc=0x{crc:08x} bytes={len(blob)} sha256={digest}")
 
 
-def house(name, exe, kind, budget, window, lids, brick="", binds=()):
+def house(name, exe, kind, budget, lids, brick="", binds=()):
     return {"name": name, "exec": exe, "kind": kind, "budget": budget,
-            "window": window, "lids": lids, "brick": brick,
-            "binds": list(binds)}
+            "lids": lids, "brick": brick, "binds": list(binds)}
 
 
 def default_city(probe: str, lids: int):
     return [
-        house("alpha", probe, KIND_ONESHOT, 3, 2, lids),
-        house("beta", probe, KIND_ONESHOT, 3, 2, lids),
-        house("gamma", probe, KIND_ONESHOT, 3, 2, lids),
-        house("delta", probe, KIND_ONESHOT, 1, 2, lids),
+        house("alpha", probe, KIND_ONESHOT, 3, lids),
+        house("beta", probe, KIND_ONESHOT, 3, lids),
+        house("gamma", probe, KIND_ONESHOT, 3, lids),
+        house("delta", probe, KIND_ONESHOT, 1, lids),
     ]
 
 
@@ -170,7 +168,7 @@ def load_city(path: str):
         parts = line.split()
         if parts[0] == "house":
             name, exe = parts[1], parts[2]
-            budget, window, lids = 3, 2, 0
+            budget, lids = 3, 0
             kind = None
             brick, binds = "", []
             for kv in parts[3:]:
@@ -182,7 +180,10 @@ def load_city(path: str):
                 elif k == "budget":
                     budget = int(v)
                 elif k == "window":
-                    window = int(v)
+                    raise SystemExit(
+                        "window= was removed 2026-09-11 (D18): the restart "
+                        "budget is a hard total for the life of nw-sup, "
+                        "not a sliding window")
                 elif k == "lids":
                     lids = parse_lids(v)
                 elif k == "brick":
@@ -210,7 +211,7 @@ def load_city(path: str):
                 raise SystemExit(
                     f"house {name}: exec path must be absolute inside the "
                     "brick")
-            houses.append(house(name, exe, kind, budget, window, lids,
+            houses.append(house(name, exe, kind, budget, lids,
                                 brick, binds))
         else:
             raise SystemExit(f"bad city line: {line}")

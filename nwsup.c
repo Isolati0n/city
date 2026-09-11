@@ -223,18 +223,13 @@ static void lid_landlock(char *const *binds, int nbinds)
     say("lid landlock");
 }
 
-static long long now_ms(void)
-{
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (long long)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
-}
-
 static pid_t child;
+static volatile sig_atomic_t stopping;
 
 static void on_term(int sig)
 {
     (void)sig;
+    stopping = 1;
     if (child > 0)
         kill(child, SIGTERM);
 }
@@ -244,11 +239,10 @@ int main(int argc, char **argv)
     if (argc < 3) die("argv");
     const char *path = argv[1];
     const char *name = argv[2];
-    unsigned lids = 0, budget = 0, window_s = 2, kind = NW_KIND_LONGRUN;
+    unsigned lids = 0, budget = 0, kind = NW_KIND_LONGRUN;
     const char *e;
     if ((e = getenv("NW_LIDS"))) lids = (unsigned)atoi(e);
     if ((e = getenv("NW_BUDGET"))) budget = (unsigned)atoi(e);
-    if ((e = getenv("NW_WINDOW"))) window_s = (unsigned)atoi(e);
     if ((e = getenv("NW_KIND"))) kind = (unsigned)atoi(e);
     const char *brick = getenv("NW_BRICK");
     if (brick && !brick[0]) brick = NULL;
@@ -291,7 +285,6 @@ int main(int argc, char **argv)
     signal(SIGINT, on_term);
 
     int deaths = 0;
-    long long win0 = now_ms();
 
     for (;;) {
         pid_t p = fork();
@@ -314,6 +307,12 @@ int main(int argc, char **argv)
         if (waitpid(p, &st, 0) < 0) die("wait house");
         child = 0;
 
+        /* Same TERM that PID 1 sent to start shutdown. Restarting here
+         * races the city closing: the house comes back after it was
+         * asked to stop. No extra channel — the signal is the news. */
+        if (stopping)
+            _exit(WIFEXITED(st) ? WEXITSTATUS(st) : 0);
+
         /* Only a oneshot is finished by a clean exit. For a longrun, exit 0
          * is as unexpected as any other exit and goes to the budget: a
          * compositor that quits or a daemon that reloads itself should come
@@ -321,11 +320,10 @@ int main(int argc, char **argv)
         if (kind == NW_KIND_ONESHOT && WIFEXITED(st) && WEXITSTATUS(st) == 0)
             _exit(0);
 
-        long long t = now_ms();
-        if (t - win0 > (long long)window_s * 1000) {
-            deaths = 0;
-            win0 = t;
-        }
+        /* D18: budget is a hard total for the life of this supervisor.
+         * There is no window. A death slower than the old window_s
+         * reset the tally and never hit the cap — budget=3 window=1
+         * dying every 1.2s restarted for as long as anyone watched. */
         deaths++;
         if (budget == 0 || deaths > (int)budget)
             _exit(WIFEXITED(st) ? WEXITSTATUS(st) : 71);

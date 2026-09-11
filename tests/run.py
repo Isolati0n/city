@@ -180,6 +180,26 @@ def boot(slot=None, plan=None, extra=None, hold=800):
     return p.returncode, out
 
 
+def city_closed(rc, out):
+    """Production PID 1 ends in reboot(RB_POWER_OFF), not _exit.
+
+    Measured 2026-09-11 inside unshare --pid --fork: reboot() tears the
+    pid namespace down and the unshare parent exits 130 (SIGINT). It
+    does not return in the child. If reboot() is denied the code prints
+    closed and _exit(0)s. Either is a finished shutdown. rc==0 alone
+    used to mean 'PID 1 returned', which on hardware is
+    Attempted to kill init."""
+    if "Attempted to kill init" in out:
+        return False
+    if "[nw-root] closed" not in out:
+        return False
+    # Same SIGINT, two wait encodings. The shell reports 130
+    # (WIFEXITED 128+2). Python subprocess reports -2
+    # (WIFSIGNALED SIGINT) when unshare itself is the signaled
+    # process. Measured both ways 2026-09-11.
+    return rc in (0, 130, -2)
+
+
 def expect(cond, msg):
     if not cond:
         raise SystemExit("FAIL: " + msg)
@@ -187,7 +207,7 @@ def expect(cond, msg):
 
 def test_happy():
     rc, out = boot(slot=f"{SLOTS}/A", hold=900)
-    expect(rc == 0, f"happy rc={rc}\n{out}")
+    expect(city_closed(rc, out), f"happy rc={rc}\n{out}")
     # No edges: a unit holds nothing above stderr. This is what is left of the
     # descriptor assertion after wiring was removed.
     expect(out.count("fds_ge3=0") == 4, f"every unit holds no extra fds\n{out}")
@@ -203,11 +223,11 @@ def test_slot_b():
     meant this test could not have detected a slot-selection bug: booting the
     wrong slot produced the same output. The unit count is the assertion."""
     a_rc, a_out = boot(slot=f"{SLOTS}/A", hold=900)
-    expect(a_rc == 0, f"slot A rc={a_rc}\n{a_out}")
+    expect(city_closed(a_rc, a_out), f"slot A rc={a_rc}\n{a_out}")
     expect("houses=4" in a_out, f"slot A should hold four units\n{a_out}")
 
     rc, out = boot(slot=f"{SLOTS}/B", hold=700)
-    expect(rc == 0, f"slot B rc={rc}\n{out}")
+    expect(city_closed(rc, out), f"slot B rc={rc}\n{out}")
     expect("houses=2" in out, f"slot B should hold two units\n{out}")
     expect("solo" in out and "duo" in out, f"slot B unit names\n{out}")
     print("ok slot-B")
@@ -251,7 +271,11 @@ def test_baker_rejects():
     p = run(["python3", CC, "--city", city, "--out", f"{WORK}/nope.blob"])
     expect(p.returncode != 0, "duplicate name should fail bake")
     expect("duplicate name" in (p.out + p.err), f"reason\n{p.out}{p.err}")
-    print("ok baker-reject-dupname")
+    open(city, "w").write("house a /bin/true kind=oneshot window=1 lids=none\n")
+    p = run(["python3", CC, "--city", city, "--out", f"{WORK}/nope.blob"])
+    expect(p.returncode != 0, "window= must fail the bake")
+    expect("window=" in (p.out + p.err), f"reason\n{p.out}{p.err}")
+    print("ok baker-reject-dupname+window")
 
 
 def test_fuzz_checker():
@@ -406,27 +430,27 @@ def test_kind_exit0():
     probe = f"{BIN}/unit-probe"
     long_city = f"{WORK}/longrun.city"
     open(long_city, "w").write(
-        f"house quitter /bin/true kind=longrun budget=2 window=9 lids=none\n"
+        f"house quitter /bin/true kind=longrun budget=2 lids=none\n"
         f"house idle {probe} kind=oneshot lids=none\n"
     )
     blob = f"{WORK}/longrun.blob"
     b = run(["python3", CC, "--city", long_city, "--out", blob])
     expect(b.returncode == 0, f"bake\n{b.out}{b.err}")
     rc, out = boot(plan=blob, hold=1200)
-    expect(rc == 0, f"city should survive, rc={rc}\n{out}")
+    expect(city_closed(rc, out), f"city should survive, rc={rc}\n{out}")
     expect("HALT" not in out, f"nothing may halt the city\n{out}")
     expect("restart quitter" in out, f"longrun exit 0 must restart\n{out}")
 
     one_city = f"{WORK}/oneshot.city"
     open(one_city, "w").write(
-        f"house quitter /bin/true kind=oneshot budget=2 window=9 lids=none\n"
+        f"house quitter /bin/true kind=oneshot budget=2 lids=none\n"
         f"house idle {probe} kind=oneshot lids=none\n"
     )
     blob2 = f"{WORK}/oneshot.blob"
     b = run(["python3", CC, "--city", one_city, "--out", blob2])
     expect(b.returncode == 0, f"bake\n{b.out}{b.err}")
     rc, out2 = boot(plan=blob2, hold=1200)
-    expect(rc == 0, f"city should survive, rc={rc}\n{out2}")
+    expect(city_closed(rc, out2), f"city should survive, rc={rc}\n{out2}")
     # "restart quitter" is also absent when quitter never ran, so assert it
     # ran and exited before asserting it was not restarted. Same shape as the
     # seccomp test: a negative assertion alone passes on absence.
@@ -443,7 +467,14 @@ def test_dawn_real_boot():
 
     This is the only test that exercises mount(2), pivot_root(2) or the
     /nw and /efi layout at all. Everything else in this suite runs against
-    the flat staged directory under /tmp."""
+    the flat staged directory under /tmp.
+
+    It is not a bootloader boot. unshare --mount gives a private namespace
+    and a root that is not rootfs; both are required for pivot_root and
+    neither is true of a kernel-handoff initramfs. See harness.md
+    "The harness is more capable than the machine". NW_HOLD_MS is the
+    lab timer forwarded by dawn so this process can exit; production
+    dawn does not pass --hold-ms."""
     lab = f"{WORK}/dawnlab"
     subprocess.run(["rm", "-rf", lab], check=False)
     os.makedirs(f"{lab}/mr"); os.makedirs(f"{lab}/me")
@@ -513,12 +544,13 @@ def test_dawn_real_boot():
             cmd = ["unshare", "--mount", "--pid", "--fork", "--",
                    "env", f"NW_ROOT={rootdev}", "NW_ROOT_FSTYPE=ext4",
                    f"NW_ESP={espdev}", f"NW_ESP_FSTYPE={esp_fs}",
+                   "NW_HOLD_MS=800",
                    f"{BIN}/nw-dawn"]
             p = run(cmd)
             return p.returncode, p.out + p.err
 
         rc, out = boot_dawn()
-        expect(rc == 0, f"dawn boot rc={rc}\n{out}")
+        expect(city_closed(rc, out), f"dawn boot rc={rc}\n{out}")
         expect("mounted /sysroot" in out, f"root not mounted\n{out}")
         expect("mounted /sysroot/efi" in out, f"esp not mounted\n{out}")
         expect("pivoted" in out, f"no pivot_root\n{out}")
@@ -534,7 +566,7 @@ def test_dawn_real_boot():
         subprocess.run(["sync"], check=True)
         subprocess.run(["umount", f"{lab}/me"], check=True)
         rc, out = boot_dawn()
-        expect(rc == 0, f"slot B rc={rc}\n{out}")
+        expect(city_closed(rc, out), f"slot B rc={rc}\n{out}")
         expect("live slot /efi/slots/B" in out, f"B not selected\n{out}")
         expect("houses=1" in out, f"slot B should hold 1 unit\n{out}")
 
@@ -566,7 +598,7 @@ def test_term_signal():
     b = run(["python3", CC, "--city", city, "--out", blob])
     expect(b.returncode == 0, f"bake\n{b.out}{b.err}")
     rc, out = boot(plan=blob, hold=500)
-    expect(rc == 0, f"term rc={rc}\n{out}")
+    expect(city_closed(rc, out), f"term rc={rc}\n{out}")
     expect("sigterm_blocked=0" in out, f"house inherited a blocked mask\n{out}")
     expect("SIGTERM handler ran" in out, f"handler never ran\n{out}")
     expect("exiting cleanly after TERM" in out, f"no clean exit\n{out}")
@@ -581,17 +613,69 @@ def test_crash_does_not_halt():
     probe = f"{BIN}/unit-probe"
     city = f"{WORK}/crash.city"
     open(city, "w").write(
-        f"house boom {boom} kind=longrun budget=2 window=9 lids=none\n"
+        f"house boom {boom} kind=longrun budget=2 lids=none\n"
         f"house idle {probe} kind=oneshot lids=none\n"
     )
     blob = f"{WORK}/crash.blob"
     b = run(["python3", CC, "--city", city, "--out", blob])
     expect(b.returncode == 0, f"bake\n{b.out}{b.err}")
     rc, out = boot(plan=blob, hold=1200)
-    expect(rc == 0, f"city should survive a crashing house, rc={rc}\n{out}")
+    expect(city_closed(rc, out), f"city should survive a crashing house, rc={rc}\n{out}")
     expect("HALT" not in out, f"nothing may halt the city\n{out}")
     expect("restart boom" in out, f"boom should have been restarted\n{out}")
     print("ok crash-does-not-halt")
+
+
+def test_budget_is_hard_total():
+    """D18: budget is deaths for the life of nw-sup, not a sliding window.
+
+    unit-slowdie exits after 1.2s. The old window_s=1 reset the tally
+    between deaths, so budget=3 never fired. Control: restore a window
+    reset and this test sees death=4 inside the hold. Pairing is the
+    restart lines that did happen, then the one that must not."""
+    drip = f"{BIN}/unit-slowdie"
+    probe = f"{BIN}/unit-probe"
+    city = f"{WORK}/d18.city"
+    open(city, "w").write(
+        f"house drip {drip} kind=longrun budget=3 lids=none\n"
+        f"house idle {probe} kind=oneshot lids=none\n"
+    )
+    blob = f"{WORK}/d18.blob"
+    b = run(["python3", CC, "--city", city, "--out", blob])
+    expect(b.returncode == 0, f"bake\n{b.out}{b.err}")
+    # 3 deaths * 1.2s plus spawn/shutdown slack. A sliding 1s window
+    # would log death=4 before this deadline.
+    rc, out = boot(plan=blob, hold=7000)
+    expect(city_closed(rc, out), f"city should survive, rc={rc}\n{out}")
+    expect("restart drip death=1" in out, f"first restart missing\n{out}")
+    expect("restart drip death=2" in out, f"second restart missing\n{out}")
+    expect("restart drip death=3" in out, f"third restart missing\n{out}")
+    expect("restart drip death=4" not in out,
+           f"budget did not bound: death=4\n{out}")
+    n = out.count("restart drip death=")
+    expect(n == 3, f"expected 3 restarts, got {n}\n{out}")
+    print("ok budget-hard-total")
+
+
+def test_shutdown_does_not_restart():
+    """A supervisor that sees SIGTERM must not restart the house.
+
+    unit-term exits 0 after handling TERM. As a longrun that would
+    otherwise be a restart. The same signal PID 1 already sends is the
+    news; no extra channel. Control: delete `if (stopping) _exit` in
+    nw-sup and this test sees `restart stay`."""
+    term = f"{BIN}/unit-term"
+    city = f"{WORK}/shut.city"
+    open(city, "w").write(f"house stay {term} kind=longrun budget=20 lids=none\n")
+    blob = f"{WORK}/shut.blob"
+    b = run(["python3", CC, "--city", city, "--out", blob])
+    expect(b.returncode == 0, f"bake\n{b.out}{b.err}")
+    rc, out = boot(plan=blob, hold=500)
+    expect(city_closed(rc, out), f"shutdown rc={rc}\n{out}")
+    expect("SIGTERM handler ran" in out, f"house never saw TERM\n{out}")
+    expect("restart stay" not in out,
+           f"supervisor restarted during shutdown\n{out}")
+    print("ok shutdown-no-restart")
 
 
 def test_seccomp_kills():
@@ -682,7 +766,7 @@ def test_brick_is_a_root():
     expect(chk.returncode == 0, f"nw-check\n{chk.out}{chk.err}")
 
     rc, out = boot(plan=blob, hold=1200)
-    expect(rc == 0, f"brick city rc={rc}\n{out}")
+    expect(city_closed(rc, out), f"brick city rc={rc}\n{out}")
     expect("lid brick" in out, f"no pivot happened\n{out}")
 
     # Each house tags its own lines: the logger prefixes a write chunk, not
@@ -811,7 +895,7 @@ def test_brick_needs_newns():
     p = run(["python3", CC, "--city", city, "--out", good])
     expect(p.returncode == 0, f"bake\n{p.out}{p.err}")
     d = bytearray(open(good, "rb").read())
-    lids_off = 20 + 32 + 128 + 96 + 4          # hdr + name + exec + brick + kind/budget/window
+    lids_off = 20 + 32 + 128 + 96 + 2          # hdr + name + exec + brick + kind + budget; lids follows
     expect(d[lids_off] & 4, "expected the NEWNS bit where the layout says")
     d[lids_off] &= ~4
     d[16:20] = b"\x00\x00\x00\x00"
@@ -870,7 +954,7 @@ def test_lids_are_not_advisory():
                f"lid was applied but the house did not start\n{out}")
 
     expect("house=plain" in out, f"an unrelated house must still run\n{out}")
-    expect(rc == 0 and "HALT" not in out,
+    expect(city_closed(rc, out) and "HALT" not in out,
            f"a house that cannot wear its lid must not halt the city\n{out}")
     print("ok lids-not-advisory " +
           ("(refused branch: no landlock here)" if refused
@@ -914,7 +998,7 @@ def test_landlock_confines():
     expect(b.returncode == 0, f"bake\n{b.out}{b.err}")
 
     rc, out = boot(plan=blob, hold=1500)
-    expect(rc == 0, f"landlock city rc={rc}\n{out}")
+    expect(city_closed(rc, out), f"landlock city rc={rc}\n{out}")
     expect("lid landlock" in out, f"lid was not applied\n{out}")
 
     def field(k):
@@ -1035,7 +1119,7 @@ def test_dupname_refused():
     NAME, PATH, BRICK = (int(blob_h(x)) for x in
                          ("NW_NAME_LEN", "NW_PATH_LEN", "NW_BRICK_LEN"))
     HDR = 20
-    USZ = NAME + PATH + BRICK + 6
+    USZ = NAME + PATH + BRICK + 4
 
     city = f"{WORK}/dup.city"
     open(city, "w").write("".join(
@@ -1211,8 +1295,8 @@ def test_checker_rejects_crafted_fields():
     NAME, PATH, BRICK = (int(blob_h(x)) for x in
                          ("NW_NAME_LEN", "NW_PATH_LEN", "NW_BRICK_LEN"))
     HDR = 20
-    KIND_OFF = HDR + NAME + PATH + BRICK      # kind, budget, window_s,
-    LIDS_OFF = KIND_OFF + 4                   # then lids, then _pad
+    KIND_OFF = HDR + NAME + PATH + BRICK      # kind, then budget, lids, _pad
+    LIDS_OFF = KIND_OFF + 2                   # lids is the third byte of the trailer
 
     city = f"{WORK}/crafted.city"
     brick = f"{STAGE}/nw/bricks/deadbeef"
@@ -1233,7 +1317,7 @@ def test_checker_rejects_crafted_fields():
     p = run(["python3", CC, "--city", city, "--out", good])
     expect(p.returncode == 0, f"bake\n{p.out}{p.err}")
     base = bytearray(open(good, "rb").read())
-    USZ = NAME + PATH + BRICK + 6
+    USZ = NAME + PATH + BRICK + 4
     KIND_OFF += VICTIM * USZ
     LIDS_OFF += VICTIM * USZ
     expect(len(base) == HDR + NUNITS * USZ,
@@ -1255,7 +1339,7 @@ def test_checker_rejects_crafted_fields():
             for k in range(NUNITS):
                 bo = HDR + k * USZ + NAME + PATH
                 d[bo:bo + BRICK] = b"\x00" * BRICK
-                d[HDR + k * USZ + NAME + PATH + BRICK + 4] = 1
+                d[HDR + k * USZ + NAME + PATH + BRICK + 2] = 1
         for off, val in edits:
             d[off] = val
         d[16:20] = b"\x00\x00\x00\x00"
@@ -1361,7 +1445,7 @@ def test_blob_size_ceiling():
     NAME, PATH, BRICK = (int(blob_h(x)) for x in
                          ("NW_NAME_LEN", "NW_PATH_LEN", "NW_BRICK_LEN"))
     nu, nb = int(blob_h("NW_MAX_UNITS")), int(blob_h("NW_MAX_BINDS"))
-    HDR, USZ, BSZ = 20, NAME + PATH + BRICK + 6, 2 + PATH
+    HDR, USZ, BSZ = 20, NAME + PATH + BRICK + 4, 2 + PATH
     biggest = HDR + nu * USZ + nb * BSZ
 
     # A maximal plan: every unit has a brick (a bind requires one) and the
@@ -1441,7 +1525,7 @@ def test_non_provision_at_max():
     expect(b.returncode == 0, f"bake\n{b.out}{b.err}")
 
     rc, out = boot(plan=blob, hold=3000)
-    expect(rc == 0, f"max-unit city rc={rc}\n{out[-3000:]}")
+    expect(city_closed(rc, out), f"max-unit city rc={rc}\n{out[-3000:]}")
     expect(f"houses={n}" in out, f"expected {n} units\n{out[-3000:]}")
 
     reported = dict(re.findall(r"house=(\S+) fds_ge3=(-?\d+)", out))
@@ -1671,7 +1755,8 @@ def main():
         test_hash_pin, test_difftest, test_lids_are_not_advisory,
         test_baker_rejects, test_fuzz_checker, test_happy, test_slot_b,
         test_rescue, test_halt_spawner, test_bad_crc,
-        test_crash_does_not_halt, test_term_signal, test_dawn_real_boot,
+        test_crash_does_not_halt, test_budget_is_hard_total,
+        test_shutdown_does_not_restart, test_term_signal, test_dawn_real_boot,
         test_kind_required, test_kind_exit0, test_seccomp_kills,
         test_brick_is_a_root, test_brick_needs_newns,
         test_path_traversal_refused, test_dupname_refused,

@@ -52,18 +52,19 @@ sections after this one and are deliberately not numbered here.
    for. Spawning is boot-time only: PID 1 has no respawn path and restart
    budgets live in `nw-sup`. Do not give the spawner a mid-life.
 
-   The budget belongs to `nw-sup`, where it is **a counter over a sliding
-   window** — `int deaths` in `nwsup.c`, reset when the window expires, so it
-   never accumulates unboundedly. Budgets are **never nested**: bug 3 was a
+   The budget belongs to `nw-sup`, where it is **a hard total of deaths for
+   that supervisor's life** — `int deaths` in `nwsup.c`, compared against
+   `budget`, never reset by a time window. `window_s` left the blob on
+   2026-09-11 (`HISTORY.md` §35, D18): deaths slower than the window were
+   unbounded, so a house could die forever. Budgets are **never nested**: bug 3 was a
    supervisor giving up, PID 1 restarting it with a fresh budget, and the pair
    looping. One budget authority per unit, and PID 1 is not it.
 
-   *This said "a ring of timestamps, never a counter" until 2026-09-10, in the
-   present tense, as an enforced invariant. `grep` for `ring` across the C
-   sources returns nothing and never did: the ring was specified in
-   `HISTORY.md` §6 and never built. The sliding-window counter has no overflow
-   either, so the property was fine and only the description was false — which
-   is exactly the failure this file names at the end.*
+   *This said "a ring of timestamps, never a counter" until 2026-09-10, then
+   "a counter over a sliding window" until 2026-09-11. Both were present-tense
+   invariants the code did not honour, and the second was worse than a wrong
+   description: the window it described made the budget unbounded. `grep` for
+   `ring` or `window_s` across the C sources returns nothing now.*
 5. **The init provisions nothing.** Every house gets `/dev/null` on 0 and its
    own log pipe on 1 and 2. `close_others` sweeps the rest. There is no third
    thing, and no mechanism for granting one. (This replaces the pre-2026-09-10

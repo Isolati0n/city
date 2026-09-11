@@ -124,6 +124,84 @@ crafted bad blob, not merely accepting good ones.
 - A test that disappears, or starts passing for a different reason than it
   used to, is a **finding to report** — not a baseline to re-derive quietly.
 
+## The harness is more capable than the machine
+
+A new failure category, 2026-09-11. Everything found before this was a
+claim the code did not honour. This is a test setup quietly satisfying
+a requirement the real machine will not.
+
+`dawn-real-boot` runs under `unshare --mount --pid --fork`. That was
+silently doing two things beyond isolating, and both are preconditions
+a bootloader handoff does not provide:
+
+1. **The mount namespace is already private.** util-linux `unshare
+   --mount` defaults `--propagation private`, which is
+   `MS_REC|MS_PRIVATE`. A bootloader-supplied root is `MS_SHARED`.
+   `pivot_root` and `MS_MOVE` both return `EINVAL` on a shared root.
+   The test never saw it. Dawn now remounts; the comment in `dawn.c`
+   is the record.
+2. **The current root is not rootfs.** `pivot_root(2)` is defined to
+   fail when the current root is the kernel's initramfs `rootfs`
+   (`EINVAL`, see NOTES). The harness is on the host filesystem. A
+   `-kernel/-initrd` boot is on rootfs. The test took the success
+   path; production took the failure path. Dawn now falls back to
+   `MS_MOVE` plus `chroot`; that branch has no lab coverage.
+
+`unshare --pid --fork` adds a third gift the suite treats as success:
+
+3. **PID 1 exiting is an exit status, not a kernel panic.** In a pid
+   namespace the namespace dies and `unshare` returns the child's
+   code. `expect(rc == 0)` after `--hold-ms` used to read a clean
+   shutdown that was `_exit(0)`. On real hardware that `_exit` is
+   `Attempted to kill init!`. Production PID 1 now ends in
+   `reboot(RB_POWER_OFF)`. Measured inside `unshare --pid --fork`:
+   reboot does not return; the parent sees 130 (SIGINT). The suite
+   helper `city_closed` accepts 0 or 130 *after* the `closed` line,
+   and rejects a panic string. The timer is only `--hold-ms`; dawn
+   forwards `NW_HOLD_MS` when the lab sets it and never otherwise.
+
+`boot()` itself uses `--pid --fork --mount-proc`. `--mount-proc`
+implies `--mount`, so the happy-path boots get the private namespace
+too. They do not pivot, so they still would not have found (1) or (2).
+
+### What else the harness provides for free
+
+Looked, 2026-09-11. Not fixed here. Each is a requirement a real boot
+has to meet that the suite does not ask.
+
+- **`/proc` is already there, and already the right pid ns.**
+  `--mount-proc` remounts it. Dawn mounts `/proc` only after the
+  pivot. A house that inspects `/proc/self/fd` before that mount
+  would see nothing, or the outer ns; the suite never starts a house
+  that early.
+- **`/dev` already has the block nodes.** `dawn-real-boot` hands dawn
+  `/dev/loopN` created on the host. A real boot needs `devtmpfs`
+  before `mount(NW_ROOT)` so `/dev/vda` exists. Dawn does that; the
+  test cannot fail that path because the nodes pre-exist (ensure_mount
+  treats `EBUSY` as success).
+- **The binaries are dynamically linked and the test copies the
+  loader.** `dawn-real-boot` parses `ldd` and copies `.so` files into
+  the ext4. A missing interpreter is `ENOENT` on `execve` and looks
+  like a missing binary. The image-build script builds static to close
+  that; `make test` does not.
+- **stderr is already a pipe the suite reads.** A real boot's fd 2 is
+  the kernel console. Chunking, interleaving, and a stuck serial line
+  blocking a log pipe are invisible here.
+- **The kernel is already up, with the filesystems and LSMs the host
+  happened to load.** No virtio, no NLS module, no command-line-to-env
+  handoff, no dirty ext4 from the previous run. `dawn-real-boot`
+  substitutes ext4 for FAT when `/proc/filesystems` has no `vfat`;
+  that skip is named. The NLS gap (`VFAT=y` and `iso8859-1=m`) is
+  not, and only showed on a kernel boot.
+- **Houses in the default city are oneshot and finish inside the hold
+  window.** A long-run house, a missing exec path on the real disk,
+  and a second mount after an unclean shutdown are all off-camera.
+
+A test that needs one of those gifts must say so in the `ok` line or
+`skip`, the same way Landlock does. Do not add a mount, a namespace,
+or a copied library to make the test green without recording that the
+machine will not have it.
+
 ## Recorded gap: nothing tests scale
 
 Scale testing was judged the highest-value suite in this project and that
