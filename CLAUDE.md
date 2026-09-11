@@ -185,6 +185,54 @@ rule `proofs/` exists to enforce, and `HISTORY.md` §28 is why. Read
 bounded to a small number of units, and a bounded proof reported without its
 bound is a kind-1 statement that is not checkable.
 
+## Delivering work: the trunk is `main`, and a tarball is not a delivery
+
+**This applies to every agent working on this repository, whichever model
+you are.**
+
+1. **Pull before you start.** `git fetch origin && git log --oneline
+   origin/main -1`. Another agent may have landed since your last look.
+2. **Push when you finish.** Work that exists only in your sandbox does not
+   exist.
+3. **Deliver as commits on `main`.** Not as a tarball, not as a patch in a
+   message, not as a branch you leave unpushed.
+4. **State the commit you based on, in every report.** One line, the short
+   hash, at the top.
+
+This is a rule because it has already cost a divergence. On 2026-09-11
+there were three lines of work and no agreed trunk: `main` was at
+`1974a08`, ten commits sat on `claude/agent-setup-script-ax93ee`, and a
+full PID 1 stay-up pass — production reap loop, `RB_POWER_OFF` shutdown,
+the D18 budget fix, the shutdown-restart race, a `make qemu` target —
+existed only inside a tarball based on `d84da58`. `main` had none of it,
+the branch had half, the tarball had the other half, and **none of this
+was visible until someone cloned the repository and looked.** A tarball
+hides divergence in a way a branch does not: nothing about it shows up in
+`git log`, `git status`, or a fetch.
+
+Resolved by fast-forwarding `main` to the branch — no rebase, no squash,
+no force-push, deliberately, because the tarball names its base by hash
+and rewriting history would have stranded it.
+
+### Who owns which file
+
+Everything divides cleanly except one file:
+
+| workstream | owns |
+|---|---|
+| bricks | `bakery/nw-cc.py`, the mount path in `dawn.c`, `docs/options/08`, `docs/plans/01` |
+| lifecycle | `pid1.c`, the restart loop, shutdown, the boot glue |
+| plan/proofs | `nwcheck.c`, `blob.h`, `proofs/`, `plan.als`, `Plan.tla` |
+| harness | `tests/run.py`, `houses/`, `unit_probe.c` |
+
+**`nwsup.c` is touched by two workstreams — bricks and lifecycle — and
+needs a single owner.** It holds `lid_brick()` and the bind application,
+which is brick work, and the restart budget and death handling, which is
+lifecycle work. Without one owner the next collision happens inside a
+file instead of between branches, where a fast-forward cannot fix it.
+**Waiting on a prerequisite:** the prerequisite is a decision about which
+workstream owns it, and it is not made yet.
+
 ## Dispatching agents
 
 `sh install-agents.sh --list` prints this table; it is repeated here because
