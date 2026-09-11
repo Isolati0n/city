@@ -213,6 +213,17 @@ as a gap, and the fixture it lacked is `houses/orphan.c`.
   probe should consider healthy. That belongs to whoever owns `pid1.c`
   and the probe together.
 
+  **What this does and does not put in doubt.** Every ladder run to date
+  is unaffected in its *result*: the probe bakes only `unit-probe`,
+  oneshot, and `grep -c fork unit_probe.c` is 0, so no ladder city has
+  ever created an orphan and `orphans=0` there is true under both
+  readings. What is weaker than it looked is the *check* — it has never
+  distinguished the two meanings, because nothing it runs can produce an
+  orphan, so the probe's health rule is unvalidated for the one case
+  where the two readings diverge. That matters the moment the ladder is
+  pointed at a forking house, which is what bricks phase 2 (a loop
+  device per house) would do.
+
 ## Definition of done
 
 **`make stage`, not `make`** — then `python3 tests/run.py`. The suite
