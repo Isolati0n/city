@@ -5,8 +5,16 @@ THE RECORDED GAP. harness.md has said for as long as it has existed that
 nothing tests scale, that defects here have been correct at 4 units and
 wrong at 4,000, and that a large-N boot is the most valuable thing nobody
 has written. This is that, and it is a measurement harness rather than a
-suite test: it rebuilds the tree at a raised NW_MAX_UNITS, which is a
-four-place change (invariant 3) and far too slow for `make test`.
+suite test: it rebuilds the tree at a raised NW_MAX_UNITS. That rebuild
+is NOT why it stays out of `make test` -- measured, build_at() is well
+under a second and flat in N, and a whole rung at 64 units costs about
+one second. What is too slow is the large rungs' quadratic boot. (This
+said "a four-place change (invariant 3) and far too slow"; both halves
+were wrong -- limits are a two-place change since the specs' were
+generated, and `claims` timed the rebuild. The correction landed in
+.claude/rules/harness.md and not here, which is the
+survived-by-not-being-moved shape that file documents about itself.
+`control` read the two side by side.)
 
 What it does per size N:
 

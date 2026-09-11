@@ -167,6 +167,16 @@ FdNeedAgrees == FdNeed = Reserved + n + n
    exactly one there, and every weakening that drops the multiplier or
    Reserved still holds, so the two are separated.
 
+   THAT PINS THE BOUNDARY FROM BELOW ONLY, and a second probe pins it
+   from above. A must-fail run at T-1 excludes every weakening and admits
+   every STRENGTHENING: `control` got a green suite from
+   `... < MaxFds`, from `... + 1 <= MaxFds`, and from
+   `Reserved + 3 * n <= MaxFds`. The `<` matters rather than merely
+   erring safe -- blob.h writes `<=`, so a header sitting exactly on the
+   boundary would be accepted by C and rejected here with nothing
+   noticing. A must-HOLD run at T, where the budget covers the largest
+   legal city by exactly one, fixes the threshold to a single value.
+
    A second-way invariant was tried first and does NOT work -- recorded
    because it looks like the obvious fix and is not. `LargestCityFitsAgrees
    == LargestCityFits = (Reserved + MaxUnits + MaxUnits <= MaxFds)` is

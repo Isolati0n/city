@@ -3919,3 +3919,77 @@ Flagged loudly here as the narrow rule requires. It is not the
 boot-breaking case that rule was written for; it was done because the
 queue ordering put it first. One line plus its comment in
 `spawn_logger`, no other part of `pid1.c` touched. Grok reviews after.
+
+## 47. Round eight: a pin with only one side (2026-09-11)
+
+`control` against `600572a`, scoped to round seven's four changes. Two
+of the four came back clean — the probe-text ordering fix holds (`cmd_ix`
+is applied to `als_bare` and nothing else, the `limits.als` path carries
+no indices at all), and `scale-probe.py`'s reap message is sound, with
+`termed` bound on every path.
+
+### The derived constant pinned the boundary from below only
+
+Round seven fixed a probe that certified an invariant's *name* by
+deriving its constant — `Reserved + 2*MaxUnits - 1`, where the honest
+predicate misses by exactly one. That excludes every weakening. It also
+**admits every strengthening**, because the probe fixes `MaxFds` at
+`tight` and the honest run uses the real `NW_MAX_FDS`, so any threshold
+between the two passes both. `control` got a green suite from:
+
+```
+LargestCityFits == Reserved + 2 * MaxUnits < MaxFds
+LargestCityFits == Reserved + 2 * MaxUnits + 1 <= MaxFds
+FdBudgetCovers  == Reserved + 3 * n <= MaxFds
+```
+
+The last drops `FdNeed` entirely, so `FdNeedAgrees` stops constraining
+it. The first is the one that is wrong rather than merely safe:
+`Plan.tla` calls `FdBudgetCovers` "the same claim as the
+`_Static_assert` in `blob.h`", and **`blob.h` writes `<=`** — a header
+sitting exactly on the boundary would be accepted by C and rejected by
+TLC, with nothing noticing the disagreement.
+
+A second run at `tight + 1`, where the budget covers the largest legal
+city by exactly one and the honest predicate must **hold**, fixes the
+threshold to a single value. All three mutations now fail, each naming
+its own invariant. TLC is under a second, so the pair costs nothing.
+
+*The general shape, worth more than the fix: **a one-sided probe pins a
+predicate to a half-line, not a point.** Ask what the probe admits, not
+only what it excludes.*
+
+### "The first range" is only right when the definition comes first
+
+Round seven replaced a `sed` range with `awk` because a `sed` range
+restarts on a later opener. `control` planted the complementary case —
+the quotation **above** the real definition — and "first range" hijacked
+into the wrong brief's body and stopped at the wrong `NWEOF`:
+
+```
+install-agents: FAIL control.md has diverged from the heredoc ...
+```
+
+`control.md` untouched and byte-identical to its own heredoc, `make test`
+failing on it. The same false alarm the `awk` change was made for,
+entering from the other side.
+
+Worse, it can **disarm the check in silence**: with the quotation as the
+last line of a body the extraction comes back empty, and against an
+emptied brief empty compares equal — the check that exists to make
+reversion loud, staying quiet, while unrelated frontmatter checks fire.
+
+Fixed by not depending on which range is taken: require exactly one
+opener and fail by name when that is false. An ambiguous extraction is a
+fact about the script, and the old message sent the reader to sync a file
+that was fine.
+
+### And the correction that did not travel
+
+`tools/scale-probe.py`'s module docstring still said the rebuild is "a
+four-place change (invariant 3) and far too slow for `make test`". Both
+halves were retracted in §44 — limits became a two-place change when the
+specs' were generated, and `claims` timed the rebuild at well under a
+second — but the correction landed in `.claude/rules/harness.md` and not
+here. Sixth instance of survived-by-not-being-moved, in a file that
+documents that shape about itself. `control` read the two side by side.

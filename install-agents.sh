@@ -177,6 +177,29 @@ into plan.md/runtime.md; two owners for one file)"
         # `control` span two ranges and report an untouched file as
         # diverged. `control` planted exactly that. awk takes the FIRST
         # range and stops.
+        #
+        # WHICH IS ONLY RIGHT WHEN THE DEFINITION COMES FIRST. Planted the
+        # other way round -- the quotation ABOVE the real definition --
+        # "first range" hijacks to the wrong brief's body and stops at the
+        # wrong NWEOF, so an untouched file is reported as diverged again,
+        # from the other side, and `make test` fails on it. Put the
+        # quotation on the last line of a body and the extraction comes
+        # back EMPTY, which against an empty brief compares equal and
+        # disarms the check in silence -- the check that exists to make
+        # reversion loud, staying quiet. `control`, both.
+        #
+        # So do not depend on which range is taken. Require exactly one
+        # opener and say so by name when that is false: an ambiguous
+        # extraction is a fact about the script, not about the brief, and
+        # the old message sent the reader to sync a file that was fine.
+        k=$(grep -c "^put $n <<'NWEOF'\$" "$self" 2>/dev/null || echo 0)
+        if [ "$k" != 1 ]; then
+            fail "$n: the heredoc opener \`put $n <<'NWEOF'\` appears \
+$k times in install-agents.sh, so the extraction below is ambiguous. \
+This is a defect in the script or a brief quoting an opener at column 0 \
+-- it is NOT a divergence in $n.md."
+            continue
+        fi
         if ! awk -v tag="put $n <<'NWEOF'" \
                  'BEGIN{st=0} st==2{next} $0==tag&&st==0{st=1;next} \
                   st==1&&$0=="NWEOF"{st=2;next} st==1{print}' "$self" \

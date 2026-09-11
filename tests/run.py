@@ -2314,6 +2314,46 @@ def test_specs_are_checked():
                f"LargestCityFits to TRUE and the whole suite stayed "
                f"green.\n{vt[-1200:]}")
 
+    # PIN THE BOUNDARY FROM ABOVE TOO. The must-fail probes fix MaxFds at
+    # `tight` and the honest run uses the real NW_MAX_FDS, so ANY
+    # predicate whose threshold falls between the two passes both: every
+    # weakening is excluded (that was the point) and every STRENGTHENING
+    # is admitted. `control` got a green suite from
+    # `Reserved + 2 * MaxUnits < MaxFds`, from `... + 1 <= MaxFds`, and
+    # from `Reserved + 3 * n <= MaxFds` -- the last dropping FdNeed
+    # entirely, so FdNeedAgrees no longer constrains it.
+    #
+    # `<` for `<=` is the one that matters rather than merely erring
+    # safe: Plan.tla calls FdBudgetCovers "the same claim as the
+    # _Static_assert in blob.h", and blob.h writes `<=`. A header sitting
+    # exactly on the boundary would be accepted by C and rejected by TLC,
+    # and nothing noticed the disagreement.
+    #
+    # One more run at `tight + 1`, where the honest predicate holds by
+    # exactly one, pins the threshold to a single value from both sides.
+    # TLC is under a second.
+    for nm in ("FdBudgetCovers", "LargestCityFits"):
+        d = f"{lab}/musthold-tlc-{nm}"
+        os.makedirs(d, exist_ok=True)
+        ct = "\n".join(cfg_lines[:anchor[0] + 1]) + f"\n    {nm}\n"
+        ct, k = re.subn(r"^(\s*MaxFds = )\d+$", rf"\g<1>{tight + 1}", ct,
+                        flags=re.M)
+        expect(k == 1,
+               f"the {nm} must-hold probe rewrote {k} cfg constants named "
+               f"MaxFds, expected one.")
+        open(f"{d}/Plan.cfg", "w").write(ct)
+        shutil.copy(os.path.join(ROOT, "Plan.tla"), f"{d}/Plan.tla")
+        v = run(["java", "-cp", tla, "tlc2.TLC", "-config", "Plan.cfg",
+                 "Plan.tla"], cwd=d)
+        vt = v.out + v.err
+        expect("Model checking completed. No error has been found." in vt,
+               f"{nm} does NOT hold at MaxFds = {tight + 1}, where the "
+               f"budget covers the largest legal city by exactly one. "
+               f"Paired with the must-fail probe at {tight}, this pins "
+               f"the threshold to one value; alone, each admits every "
+               f"predicate on its own side of it. A `<` where blob.h "
+               f"writes `<=` lands here.\n{vt[-1200:]}")
+
     shutil.copy(os.path.join(ROOT, "plan.als"), f"{lab}/plan.als")
 
     # THE Int BITWIDTH IS THE ONE LIMIT STILL WRITTEN IN plan.als, so it
