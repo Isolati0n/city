@@ -81,8 +81,10 @@ The boundary that does matter here is not between files, it is **trust**:
 `test_specs_are_checked` in `tests/run.py` executes both inside
 `make test`. `TypeOK`, `FdBudgetCovers`, `FdNeedAgrees` and
 `LargestCityFits` are TLC invariants; `FdArithmetic` and `Sealed` are
-Alloy checks. **The two Alloy checks are shown failing on every run** —
-the suite breaks the thing each is about and requires a counterexample.
+Alloy checks. **Every Alloy check is shown failing on every run** — the
+suite breaks the thing each one is about and requires a counterexample.
+`Sealed` gets two probes, one per conjunct, because the bind half admits
+no counterexample at the scope the fd half fails at.
 The TLC invariants have no such probe: their controls were run by hand
 once and are recorded in `HISTORY.md` §39, which is weaker and is why
 this sentence separates them.
