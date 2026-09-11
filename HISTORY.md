@@ -3993,3 +3993,95 @@ specs' were generated, and `claims` timed the rebuild at well under a
 second — but the correction landed in `.claude/rules/harness.md` and not
 here. Sixth instance of survived-by-not-being-moved, in a file that
 documents that shape about itself. `control` read the two side by side.
+
+## 48. The orphan race, decided (2026-09-11)
+
+Second item of the reordered boot-chain queue, after the log drain.
+`sync()` stays landed and blocked on hardware.
+
+### The reaping works; the gap was that nothing ever made an orphan
+
+`houses/orphan.c` forks three children that outlive it and exits nonzero,
+so `nw-sup` restarts it and the next run orphans again. The children
+sleep first — a child that has already exited when its parent dies is
+reaped by the kernel through the parent and never reaches PID 1.
+
+```
+[nw-root] orphan pid=7 … pid=21          (twelve of them)
+[nw-root] closed houses_reaped=1 orphans=12
+```
+
+Twelve across four restart cycles, every one reaped, and **reaped
+promptly** — timestamped at 0.41s, which is exactly when the children
+exit, not at shutdown. The batch appearance in the log is twelve children
+forked inside 10ms all sleeping the same 400ms, not a queue draining
+late. No zombie accumulation, so nothing to fix in the reap loop.
+
+### The decision the known-open asked for
+
+Orphans still alive when shutdown begins are **neither reaped nor
+killed**. Measured at the boundary, three runs per rung:
+
+```
+child sleep 1400ms vs 1500ms hold:  orphans=12 orphans=12 orphans=12
+child sleep 1500ms vs 1500ms hold:  orphans=0  orphans=0  orphans=0
+child sleep 1600ms vs 1500ms hold:  orphans=0  orphans=0  orphans=0
+```
+
+A sharp cutoff, not a flaky race — which is worth knowing, because
+"undefined … letting the race pick" suggested nondeterminism and there is
+none.
+
+**Decided: do not wait.** Waiting on an orphan is unbounded by
+construction — nothing knows what a house forked or whether it will ever
+exit, so one stuck grandchild hangs the machine. That is the
+guessed-constant trap the Liveness refusal is about, arriving through the
+shutdown path. `reboot(RB_POWER_OFF)` ends them. Written into
+`.claude/rules/runtime.md` with its cost stated, so it is not
+rediscovered as a bug.
+
+### Three controls, and two of them found defects in the test
+
+- Orphan counter removed: `PID 1 reaped 0 orphans; the fixture left 12
+  behind`.
+- **Fixture forks nothing — and the first version of the test
+  misdiagnosed it**, saying "the fixture left 12 behind" for a fixture
+  that made none. The pairing counted `leaving 3 behind`, a line printed
+  whether or not the fork succeeded: an assertion on the *announcement*,
+  which is the shape `harness.md` warns about, written into a new test by
+  the person who had just re-read the warning. Now counts
+  `child=N pid=` lines, printed once per fork that returned a pid:
+  `the fixture reported 0 successful forks across 4 runs`.
+- **A blocking drain at shutdown — and the bound could not fail.** The
+  assertion was `wall < 2.0` against a 400ms child; a genuinely blocking
+  drain closed in 0.41s and passed. A test that cannot fail for its
+  stated property, in the suite that exists to catch those. Fixed with a
+  second binary, `unit-orphanslow`, whose children sleep 3s: the same
+  control now fails at 3.01s against 0.16s, an order of magnitude either
+  side of the bound.
+
+  Two binaries rather than one runtime knob, deliberately: a house is
+  exec'd with no arguments and a clean environment, so a knob would have
+  to be a channel.
+
+  The first attempt at this control was also wrong and passed for a third
+  reason — `reap_all(1)` only blocks on its *first* `waitpid`, because
+  the loop sets `WNOHANG` after one iteration. A control that does not
+  install the behaviour it names is not a control.
+
+### Known open, handed over rather than fixed
+
+`closed … orphans=N` reports orphans **reaped**, not orphans that
+existed: a city that orphaned twelve still-running processes closes with
+`orphans=0`. The counter is `orphans_reaped` internally and accurate; the
+label drops the verb. Not renamed here — `tests/run.py` and
+`tools/scale-probe.py` both key on the literal `orphans=0`, and the probe
+treats **any** orphan as a run failure, which is right for oneshot houses
+and wrong for houses that fork. Renaming means deciding what the probe
+should call healthy, and that belongs to whoever owns `pid1.c` and the
+probe together.
+
+### Ownership
+
+`pid1.c` was **not** modified. The fixture, the Makefile rules and the
+test are harness files; the decision is recorded in the territory rules.

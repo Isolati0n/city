@@ -1097,6 +1097,118 @@ def test_last_words_survive_group_term():
           "5 of 5 lines each, written as 5 separate write(2) calls)")
 
 
+def test_orphans_across_restarts():
+    """Orphan reaping, driven through a restart cycle for the first time.
+
+    PID 1 reaps with `waitpid(-1)` and calls anything that is neither a
+    known house nor a known logger an orphan. Until this test nothing in
+    the suite ever produced one: `test_happy` asserts `orphans=0`, which
+    is the happy path, so the counter and the branch that increments it
+    had never been exercised. `.claude/rules/runtime.md` carried that as
+    a known-open gap; this is its subject.
+
+    `unit-orphan` forks three children that outlive it and exits nonzero,
+    so `nw-sup` restarts it and the next run orphans again. The children
+    sleep first: a child that has already exited when its parent dies is
+    reaped by the kernel through the parent and never reaches PID 1.
+
+    TWO CASES, because the second is the one that was undefined.
+    """
+    orph = f"{BIN}/unit-orphan"
+    mark = "/tmp/nw-orphan.mark"
+    city = f"{WORK}/orphan.city"
+    open(city, "w").write(
+        f"house orph {orph} kind=longrun budget=3 lids=none\n")
+    blob = f"{WORK}/orphan.blob"
+    b = run(["python3", CC, "--city", city, "--out", blob])
+    expect(b.returncode == 0, f"bake\n{b.out}{b.err}")
+
+    # CASE A: the children die while the city is up. Every orphan is
+    # reaped, and the count is the one the fixture created -- 4 runs
+    # (budget=3 allows three restarts) x 3 children.
+    for f in (mark,):
+        try:
+            os.unlink(f)
+        except FileNotFoundError:
+            pass
+    rc, out = boot(plan=blob, hold=2500)
+    expect(city_closed(rc, out), f"orphan-A rc={rc}\n{out[-1500:]}")
+    # PAIRED, AND ON THE EFFECT. "orphans=12" is a claim about reaping
+    # only if the orphans were actually made. The first version of this
+    # counted "leaving 3 behind" -- a line the fixture prints whether or
+    # not the fork succeeded -- and `control` neutered the fork loop and
+    # watched this fail with "the fixture left 12 behind", naming a
+    # reaping defect for a fixture that made nothing. Assert on the
+    # effect, not the announcement: `child=N pid=` is printed once per
+    # fork that returned a pid.
+    runs = out.count("leaving")
+    forked = len(re.findall(r"\[orphan\] run=\d+ child=\d+ pid=\d+", out))
+    expect(runs == 4,
+           f"the fixture ran {runs} times, expected 4 (one start plus "
+           f"budget=3 restarts); the orphan count below would be about a "
+           f"different number of orphans\n{out[-1500:]}")
+    expect(forked == runs * 3,
+           f"the fixture reported {forked} successful forks across "
+           f"{runs} runs, expected {runs * 3}. Nothing below is about "
+           f"reaping until the orphans exist.\n{out[-1500:]}")
+    m = re.search(r"orphans=(\d+)", out)
+    expect(m and int(m.group(1)) == forked,
+           f"PID 1 reaped {m.group(1) if m else '?'} orphans; the fixture "
+           f"left {forked} behind. An unreaped orphan is a zombie held "
+           f"for the life of the machine, and at scale that is pids.\n"
+           f"{out[-1500:]}")
+
+    # CASE B: the children are still alive when shutdown starts. PID 1
+    # does NOT wait for them -- shutdown is bounded by the grace period,
+    # and waiting on an orphan is unbounded by construction. They die
+    # with the machine at reboot.
+    #
+    # This behaviour was "undefined -- decide it explicitly rather than
+    # letting the race pick" in runtime.md. It is decided here, and the
+    # decision is *do not wait*: the alternative is a shutdown a stuck
+    # orphan can hang forever, which is the class this project refuses.
+    #
+    # Measured at the boundary, three runs per rung: children dying
+    # before the hold expires give 12 every time, children dying at or
+    # after it give 0 every time. A sharp cutoff, not a flaky race.
+    # A SLOWER CHILD, so "did shutdown wait?" is separable by a margin
+    # no scheduler noise can close. With the 400ms child above, a
+    # genuinely blocking drain closed in 0.41s against 0.16s for the
+    # correct code -- `control` installed one and this assertion, bounded
+    # at 2s, passed. A test that cannot fail for its stated property is
+    # the thing this suite exists to catch, found in this suite.
+    slow_city = f"{WORK}/orphanslow.city"
+    open(slow_city, "w").write(
+        f"house orph {BIN}/unit-orphanslow kind=longrun budget=3 lids=none\n")
+    slow_blob = f"{WORK}/orphanslow.blob"
+    b = run(["python3", CC, "--city", slow_city, "--out", slow_blob])
+    expect(b.returncode == 0, f"bake slow\n{b.out}{b.err}")
+    for f in (mark,):
+        try:
+            os.unlink(f)
+        except FileNotFoundError:
+            pass
+    t0 = time.time()
+    rc, out = boot(plan=slow_blob, hold=150)
+    wall = time.time() - t0
+    expect(city_closed(rc, out), f"orphan-B rc={rc}\n{out[-1500:]}")
+    expect("leaving 3 behind" in out,
+           f"the fixture never forked, so nothing below is about "
+           f"orphans\n{out[-1500:]}")
+    # The property is that shutdown did not WAIT. The children sleep 3s
+    # and the hold is 150ms, so a shutdown that waits cannot finish
+    # before ~3s while one that does not closes in ~0.2s. The bound sits
+    # an order of magnitude from both.
+    expect(wall < 1.5,
+           f"shutdown took {wall:.2f}s with orphans still alive. "
+           f"Shutdown is bounded by the grace period; waiting on an "
+           f"orphan is unbounded and a stuck one would hang the "
+           f"machine.\n{out[-1500:]}")
+    print(f"ok orphans-across-restarts ({forked} reaped across {runs} "
+          f"runs; and shutdown does not wait for orphans still alive, "
+          f"closing in {wall:.2f}s)")
+
+
 def test_crash_does_not_halt():
     """Nothing a house does halts the city. A house that crashes past its
     budget stays dead; the city carries on and shuts down normally."""
@@ -3199,6 +3311,7 @@ def main():
         test_baker_rejects, test_fuzz_checker, test_happy, test_slot_b,
         test_rescue, test_halt_spawner, test_bad_crc,
         test_last_words_survive_group_term,
+        test_orphans_across_restarts,
         test_crash_does_not_halt, test_budget_is_hard_total,
         test_shutdown_does_not_restart, test_term_signal, test_dawn_real_boot,
         test_kind_required, test_kind_exit0, test_seccomp_kills,

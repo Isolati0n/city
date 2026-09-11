@@ -170,14 +170,48 @@ missing one.
 fails validation at boot, or PID 1 dies. The `critical` flag was removed
 rather than repaired — `HISTORY.md` §19.
 
+## Orphans at shutdown — decided 2026-09-11
+
+**PID 1 does not wait for orphans at shutdown. They die with the machine
+at `reboot`.** This was "undefined — decide it explicitly rather than
+letting the race pick", and this is the decision.
+
+*Why not wait:* waiting on an orphan is unbounded by construction.
+Nothing knows what a house forked or whether it will ever exit, so a
+single stuck grandchild would hang the machine — which is the same
+guessed-constant trap the Liveness section refuses, arriving through the
+shutdown path instead. Shutdown stays bounded by the grace period.
+
+*What this costs, stated so nobody rediscovers it as a bug:* an orphan
+alive when shutdown begins is never reaped and never killed. On real
+hardware `reboot(RB_POWER_OFF)` ends it. In a pid namespace the
+namespace teardown does.
+
+Measured at the boundary, three runs per rung, children dying either side
+of the hold: before it, every orphan is reaped; at or after it, none are.
+A sharp cutoff, not a flaky race. `test_orphans_across_restarts` pins
+both halves — twelve orphans reaped across four restart cycles, and a
+shutdown that closes in ~0.2s while 3-second children are still alive. A
+blocking drain in `shutdown_city` turns the second half red at 3.01s.
+
+**Reaping across restarts is no longer untested** — that entry was here
+as a gap, and the fixture it lacked is `houses/orphan.c`.
+
 ## Known open in this territory
 
-- `SIGCHLD` behaviour during shutdown is undefined. Decide it explicitly
-  rather than letting the race pick.
-- **Orphan reaping across restarts is untested.** The reap loop counts
-  orphans and `happy` asserts `orphans=0`, which is the happy path only.
-  Nothing drives orphans through a restart cycle. A gap to fill, not a result
-  to cite.
+- **`closed … orphans=N` reports orphans REAPED, not orphans that
+  existed.** A city that orphaned twelve processes which are still alive
+  at shutdown closes with `orphans=0`. Internally the counter is
+  `orphans_reaped` and is accurate; the label drops the verb, and an
+  operator reads the line as "there were none".
+
+  Not changed here, because it is not a one-word fix: `tests/run.py` and
+  `tools/scale-probe.py` both key on the literal `orphans=0`, and the
+  scale probe treats **any** orphan as a run failure — which is a
+  reasonable health rule for a city of oneshot houses and wrong for a
+  city whose houses fork. Renaming the field means deciding what the
+  probe should consider healthy. That belongs to whoever owns `pid1.c`
+  and the probe together.
 
 ## Definition of done
 

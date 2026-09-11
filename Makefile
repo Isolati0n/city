@@ -13,7 +13,7 @@ CFLAGS = -Wall -Wextra -O2 -g -std=gnu11 -ffile-prefix-map=$(CURDIR)=.
 # the stage a parallel run is using.
 STAGE ?= /tmp/nw-init-run
 
-all: nw-dawn nw-root nw-spawn nw-check nw-sup nw-rescue unit-probe unit-boom unit-badcall unit-term unit-brick unit-slowdie unit-dieterm unit-lastwords
+all: nw-dawn nw-root nw-spawn nw-check nw-sup nw-rescue unit-probe unit-boom unit-badcall unit-term unit-brick unit-slowdie unit-dieterm unit-lastwords unit-orphan unit-orphanslow
 
 nw-dawn: dawn.c
 	$(CC) $(CFLAGS) -o $@ dawn.c
@@ -63,13 +63,24 @@ unit-dieterm: houses/dieterm.c
 unit-lastwords: houses/lastwords.c
 	$(CC) $(CFLAGS) -o $@ houses/lastwords.c
 
+unit-orphan: houses/orphan.c
+	$(CC) $(CFLAGS) -o $@ houses/orphan.c
+
+# Same source, a child that outlives any hold the suite uses. Two
+# binaries rather than one configurable at runtime: a house is exec'd
+# with no arguments and a clean environment, so a knob would have to be
+# a channel, and the whole point of the slow variant is to make "did
+# shutdown WAIT?" separable by a margin no scheduler noise can close.
+unit-orphanslow: houses/orphan.c
+	$(CC) $(CFLAGS) -DORPHAN_SLEEP_MS=3000 -o $@ houses/orphan.c
+
 stage: all
 	rm -rf $(STAGE)
 	mkdir -p $(STAGE)/nw/bin $(STAGE)/nw/bricks $(STAGE)/nw/stores
 	mkdir -p $(STAGE)/efi/slots/A $(STAGE)/efi/slots/B $(STAGE)/work
 	cp -f nw-dawn nw-root nw-spawn nw-check nw-sup nw-rescue \
 	      unit-probe unit-boom unit-badcall unit-term unit-brick unit-slowdie unit-dieterm \
-	      unit-lastwords $(STAGE)/nw/bin/
+	      unit-lastwords unit-orphan unit-orphanslow $(STAGE)/nw/bin/
 	chmod +x $(STAGE)/nw/bin/*
 	# The sources the staged binaries were built from, staged with them.
 	# tests/run.py's hash probe compiles nwcheck.c to ask which slot a name
