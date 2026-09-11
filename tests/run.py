@@ -296,15 +296,28 @@ def test_difftest():
     expect(os.path.exists(os.path.join(srcdir, "nwcheck.c")),
            f"{srcdir}/nwcheck.c is missing -- run make stage")
     csrc = f"{WORK}/crcdiff.c"
+    # TWO buffers, separately allocated and deliberately misaligned. One
+    # contiguous buffer means `p = b` and `p = (const unsigned char *)a + na`
+    # are indistinguishable: that mutant -- which ignores the second region
+    # entirely -- agreed with zlib at every length and every cut point.
+    # nw_check's real call passes a 20-byte STACK tmp_hdr and the blob body,
+    # which are not adjacent, so the contiguous version was not testing the
+    # shape the TCB actually uses. Found by `control`.
     open(csrc, "w").write(
         '#include "nwcheck.c"\n#include <stdio.h>\n#include <stdlib.h>\n'
+        'static unsigned char ra[4200], rb[4200];\n'
         'int main(int argc, char **argv)\n{\n'
-        '    static unsigned char buf[4096];\n'
         '    int n = atoi(argv[1]);\n'
-        '    for (int i = 0; i < n; i++) buf[i] = (unsigned char)(i * 37 + 11);\n'
-        '    for (int cut = 0; cut <= n; cut++)\n'
-        '        printf("%u\\n", nw_crc32_split(buf, (uint32_t)cut,\n'
-        '                                      buf + cut, (uint32_t)(n - cut)));\n'
+        '    unsigned char *A = ra + 1, *B = rb + 8;   /* different '
+        'alignments, different objects */\n'
+        '    for (int cut = 0; cut <= n; cut++) {\n'
+        '        for (int i = 0; i < cut; i++)\n'
+        '            A[i] = (unsigned char)(i * 37 + 11);\n'
+        '        for (int i = 0; i < n - cut; i++)\n'
+        '            B[i] = (unsigned char)((cut + i) * 37 + 11);\n'
+        '        printf("%u\\n", nw_crc32_split(A, (uint32_t)cut,\n'
+        '                                      B, (uint32_t)(n - cut)));\n'
+        '    }\n'
         '    (void)argc;\n    return 0;\n}\n')
     cexe = f"{WORK}/crcdiff"
     c = run(["gcc"] + PROBE_CFLAGS + [f"-I{srcdir}", "-o", cexe, csrc])
@@ -322,10 +335,31 @@ def test_difftest():
                if got != want and len(got) == len(want) else
                f"nw_crc32_split produced {len(got)} answers for {n + 1} "
                f"cut points" if len(got) != len(want) else "")
-    # The NULL second region, which is the only caller shape nw_crc32 used
-    # to serve and is now reachable only this way.
-    p = run([cexe, "0"])
-    expect(p.out.split() == ["0"], f"crc of nothing must be zlib's 0\n{p.out}")
+    # The NULL second region, passed as a literal NULL. This said it was
+    # testing NULL while passing `buf + 0`, so adding `if (!p) return 0;`
+    # before the second loop left it green -- an assertion naming a case it
+    # did not exercise. Found by `control`.
+    nsrc = f"{WORK}/crcnull.c"
+    open(nsrc, "w").write(
+        '#include "nwcheck.c"\n#include <stdio.h>\n'
+        'int main(void)\n{\n'
+        '    static unsigned char b[64];\n'
+        '    for (int i = 0; i < 64; i++) b[i] = (unsigned char)(i * 7 + 3);\n'
+        '    printf("%u %u %u\\n",\n'
+        '           nw_crc32_split(b, 64, (void *)0, 0),\n'
+        '           nw_crc32_split((void *)0, 0, b, 64),\n'
+        '           nw_crc32_split((void *)0, 0, (void *)0, 0));\n'
+        '    return 0;\n}\n')
+    nexe = f"{WORK}/crcnull"
+    c = run(["gcc"] + PROBE_CFLAGS + [f"-I{srcdir}", "-o", nexe, nsrc])
+    expect(c.returncode == 0, f"crc NULL probe build\n{c.out}{c.err}")
+    p = run([nexe])
+    expect(p.returncode == 0, f"crc NULL probe\n{p.out}{p.err}")
+    body = bytes(((i * 7 + 3) & 0xFF) for i in range(64))
+    want = zlib.crc32(body) & 0xFFFFFFFF
+    expect([int(x) for x in p.out.split()] == [want, want, 0],
+           f"a NULL region of length 0 must contribute nothing: got "
+           f"{p.out.strip()!r}, expected {want} {want} 0")
 
     r = run([f"{BIN}/nw-check", f"{SLOTS}/A/plan.blob"])
     expect(r.returncode == 0, "difftest good")
@@ -1027,15 +1061,23 @@ def test_dupname_refused():
     # Find a colliding pair by asking the C hash directly, in one batch.
     cand = [f"c{i:05d}" for i in range(256)]
     slots = c_name_slots(cand)
-    first, pair = {}, None
-    for nm, s in zip(cand, slots):
-        if s in first:
-            pair = (first[s], nm, s)
-            break
-        first[s] = nm
-    expect(pair is not None,
-           f"no collision among {len(cand)} names in "
-           f"{blob_h('NW_DUP_SLOTS')} slots -- widen the candidate set")
+    # A cluster of THREE on one slot, not two. A 2-long cluster pins probe
+    # depth 2 and nothing further: `for (p = 0; p < 2; p++)` left the whole
+    # suite green while a name displaced by two was accepted as a
+    # duplicate-free plan. With NW_MAX_UNITS names in NW_DUP_SLOTS slots a
+    # 3-deep cluster is ordinary, not contrived -- `control` found one
+    # among the first 256 candidates. The duplicate is planted on the LAST
+    # of the three, so detecting it has to walk past both others.
+    from collections import defaultdict
+    by_slot = defaultdict(list)
+    for nm, sl in zip(cand, slots):
+        by_slot[sl].append(nm)
+    trio = next((v for v in by_slot.values() if len(v) >= 3), None)
+    expect(trio is not None,
+           f"no three of {len(cand)} names share a slot -- widen the "
+           f"candidate set; the probe-depth case needs a 3-deep cluster")
+    first, pair = {}, (trio[0], trio[2], slots[cand.index(trio[0])])
+    _unused = first
     a, bb, slot = pair
 
     # The pairing for the probe, and it is the assertion this test was
@@ -1051,9 +1093,9 @@ def test_dupname_refused():
            f"names -- it is not reading name_dup's table, and the "
            f"collision case below is not a collision")
     expect(a != bb, "the colliding pair must be two different names")
-    expect(slots.count(slot) >= 2,
-           f"{a} and {bb} are supposed to share slot {slot}, but only "
-           f"{slots.count(slot)} name lands there")
+    expect(slots.count(slot) >= 3,
+           f"{a} and {bb} are supposed to share slot {slot} with a third "
+           f"name between them, but only {slots.count(slot)} land there")
 
     cases = []
     d = bytearray(base)
@@ -1063,12 +1105,12 @@ def test_dupname_refused():
     # a and bb hash to the same slot. Inserted first, a takes it and bb is
     # displaced to the next one; the copy of bb at the end must probe past a.
     d = bytearray(base)
-    put(d, 0, a)
-    put(d, 1, bb)
-    put(d, n - 1, bb)
+    for j, nm in enumerate(trio):
+        put(d, j, nm)
+    put(d, n - 1, trio[2])
     cases.append((seal(d, "collision"), "collision",
-                  f"{a} and {bb} both hash to slot {slot}; "
-                  f"the duplicate of {bb} must probe past {a}"))
+                  f"{trio} all hash to slot {slot}; the duplicate of "
+                  f"{trio[2]} must probe past the other two"))
 
     for path, why, what in cases:
         r = run([f"{BIN}/nw-check", path])
@@ -1093,16 +1135,64 @@ def test_dupname_refused():
     # also the only assertion here that says the table tolerates a collision
     # rather than merely detecting through one.
     d = bytearray(base)
-    put(d, 0, a)
-    put(d, 1, bb)
+    for j, nm in enumerate(trio):
+        put(d, j, nm)
     okpath = seal(d, "collide-distinct")
     r = run([f"{BIN}/nw-check", okpath])
     expect(r.returncode == 0,
-           f"nw-check rejected {a} and {bb}, which collide on slot {slot} "
+           f"nw-check rejected {trio}, which collide on slot {slot} "
            f"but are different names\n{r.out}{r.err}")
 
-    print(f"ok dupname-refused (plain, a real collision on slot {slot}, "
-          f"and the distinct pair accepted)")
+    # And the comparison must read the whole field, not a prefix. Every
+    # name above is short, so `for (n = 0; n < 8; n++)` in name_dup left
+    # the suite green while the TCB refused a legal city -- two distinct
+    # names that share their first eight bytes were called duplicates.
+    # Bug 12's class: a scan shorter than the field it validates.
+    #
+    # The pair must also COLLIDE, or name_dup never compares them at all --
+    # it only compares against an occupied slot. A non-colliding pair made
+    # this assertion pass against the truncated comparison, which is the
+    # same "the code under test never ran" shape one more time.
+    pre = "application-"
+    stem = pre + "0" * (NAME - 1 - len(pre) - 4)
+    longs = [stem + f"{i:04d}" for i in range(512)]
+    lslots = c_name_slots(longs)
+    lby = defaultdict(list)
+    for nm, sl in zip(longs, lslots):
+        lby[sl].append(nm)
+    def firstdiff(x, y):
+        return next((i for i in range(len(x)) if x[i] != y[i]), len(x))
+
+    # Among the colliding pairs, the one that differs LATEST: the test can
+    # only catch a comparison truncated at or before that index, so pushing
+    # it as far right as the candidate set allows is free strength. The
+    # residual is honest -- a comparison truncated between that index and
+    # NW_NAME_LEN still passes, and the proof is what covers the rest.
+    lcands = [(firstdiff(v[i], v[j]), v[i], v[j])
+              for v in lby.values() if len(v) >= 2
+              for i in range(len(v)) for j in range(i + 1, len(v))]
+    expect(lcands,
+           f"no two of {len(longs)} full-width names share a slot -- widen "
+           f"the candidate set; the comparison-length case needs a "
+           f"colliding pair that is long and shares a prefix")
+    fd, long_a, long_b = max(lcands)
+    expect(len(long_a) == NAME - 1 and long_a[:8] == long_b[:8]
+           and long_a != long_b,
+           f"the long-name pair must fill the field, share a prefix and "
+           f"differ: {long_a!r} {long_b!r}")
+    d = bytearray(base)
+    put(d, 0, long_a)
+    put(d, 1, long_b)
+    longpath = seal(d, "long-prefix")
+    r = run([f"{BIN}/nw-check", longpath])
+    expect(r.returncode == 0,
+           f"nw-check called {long_a} and {long_b} duplicates: they "
+           f"collide, and first differ at byte {fd} of {NAME}, so the "
+           f"comparison is not reading that far\n{r.out}{r.err}")
+
+    print(f"ok dupname-refused (plain, a 3-deep cluster on slot {slot}, "
+          f"the distinct trio accepted, and a colliding pair differing at "
+          f"byte {fd})")
 
 
 def test_checker_rejects_crafted_fields():
@@ -1127,23 +1217,45 @@ def test_checker_rejects_crafted_fields():
     city = f"{WORK}/crafted.city"
     brick = f"{STAGE}/nw/bricks/deadbeef"
     good = f"{WORK}/crafted-ok.blob"
-    open(city, "w").write(
-        f"house solo /bin/true kind=oneshot lids=newns,seccomp "
-        f"brick={brick}\n")
+    # THREE units, and every case below is crafted on the LAST one. A
+    # one-unit blob pins each check for u[0] only: changing `u[i].kind` to
+    # `u[0].kind` and `u[i].lids` to `u[0].lids` left the whole suite green
+    # -- and the caller proof too, which runs at one unit -- while the same
+    # byte on any later unit validated. `control` measured it: unit 0
+    # kind=255 rejected, unit 1 kind=255 `OK units=2`. A loop whose body is
+    # only ever exercised at index 0 is not a loop as far as the test is
+    # concerned.
+    NUNITS = 3
+    VICTIM = NUNITS - 1
+    open(city, "w").write("".join(
+        f"house c{i:02d} /bin/true kind=oneshot lids=newns,seccomp "
+        f"brick={brick}\n" for i in range(NUNITS)))
     p = run(["python3", CC, "--city", city, "--out", good])
     expect(p.returncode == 0, f"bake\n{p.out}{p.err}")
     base = bytearray(open(good, "rb").read())
+    USZ = NAME + PATH + BRICK + 6
+    KIND_OFF += VICTIM * USZ
+    LIDS_OFF += VICTIM * USZ
+    expect(len(base) == HDR + NUNITS * USZ,
+           f"layout: {len(base)} bytes for {NUNITS} units of {USZ}")
     expect(base[KIND_OFF] == 0 and base[LIDS_OFF] == (1 | 4),
-           f"kind/lids are not where the layout says: "
+           f"kind/lids are not where the layout says for unit {VICTIM}: "
            f"{base[KIND_OFF]} {base[LIDS_OFF]}")
 
     def craft(why, edits):
         d = bytearray(base)
         if why.startswith("dirtyblank"):
-            # Clear the brick and the lid that requires one, so the only
-            # thing wrong with this blob is the dirty padding.
-            d[HDR + NAME + PATH:HDR + NAME + PATH + BRICK] = b"\x00" * BRICK
-            d[LIDS_OFF] = 1
+            # Clear EVERY unit's brick and the lid that requires one, so the
+            # only thing wrong with this blob is the victim's dirty padding.
+            # Clearing only the victim's left `u[0].brick[k]` in place of
+            # `u[i].brick[k]` passing: unit 0 still had a brick, so the
+            # wrong index rejected anyway and the test could not tell the
+            # difference. A rejection for the right reason by accident is
+            # the thing a control is for.
+            for k in range(NUNITS):
+                bo = HDR + k * USZ + NAME + PATH
+                d[bo:bo + BRICK] = b"\x00" * BRICK
+                d[HDR + k * USZ + NAME + PATH + BRICK + 4] = 1
         for off, val in edits:
             d[off] = val
         d[16:20] = b"\x00\x00\x00\x00"
@@ -1160,7 +1272,7 @@ def test_checker_rejects_crafted_fields():
     # blob is rebuilt either way -- and it is the difference between pinning
     # a closed set and pinning one member of it.
     LEGAL_LIDS = 1 | 2 | 4 | 8          # seccomp landlock newns newnet
-    BRICK_OFF = HDR + NAME + PATH
+    BRICK_OFF = HDR + VICTIM * USZ + NAME + PATH
     cases = [
         # A blank brick must be zero to the field width. Deleting that check
         # left the suite, the coverage floor AND the caller proof green --
@@ -1188,7 +1300,7 @@ def test_checker_rejects_crafted_fields():
         # restricts nothing when the root is the machine's. Clear the brick
         # and ask for the lid: NW_E_LLBRICK, not a house confined to /.
         ("llbrick",
-         [(HDR + NAME + PATH + k, 0) for k in range(BRICK)]
+         [(BRICK_OFF + k, 0) for k in range(BRICK)]
          + [(LIDS_OFF, 1 | 2)], "landlock without brick",
          "landlock on a house with no brick"),
     ]
@@ -1221,8 +1333,8 @@ def test_checker_rejects_crafted_fields():
                f"nw-check rejected a legal plan ({why}): the closed set in "
                f"the TCB is narrower than the one the baker emits"
                f"\n{r.out}{r.err}")
-    print("ok checker-rejects-crafted (every illegal kind and lid bit "
-          "refused, every legal one accepted)")
+    print(f"ok checker-rejects-crafted (every illegal kind and lid bit "
+          f"refused on unit {VICTIM} of {NUNITS}, every legal one accepted)")
 
 
 def test_blob_size_ceiling():
@@ -1283,13 +1395,15 @@ def test_blob_size_ceiling():
     r = run([f"{BIN}/nw-check", over])
     expect(r.returncode != 0 and "blob size" in (r.out + r.err),
            f"nw-check accepted a blob one byte over the ceiling"
-           f"\\n{r.out}{r.err}")
+           f"\n{r.out}{r.err}")
     p = run([f"{BIN}/nw-spawn", over, "9", "1", "9"],
             env={**os.environ, "NW_SUP": "/bin/true"})
     expect(p.returncode != 0 and "blob size" in (p.out + p.err),
-           f"nw-spawn's recheck accepted a maximal blob with bytes appended "
-           f"-- a truncated read that lands exactly on a legal length"
-           f"\\n{p.out}{p.err}")
+           f"nw-spawn did not refuse a maximal blob with bytes appended for "
+           f"its SIZE -- a truncated read that lands exactly on a legal "
+           f"length passes the recheck, and any other rejection reason here "
+           f"means it got past the size guard"
+           f"\n{p.out}{p.err}")
 
     # The truncation window: 2^32 compares as 0 through a uint32_t cast.
     huge = f"{WORK}/huge.blob"
@@ -1298,10 +1412,10 @@ def test_blob_size_ceiling():
     r = run([f"{BIN}/nw-check", huge])
     expect(r.returncode == 1 and "blob size" in (r.out + r.err),
            f"a 4 GiB file must be refused for its size, not crash: "
-           f"exit {r.returncode}\\n{r.out}{r.err}")
+           f"exit {r.returncode}\n{r.out}{r.err}")
     rc, out = boot(plan=huge, hold=400)
     expect("HALT: plan size" in out,
-           f"PID 1 must halt on plan size, not die: rc={rc}\\n{out[-800:]}")
+           f"PID 1 must halt on plan size, not die: rc={rc}\n{out[-800:]}")
     os.unlink(huge)
 
     print(f"ok blob-size-ceiling ({biggest} bytes: accepted, +1 refused, "
@@ -1408,11 +1522,19 @@ def test_harness_runs_fresh_binaries():
     of the NW_STAGE plumbing removed. Both halves are a conjunction and
     neither was pinned. This pins the property they exist for, without
     caring how it is achieved."""
+    # Every staged binary, not a hand-written list. The list omitted
+    # unit-badcall, unit-boom and unit-term -- the fixtures that carry the
+    # absence assertions -- so editing houses/badcall.c to drop its
+    # socket() call and running `make` without `stage` left seccomp-kill
+    # green against a fixture that was not the one just built. That is the
+    # exact trap this test exists for, on the binaries where it matters
+    # most. Found by `control`.
+    staged_names = sorted(os.listdir(BIN))
+    expect(len(staged_names) >= 8, f"only {len(staged_names)} staged binaries")
     stale = []
-    for b in ("nw-root", "nw-spawn", "nw-sup", "nw-check", "nw-dawn",
-              "unit-probe", "unit-brick"):
+    for b in staged_names:
         src, staged = os.path.join(ROOT, b), f"{BIN}/{b}"
-        expect(os.path.exists(staged), f"{b} was never staged")
+        expect(os.path.exists(src), f"{b} is staged but not in the tree")
         if open(src, "rb").read() != open(staged, "rb").read():
             stale.append(b)
     expect(not stale,
@@ -1430,9 +1552,17 @@ def test_harness_runs_fresh_binaries():
     # mtime, not content: there is no build output to compare against, and
     # the question is "was this edited after the build", which is what mtime
     # answers.
-    newest = max((os.path.getmtime(os.path.join(ROOT, f)),
-                  f) for f in os.listdir(ROOT)
-                 if f.endswith((".c", ".h")))
+    # Walk, do not list: os.listdir(ROOT) does not see houses/*.c, which
+    # is where the fixtures live.
+    srcs = []
+    for d, _, files in os.walk(ROOT):
+        if os.path.basename(d) in (".git", ".reviews", "coverage"):
+            continue
+        srcs += [os.path.join(d, f) for f in files
+                 if f.endswith((".c", ".h"))]
+    expect(srcs, "no sources found under ROOT")
+    newest = max((os.path.getmtime(f), os.path.relpath(f, ROOT))
+                 for f in srcs)
     oldest = min((os.path.getmtime(f"{BIN}/{b}"), b)
                  for b in ("nw-root", "nw-check", "nw-sup"))
     expect(newest[0] <= oldest[0],

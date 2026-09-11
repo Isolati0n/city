@@ -2519,3 +2519,70 @@ passes because the assertion was never reached, a coverage number that
 counts a line whose branch never fired, a bound that names a loop which no
 longer exists. The defence is the same in all four cases and it is not
 review: it is removing the mechanism and watching the artifact go red.
+
+## 34. Everything was pinned at N=1 (2026-09-11)
+
+`control`'s second pass confirmed the three fixes from §30 and then found
+five more, and every one is the same shape: **the tests and the proofs were
+pinned at one unit, or at a two-deep collision, so index and bound bugs
+walked straight through.**
+
+| mechanism removed | before | now |
+|---|---|---|
+| `u[i].kind` / `u[i].lids` → `u[0]` | suite green **and** caller proof green | both fail |
+| `u[i].brick[k]` → `u[0]` | rejected by accident | fails |
+| probe chain → `p < 2` | suite green | fails |
+| name comparison → `n < 8`, `16`, `24` | suite green | all fail |
+| edit `houses/badcall.c`, `make` without `stage` | `seccomp-kill` green against a stale fixture | fails |
+| CRC `p = b` → `p = (const unsigned char *)a + na` | difftest green at every length and every cut | fails |
+| a wrong answer for a NULL region | green — the test never passed NULL | fails |
+
+The index one is worth spelling out. `test_checker_rejects_crafted_fields`
+baked a **one-unit** city, and `caller_nw_check.c` ran at `PROOF_UNITS=1`.
+So `u[0]` in place of `u[i]` was invisible to both layers at once: unit 0
+with `kind=255` rejected, the identical byte on unit 1 gave
+`OK units=2 binds=0`. A loop whose body is only ever exercised at index 0
+is not a loop as far as the test is concerned, and neither artifact could
+see it because they had the same blind spot. Three units in the suite, two
+in the proof, and both now fail.
+
+The CRC one is subtler and is the better lesson: `test_difftest` drove
+`nw_crc32_split(buf, cut, buf + cut, n - cut)` — **one contiguous buffer**
+— so "start the second region at `b`" and "start it at `a + na`" are the
+same program. The mutant that ignores `b` entirely agreed with zlib at
+every length and every cut point. The real caller passes a 20-byte *stack*
+`tmp_hdr` and the blob body, which are not adjacent, so the test was not
+exercising the shape the TCB uses. Two separately allocated buffers at
+different alignments, and it fails.
+
+Three smaller ones in the same pass:
+
+- **`harness-runs-fresh-binaries` had a hand-written binary list** that
+  omitted `unit-badcall`, `unit-boom` and `unit-term` — the fixtures that
+  carry the absence assertions — and its mtime scan used
+  `os.listdir(ROOT)`, which does not see `houses/`. Editing a fixture and
+  running `make` without `stage` left `seccomp-kill` green against a
+  binary that was not the one just built: the exact trap that test exists
+  for, on the binaries where it matters most. It walks now.
+- **`make proof` ran `name_dup` at two units** — the one N the harness's
+  own docstring says cannot exercise the probe chain. Truncating the chain
+  to a single slot left the proof SUCCESSFUL at 2 and fails it at 3. That
+  is the second time in this session a comment described a gap and nothing
+  closed it. Default is 3.
+- **The test that claimed to exercise a NULL second region passed
+  `buf + 0`.** Adding `if (!p) return 0;` before the second loop left it
+  green. It passes a literal `NULL` now, in both positions and both.
+
+### One that was not a defect, recorded because I nearly "fixed" it
+
+Truncating the name comparison to `n < 31` leaves both the suite and the
+proof green, and that is **correct**: `name_ok` forces the last byte of the
+field to zero, so byte 31 cannot distinguish two accepted names. I had
+assumed the proof covered a residual the suite could not reach, and the
+residual turned out not to exist. Worth writing down because the reflex —
+see a surviving mutant, strengthen the test — would have added an assertion
+that no valid input can ever exercise.
+
+The suite pins the comparison out to the byte where its colliding pair
+first differs, chosen as late as the candidate set allows and printed in
+the `ok` line so the bound is visible rather than assumed.

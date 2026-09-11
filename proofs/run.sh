@@ -157,7 +157,15 @@ NAME_LEN=$(blob_h blob.h NW_NAME_LEN)
 
 LEAF_PATH_UNW="--unwind 200"
 LEAF_NAME_UNW="--unwind 200"
-DUP_UNITS=${PROOF_UNITS:-2}
+# Three, not two. leaf_name_dup.c's own docstring says the probe chain is
+# never needed at two units -- equal names have equal hashes, so a
+# duplicate's match is always in the slot it hashes to -- and the default
+# was two, so `make proof` ran the one N the harness says cannot exercise
+# the case it exists for. Truncating the chain to a single slot left the
+# proof SUCCESSFUL at 2 and fails it at 3. Found by `control`, which is
+# the second time a comment in this tree described a gap that nothing then
+# closed.
+DUP_UNITS=${PROOF_UNITS:-3}
 N1=$((NAME_LEN + 1))
 # One global bound large enough for every constant-trip loop here (the
 # NW_NAME_LEN scans and the NW_DUP_SLOTS init), and a tight bound on the
@@ -169,7 +177,12 @@ DUP_PROBE=$(loop_id proofs/leaf_name_dup.c "for (int p = 0; p < NW_DUP_SLOTS; p+
 echo "proofs: probe loop $DUP_PROBE (discovered)"
 DUP_UNW="--unwind $DUP_GLOBAL --unwindset ${DUP_PROBE}:$((DUP_UNITS + 2))"
 
-CU=${PROOF_UNITS:-1}
+# Two units, not one. At one unit every per-unit check is pinned for u[0]
+# only: changing `u[i].kind` to `u[0].kind` and `u[i].lids` to `u[0].lids`
+# left this proof VERIFICATION SUCCESSFUL, and the suite green, while the
+# same byte on any later unit validated. At two units both assertions fail.
+# `control` measured it; the extra unit costs a couple of seconds.
+CU=${PROOF_UNITS:-2}
 CB=${PROOF_BINDS:-0}
 UNIT_LOOP=$(loop_id proofs/caller_nw_check.c "i < h->n_units" \
             -DPROOF_UNITS=1u -DPROOF_BINDS=0u)
@@ -299,7 +312,7 @@ if wanted caller; then
     # default into a FAILURE rather than a quietly truncated search. Which
     # is the mechanism working -- a bound carried over from another
     # configuration is exactly the silent narrowing it exists to catch.
-    BIND_UNW=$(caller_unw 1 1)
+    BIND_UNW=$(caller_unw 1 1)   # one unit, one bind
     expect PASS caller_nw_check_bind $BIND_UNW \
         -DPROOF_UNITS=1u -DPROOF_BINDS=1u proofs/caller_nw_check.c
     expect FAIL caller_nw_check_bind_reached $BIND_UNW \
