@@ -10,6 +10,7 @@
  "passed": [
   "bad-crc",
   "baker-rejects",
+  "baker-writes-the-declared-layout",
   "blob-size-ceiling",
   "brick-image-reproducible",
   "brick-is-a-root",
@@ -31,6 +32,7 @@
   "kind-required",
   "lids-are-not-advisory",
   "non-provision-at-max",
+  "old-magic-is-refused-as-magic",
   "path-traversal-refused",
   "rescue",
   "seccomp-kills",

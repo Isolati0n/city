@@ -123,7 +123,14 @@ three should follow, and it already works.
 
 ## Cost of the migration, honestly
 
-**Format.** This is `NWPLAN06`. `struct nw_unit` loses `brick[96]` and gains a
+**Format.** This is **`NWPLAN07`** — it said `NWPLAN06` until 2026-09-11,
+when that number was spent on the `window_s` removal (`blob.h`, and see
+`docs/plans/01` phase 3, which carried the same stale reservation). Two
+documents reserving a magic that the code has already used for a different
+layout is how two incompatible formats come to share a name; read
+`NW_MAGIC` before spending the next one. The unit sizes below are also
+pre-`window_s` (262, not 260).
+`struct nw_unit` loses `brick[96]` and gains a
 32-byte hash (a 64-hex string; store it as 32 raw bytes, or 64 characters
 validated as hex — raw is smaller and makes "is it hex" unrepresentable rather
 than checked, at the cost of being unreadable in a hex dump, which has

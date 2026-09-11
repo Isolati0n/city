@@ -45,8 +45,30 @@ fact namesAreHouses { #House >= 1 }
 fun fdNeed[]: Int { 8 + 2.mul[#House] }
 
 /* Same arithmetic as NW_MAX_BINDS in blob.h, MAX_BINDS in bakery/nw-cc.py
-   and MaxBinds in Plan.tla. Change one, change all four. */
-fun bindNeed[]: Int { #(House.binds) }
+   and MaxBinds in Plan.tla. Change one, change all four.
+
+   This said `#(House.binds)` until 2026-09-11, which is the number of
+   DISTINCT paths bound by any house. The blob does not store distinct
+   paths: struct nw_bind is a (unit, path) PAIR, and the baker builds one
+   row per house per declared bind. Two houses sharing /shared is one path
+   and two rows -- so the spec permitted plans the implementation refuses,
+   by a factor that grows with sharing, and sharing a bind is the normal
+   case rather than a corner. `drift` found it with a two-house city that
+   nw-check reports as binds=2 while this expression counted 1.
+
+   The comment above sat directly over the wrong expression, which made it
+   the most credible-looking thing in the file.
+
+   `binds` is declared `binds: set Path` on House, so as a relation it is
+   House -> Path and `#binds` is the number of (house, path) tuples, which
+   is one per row of the blob's bind table. `#(House.binds)` was the number
+   of distinct Path atoms any house reaches.
+
+   NOT RUN. There is no alloy on this machine and nothing in the Makefile
+   or tests/run.py executes this file, so this correction is reasoning
+   about Alloy's semantics, not a checked result. It matches what nw-check
+   and the baker measurably do, which is the agreement that matters. */
+fun bindNeed[]: Int { #binds }
 
 pred sealed { fdNeed[] <= 1024 and bindNeed[] <= 128 }
 

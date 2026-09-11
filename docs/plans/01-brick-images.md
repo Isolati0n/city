@@ -43,16 +43,47 @@ This is not optional: the Landlock lid ran for its whole life without ever
 executing because a capability was absent and the suite went green anyway
 (`HISTORY.md` §26).
 
-The bakery needs `mkfs.erofs`. It is not installed by default anywhere we
-have looked, and the bakery is not the running machine, so this is a bakery
-requirement rather than a runtime one.
+The bakery needs `mkfs.erofs`. It is a bakery requirement rather than a
+runtime one, since the bakery is not the running machine. *"It is not
+installed by default anywhere we have looked" stood here until 2026-09-11,
+directly above a LANDED section reporting bricks packed on a machine where
+`which mkfs.erofs` answers `/usr/bin/mkfs.erofs`.* `tests/run.py` reports
+its presence in `print_environment()` as of the same day —
+`test_brick_image_reproducible` skips on exactly that condition, and a skip
+condition missing from the environment block is the gap that let the
+Landlock lid run green for its whole life.
+
+**Measured here, 2026-09-11, before any phase 2 code:**
+
+```
+erofs in /proc/filesystems      yes (squashfs too)
+/dev/loop-control, losetup      present
+mkfs.erofs                      /usr/bin/mkfs.erofs (erofs-utils 1.7.1)
+max_loop                        8
+NW_MAX_UNITS                    64
+```
+
+**`max_loop` is not a ceiling and must not be read as one.** It is the
+count of devices created when the module loads; `LOOP_CTL_GET_FREE`
+allocates past it. Measured: 80 devices over 80 files, and 64 distinct
+devices over a single image, up to `/dev/loop63`. So the "what would make
+this the wrong plan" condition below — `max_loop` binding under
+`NW_MAX_UNITS` — is **not met**, and the number that looks like it says
+otherwise is answering a different question.
+
+One trap in measuring it: `mount -o loop` (util-linux) reuses a device
+already backing the same file, so 64 mounts of one image consumed **one**
+device. Phase 2 calls `LOOP_CTL_GET_FREE` itself and gets 64. Measure the
+call the code makes.
 
 ## Phase 1 — the baker packs an image. No TCB change. **LANDED 2026-09-11.**
 
 `bakery/mkbrick.py` and `test_brick_image_reproducible`. The flag set is
 exported as `EROFS_FLAGS` and the test imports it rather than copying it,
 so the negative control drops a flag from the list the packer actually
-uses. Three controls run, all failing as required: `-U` removed from the
+uses. The controls below were run by hand and all failed as required
+(only the `-U` one is a standing assertion in the suite): `-U` removed
+from the
 packer (two packs of one tree disagree), `-T 0` removed (same), and the
 image named by the tree path instead of its own bytes (the hash no longer
 matches the filename).
@@ -62,6 +93,22 @@ twice; a copy at a different path with every mtime rewritten packs to the
 same hash; and with `-U` dropped the two packs differ, which is what
 makes the first two mean something rather than being a report on
 `mkfs.erofs`'s good manners.
+
+**Two holes in that test, found by `control` on 2026-09-11 and closed the
+same day.** Recorded because "the controls all failed as required" was
+true and still left the test green against packers that cannot be right:
+
+- Every assertion above survived a `pack()` that threw its `tree` argument
+  away and packed an empty temporary directory. Reproducibility, naming
+  and the `-U` control are all satisfied by packing nothing at all,
+  consistently — so the test whose name is "content-addressed" never
+  asserted the image depends on the tree. Two different trees must now get
+  two different names.
+- `--force-uid=0 --force-gid=0` were pinned by nothing, because every tree
+  in the test was owned by one user. Deleting both left the suite green
+  while the sentence they carry was false: measured, a 1000-owned copy
+  packs to a different hash without them. The test now chowns a copy and
+  requires the same hash, and says in its `ok` line which side ran.
 
 Nothing at runtime reads these images yet. That is phase 2.
 
@@ -132,9 +179,52 @@ seeing the machine's root.
 **Test** `brick-image-is-sealed`: a house with **`lids=none`** attempts to
 write into its own brick and is refused. This is the property images buy that
 the lid version cannot, so it is the test that justifies the phase.
-**Negative control**: drop `MS_RDONLY` from the mount and the write succeeds,
-failing the test. Run it; a control that passes means the test is measuring
-the announcement again.
+
+**Negative control — the one named here does not exist.** This said "drop
+`MS_RDONLY` from the mount and the write succeeds, failing the test." It
+does not. Prototyped end to end on 2026-09-11 (image → `LOOP_CTL_GET_FREE`
+→ `LOOP_CONFIGURE` → erofs mount → `pivot_root(".", ".")` → `execv` a static
+house), outside the tree:
+
+| variant | result |
+|---|---|
+| everything present | mounts `ro`; house's write REFUSED |
+| no `MS_RDONLY` | `mount erofs: Permission denied` — house never runs |
+| no `LO_FLAGS_READ_ONLY` | mounts `ro`; write REFUSED (flag does nothing) |
+| neither | Permission denied |
+| both fds `O_RDWR`, neither flag | mounts **`ro` anyway**; write REFUSED |
+
+The kernel forces `LO_FLAGS_READ_ONLY` when either the backing-file fd or
+the `/dev/loopN` fd is `O_RDONLY`, and erofs has no write path, so it mounts
+`ro` regardless. **The seal is over-determined and no flag we pass is what
+enforces it.** Dropping `MS_RDONLY` does fail the test — at the mount, for a
+reason that is not the seal — so quoting it as "the write succeeds" would be
+a true-looking sentence beside a mechanism that is not doing the work.
+
+**The control that does work runs from the other side**: the brick as a
+*directory*, bind-mounted onto itself, which is what `nwsup.c` does today.
+Same house, same content:
+
+```
+house: write into brick SUCCEEDED -- seal is broken
+```
+
+and `written-by-house` left in the tree. That is what proves the test can
+detect an unsealed brick. Use it.
+
+**`LO_FLAGS_AUTOCLEAR` is load-bearing and its control is real**: dropping
+it leaks the device (`losetup -a` shows it still attached after the house
+exits), where the full sequence leaves none. Keep that one.
+
+**The mountpoint is a decision this plan does not name.** An image cannot be
+mounted onto itself the way a directory brick is bind-mounted onto itself,
+so phase 2 needs a mount point that `lid_brick()` does not have today. Two
+strategies were prototyped and both reach the house: an existing empty
+directory on the machine root, or a small `tmpfs` mounted inside the house's
+own namespace with the mountpoint created in it — which writes nothing to
+any disk and bakes nothing into any brick, at the cost of still needing one
+existing directory to put the tmpfs on. Decide it before writing the code,
+not during.
 
 ## Phase 3 — the plan carries a hash, not a path
 
@@ -143,7 +233,20 @@ the announcement again.
 This is `07` option A for the brick half, and it is only meaningful now that
 `08` has defined what the hash is *of*: the image file's bytes.
 
-- Unit shrinks 262 → 198 bytes; format becomes `NWPLAN06`.
+- Unit shrinks 260 → 198 bytes; format becomes **`NWPLAN07`**.
+
+  *Both numbers here were wrong until 2026-09-11, and the magic was the
+  dangerous one.* `NWPLAN06` was spent on the `window_s` removal that same
+  day, which took the unit from 262 to 260 — so this line named a magic
+  that already exists and means a different layout. An agent landing
+  phase 3 by following it would have found `NW_MAGIC` already saying
+  `NWPLAN06`, changed nothing, and shipped a second incompatible format
+  under the same name, with old and new blobs both claiming to be 06 and
+  the size check as the only thing telling them apart. That is verbatim
+  the defect the 05 → 06 bump was made to remove, re-created inside the
+  version namespace. Found by `drift` and by `tcb-review`, independently.
+  Check `NW_MAGIC` in `blob.h` before spending the next number, not this
+  file.
 - `NW_E_BRICK` changes meaning to "not 32 bytes of hash", and the all-zero
   case still means no brick and is still validated byte by byte.
 - The `..` guard in `path_ok_len` **stays** — `exec_path` and binds are still
@@ -176,7 +279,11 @@ Recorded now, while it is cheap to say:
 
 - If `max_loop` turns out to bind below `NW_MAX_UNITS` and cannot be raised,
   per-house loop devices are wrong and the `dawn`-mounts-everything variant
-  (`08` Q1 C) comes back.
+  (`08` Q1 C) comes back. **Measured on this machine and not met** — see the
+  prerequisites section: `LOOP_CTL_GET_FREE` allocated 64 distinct devices
+  for one image and 80 overall, with `max_loop` reading 8. It stays on this
+  list because it is a property of the target kernel, not of this one, and
+  the target has still been checked for neither.
 - If the target kernel lacks erofs and cannot gain it, squashfs is the
   fallback and costs ~7× on mount; the flag set for it is recorded in `08`.
 - If a brick ever needs to be writable, none of this survives. It is not

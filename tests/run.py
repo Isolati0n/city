@@ -95,11 +95,34 @@ def sha256_of(path):
 # test_shutdown_does_not_restart can only observe a restart that lands
 # inside it, and that margin belongs in the ok line.
 def pid1_grace_ms():
+    """Read PID 1's shutdown grace out of pid1.c. No fallback, deliberately.
+
+    This derived nothing until 2026-09-11. It looked for `NW_GRACE_MS` and
+    for the word "grace"; pid1.c contains neither -- the grace is the bare
+    literal in `while (now_ms() - t0 < 400)` -- so both patterns missed on
+    every run and the function returned its fallback, which was written as
+    400 and was therefore right. `control` set pid1.c's loop to 1500 and
+    the ok line still said 400ms, green: a derivation-shaped sentence with
+    nothing deriving, which is this project's characteristic failure
+    appearing inside a repair for it.
+
+    So: match the loop that actually bounds the grace, and raise if it is
+    not found. A default that silently equals the truth is exactly how the
+    last one survived -- when this stops matching, it must stop the suite,
+    not guess. (The regex is the reason this cannot live in pid1.c as a
+    #define: that file belongs to another agent this week.)
+    """
     import re
     src = open(os.path.join(ROOT, "pid1.c")).read()
     m = re.search(r"NW_GRACE_MS\s+(\d+)", src) or \
-        re.search(r"grace[^\n]*?(\d{3,4})\s*(?:;|\))", src, re.I)
-    return int(m.group(1)) if m else 400
+        re.search(r"now_ms\(\)\s*-\s*t0\s*<\s*(\d+)", src)
+    if not m:
+        raise SystemExit(
+            "tests/run.py: cannot find PID 1's shutdown grace in pid1.c. "
+            "It was `while (now_ms() - t0 < 400)`. If the shutdown loop "
+            "changed shape, fix this pattern -- do NOT reintroduce a "
+            "default, which is how this went undetected for its whole life.")
+    return int(m.group(1))
 
 
 PID1_GRACE_MS = pid1_grace_ms()
@@ -180,6 +203,14 @@ def print_environment():
         if fs_mountable(f)))
     loop = run(["sh", "-c", "command -v losetup"]).returncode == 0
     print(f"  losetup    : {'present' if loop else 'ABSENT'}")
+    # test_brick_image_reproducible skips on exactly this, and a skip
+    # condition that is not in the environment block is the gap that let
+    # the Landlock lid run green for its whole life without executing.
+    # `claims` noticed it was missing while erofs was listed as mountable
+    # -- two different questions, and only one of them was being reported.
+    erofs_mk = run(["sh", "-c", "command -v mkfs.erofs"]).returncode == 0
+    print(f"  mkfs.erofs : {'present' if erofs_mk else 'ABSENT'}"
+          f"{'' if erofs_mk else '  -- brick-image tests will SKIP, not pass'}")
     print()
 
 
@@ -668,9 +699,19 @@ def test_budget_is_hard_total():
     """D18: budget is deaths for the life of nw-sup, not a sliding window.
 
     unit-slowdie exits after 1.2s. The old window_s=1 reset the tally
-    between deaths, so budget=3 never fired. Control: restore a window
-    reset and this test sees death=4 inside the hold. Pairing is the
-    restart lines that did happen, then the one that must not."""
+    between deaths, so budget=3 never fired. Pairing is the restart lines
+    that did happen, then the one that must not.
+
+    This docstring used to end "Control: restore a window reset and this
+    test sees death=4 inside the hold." It does not, and the correction had
+    already been written into the body comment below while this sentence,
+    eight lines above it, kept the false version -- reworded in one place
+    and survived by being moved, which `claims` found by running the
+    control it names. A window resets the tally to 0 before the increment,
+    so every line reads `death=1` forever; `death=4` never appears. What
+    catches a restored window is `death=2 in out` together with `n == 3`.
+    A docstring is what help() and every summary tool shows, so a
+    correction that lands only in a comment has not landed."""
     drip = f"{BIN}/unit-slowdie"
     probe = f"{BIN}/unit-probe"
     city = f"{WORK}/d18.city"
@@ -718,14 +759,39 @@ def test_shutdown_does_not_restart():
     news; no extra channel. Control: delete `if (stopping) _exit` in
     nw-sup and this test sees `restart stay`."""
     term = f"{BIN}/unit-term"
+    dieterm = f"{BIN}/unit-dieterm"
     city = f"{WORK}/shut.city"
-    open(city, "w").write(f"house stay {term} kind=longrun budget=20 lids=none\n")
+    # TWO houses, and the second is the point. `stay` has never died, so its
+    # supervisor's `deaths` is 0 -- which let `control` narrow the guard to
+    # `if (stopping && deaths == 0)` and keep this test green while the
+    # guard was broken for every house that had ever restarted. `dt` banks a
+    # death before shutdown, so the guard is asserted on the state it exists
+    # for. Measured on the mutant: `restart dt death=2` lands after
+    # `shutdown TERM houses`.
+    open(city, "w").write(
+        f"house stay {term} kind=longrun budget=20 lids=none\n"
+        f"house dt {dieterm} kind=longrun budget=20 lids=none\n")
     blob = f"{WORK}/shut.blob"
     b = run(["python3", CC, "--city", city, "--out", blob])
     expect(b.returncode == 0, f"bake\n{b.out}{b.err}")
-    rc, out = boot(plan=blob, hold=500)
+    # A stale marker would make dt skip its death and silently turn this
+    # back into the one-house test. Removing it means a leftover fails the
+    # `restart dt death=1` assertion below rather than weakening it.
+    try:
+        os.unlink("/tmp/nw-dieterm.mark")
+    except FileNotFoundError:
+        pass
+    # Long enough for dt to die, be restarted, and be waiting on TERM.
+    rc, out = boot(plan=blob, hold=900)
     expect(city_closed(rc, out), f"shutdown rc={rc}\n{out}")
     expect("SIGTERM handler ran" in out, f"house never saw TERM\n{out}")
+    # Pairing for dt: it must have died and been restarted BEFORE shutdown,
+    # or `deaths` is 0 and this is the old test wearing two houses.
+    expect("restart dt death=1" in out,
+           f"dt never died before shutdown, so its supervisor's deaths is 0 "
+           f"and the guard is not being asserted on a restarted house\n{out}")
+    expect("[dieterm] restarted, now waiting for TERM" in out,
+           f"dt died but never came back up\n{out}")
     # The house must actually DIE. A restart can only follow an exit, so
     # "took TERM" alone leaves this green against a fixture whose handler
     # prints and keeps looping -- `control` built that and watched the
@@ -735,6 +801,12 @@ def test_shutdown_does_not_restart():
            f"restarted and this test proved nothing\n{out}")
     expect("restart stay" not in out,
            f"supervisor restarted during shutdown\n{out}")
+    expect("[dieterm] exiting cleanly after TERM" in out,
+           f"dt took TERM but never exited, so nothing could have restarted "
+           f"it and the deaths>0 half of this test proved nothing\n{out}")
+    expect("restart dt death=2" not in out,
+           f"supervisor restarted a house that had ALREADY died once, during "
+           f"shutdown -- the guard is conditioned on deaths\n{out}")
     # The margin is not incidental: the restart has to land inside PID 1's
     # grace window to be observable at all. `control` measured the edge by
     # delaying the restart -- 100ms and 300ms fail the test, 450ms passes
@@ -1489,6 +1561,159 @@ def test_checker_rejects_crafted_fields():
           f"refused on unit {VICTIM} of {NUNITS}, every legal one accepted)")
 
 
+def test_old_magic_is_refused_as_magic():
+    """An old-format blob must be refused for its MAGIC, not its size.
+
+    This is the whole reason NW_MAGIC moved 05 -> 06 on 2026-09-11, and
+    nothing in the suite pinned it. `drift` and `claims` each verified it
+    by hand, in separate scratch trees, which is how a property comes to
+    be believed without being tested.
+
+    The failure it guards against is a diagnosis, not a rejection. Before
+    the bump, a blob baked by the previous nw-cc was refused -- correctly
+    -- as NW_E_SIZE, because the layout had changed and the magic had not.
+    An operator reads "size" as a truncated or corrupt file and goes
+    hunting for a bad copy; the truth was "this slot holds a plan the
+    previous baker made". One channel carrying two meanings, separated
+    only by which integer, which is bug 9's shape.
+
+    So the assertion is on the reason string. `returncode != 0` is
+    satisfied by every rejection there is, including the one this test
+    exists to distinguish itself from -- and the pairing is a blob of the
+    RIGHT size with the wrong magic, so size cannot be what refuses it."""
+    good = f"{WORK}/magic-good.blob"
+    city = f"{WORK}/magic.city"
+    open(city, "w").write("house m /bin/true kind=oneshot lids=none\n")
+    b = run(["python3", CC, "--city", city, "--out", good])
+    expect(b.returncode == 0, f"bake\n{b.out}{b.err}")
+    d = bytearray(open(good, "rb").read())
+
+    magic = blob_h("NW_MAGIC").strip('"')
+    expect(bytes(d[:8]) == magic.encode(),
+           f"the baker did not write {magic}: {bytes(d[:8])!r}")
+
+    # The previous magic, on a blob that is otherwise exactly right --
+    # same length, same units, CRC repaired. Nothing but the magic is
+    # wrong, so nothing but the magic can be the reason.
+    old = magic[:-2] + f"{int(magic[-2:]) - 1:02d}"
+    d[:8] = old.encode()
+    d[16:20] = b"\x00\x00\x00\x00"
+    d[16:20] = struct.pack("<I", zlib.crc32(bytes(d)) & 0xFFFFFFFF)
+    stale = f"{WORK}/magic-old.blob"
+    open(stale, "wb").write(bytes(d))
+    expect(os.path.getsize(stale) == os.path.getsize(good),
+           "the crafted old-magic blob is not the same length as the good "
+           "one, so a size rejection would be ambiguous")
+
+    r = run([f"{BIN}/nw-check", stale])
+    expect(r.returncode != 0,
+           f"nw-check accepted a blob carrying {old}\n{r.out}{r.err}")
+    expect("magic" in (r.out + r.err).lower(),
+           f"nw-check refused a {old} blob, but not for its magic -- the "
+           f"diagnosis is the property being tested, and this is the "
+           f"reading an operator would chase in the wrong direction:\n"
+           f"{r.out}{r.err}")
+    # And the whole point is that it is NOT a size complaint.
+    expect("size" not in (r.out + r.err).lower(),
+           f"nw-check blamed the size of a correctly-sized blob\n"
+           f"{r.out}{r.err}")
+
+    print(f"ok old-magic-refused-as-magic ({old} at the right length is "
+          f"refused for its magic, not its size)")
+
+
+def test_baker_writes_the_declared_layout():
+    """The baker writes the bytes. Nothing pinned where it writes them.
+
+    blob.h's offset asserts pin the READER: swap two members of struct
+    nw_unit and the build stops. They say nothing about `bakery/nw-cc.py`,
+    which holds a second, independent statement of the same layout in its
+    `struct.pack` calls -- and that is the side that decides what actually
+    lands on disk.
+
+    Swap `lids` and `budget` in the baker alone and a plan reading
+    `lids=seccomp budget=4` bakes to lids=4, budget=1. `nw-check` says OK.
+    The house runs with NW_LID_NEWNS and NO SECCOMP FILTER while the plan
+    says it is confined -- invariant 6's "the plan lying", reached from the
+    side the C asserts do not watch. Found by tcb-review and by drift, at
+    944e9e7, independently.
+
+    The suite caught that only by luck: the default city's `budget=3` is not
+    a legal kind, so a kind/budget swap tripped NW_E_KIND. `budget=4` walks
+    straight through, because 4 is a legal lid and 1 is a legal budget. A
+    test that depends on which values a fixture happens to use is not
+    pinning a layout.
+
+    So: bake units with DISTINCT values in the trailer and read each byte
+    back at the offset blob.h declares. It needs no crafted blob, because
+    the baker's own output is the thing under test.
+
+    Two details that are the difference between this test working and this
+    test looking like it works, both found by running the control:
+
+    * **The byte assertions come before the nw-check assertion.** With the
+      first values tried (budget=2 lids=4), swapping the baker made lids=2
+      -- landlock without a brick -- so nw-check rejected and the test
+      failed on `nw-check refused it`. Red, for the value-luck reason this
+      test exists to stop depending on. Assert position first and a reorder
+      reports itself as a reorder.
+    * **`lay2` uses values that stay legal under the swap.** kind=1,
+      budget=0, lids=1 becomes kind=1, budget=1, lids=0: every field still
+      valid, nw-check says OK, and the only thing wrong is that a plan
+      declaring `lids=seccomp` produced a house with no filter. Nothing but
+      the byte positions can catch that one."""
+    NAME, PATH, BRICK = (int(blob_h(x)) for x in
+                         ("NW_NAME_LEN", "NW_PATH_LEN", "NW_BRICK_LEN"))
+    HDR = 20
+    USZ = NAME + PATH + BRICK + 4
+    city = f"{WORK}/layout.city"
+    open(city, "w").write(
+        # distinct trailer: kind=1 budget=2 lids=4
+        f"house lay /bin/true kind=longrun budget=2 lids=newns\n"
+        # swap-legal trailer: kind=1 budget=0 lids=1
+        f"house lay2 /bin/true kind=longrun budget=0 lids=seccomp\n")
+    blob = f"{WORK}/layout.blob"
+    b = run(["python3", CC, "--city", city, "--out", blob])
+    expect(b.returncode == 0, f"bake\n{b.out}{b.err}")
+
+    d = open(blob, "rb").read()
+    for i, (nm, want) in enumerate((
+            ("lay",  {"kind": 1, "budget": 2, "lids": 4, "_pad": 0}),
+            ("lay2", {"kind": 1, "budget": 0, "lids": 1, "_pad": 0}))):
+        base = HDR + i * USZ + NAME + PATH + BRICK
+        got = {"kind": d[base], "budget": d[base + 1],
+               "lids": d[base + 2], "_pad": d[base + 3]}
+        expect(got == want,
+               f"the baker did not write {nm}'s trailer where blob.h "
+               f"declares it.\n  blob.h says: {want}\n  baker wrote:  {got}\n"
+               f"This is a POSITION mismatch, not a validation failure. A "
+               f"plan that says one thing and a house that does another is "
+               f"invariant 6's 'the plan lying', and nothing else in this "
+               f"suite is looking at where the baker puts these bytes.")
+        # The name and the two paths, same question, same answer. A baker
+        # that emitted them in a different order would also bake clean.
+        u = HDR + i * USZ
+        expect(d[u:u + len(nm)] == nm.encode(),
+               f"{nm}: name is not at offset 0 of the unit: {d[u:u + 8]!r}")
+        expect(d[u + NAME:u + NAME + 9] == b"/bin/true",
+               f"{nm}: exec_path is not at offset {NAME}: "
+               f"{d[u + NAME:u + NAME + 16]!r}")
+        expect(d[u + NAME + PATH:u + NAME + PATH + BRICK] == b"\x00" * BRICK,
+               f"{nm}: brick is not at offset {NAME + PATH}, or a blank "
+               f"brick is not zero to the field width")
+
+    # Last, so a reorder is reported as a reorder rather than as whatever
+    # the shuffled values happen to violate.
+    r = run([f"{BIN}/nw-check", blob])
+    expect(r.returncode == 0,
+           f"nw-check refused a blob whose bytes are all where blob.h says "
+           f"they should be\n{r.out}{r.err}")
+
+    print(f"ok baker-writes-declared-layout (name/exec_path/brick plus a "
+          f"distinct 1/2/4 trailer and a swap-legal 1/0/1 one, each byte "
+          f"read back at the offset blob.h declares)")
+
+
 def test_blob_size_ceiling():
     """NW_BLOB_MAX must admit every legal blob and refuse everything larger,
     and nothing in the suite checked either half.
@@ -1573,11 +1798,27 @@ def test_blob_size_ceiling():
            f"length passes the recheck, and any other rejection reason here "
            f"means it got past the size guard"
            f"\n{p.out}{p.err}")
+    # And PID 1, which this test used to skip for the +1 case: it was fed to
+    # nw-check and nw-spawn only, so loosening pid1.c's ceiling by one byte
+    # (NW_BLOB_MAX -> NW_BLOB_BUF) left the suite green with PID 1's limit
+    # wrong. There are exactly three readers of a blob -- nwcheck_main.c,
+    # pid1.c, nwspawn.c -- and the docstring says "every reader". `control`.
+    rc, out = boot(plan=over, hold=400)
+    expect("HALT: plan size" in out,
+           f"PID 1 accepted a blob one byte over the ceiling: rc={rc}"
+           f"\n{out[-800:]}")
 
-    # The truncation window: 2^32 compares as 0 through a uint32_t cast.
+    # The truncation window is [2^32, 2^32 + NW_BLOB_MAX]: any size in it
+    # compares small through a uint32_t cast. 2^32 EXACTLY is the one point
+    # in that window a `size <= 0` guard rescues, because it truncates to
+    # precisely 0 -- so this case used to pass against the live defect.
+    # `control` put the cast back on both operands and the entire suite was
+    # green while a 4 GiB plan produced `*** buffer overflow detected ***`
+    # and killed PID 1. Landing inside the window rather than on its edge is
+    # the whole difference, and it is one addition.
     huge = f"{WORK}/huge.blob"
     with open(huge, "wb") as f:
-        f.truncate(1 << 32)
+        f.truncate((1 << 32) + biggest)
     r = run([f"{BIN}/nw-check", huge])
     expect(r.returncode == 1 and "blob size" in (r.out + r.err),
            f"a 4 GiB file must be refused for its size, not crash: "
@@ -1587,8 +1828,8 @@ def test_blob_size_ceiling():
            f"PID 1 must halt on plan size, not die: rc={rc}\n{out[-800:]}")
     os.unlink(huge)
 
-    print(f"ok blob-size-ceiling ({biggest} bytes: accepted, +1 refused, "
-          f"4 GiB refused)")
+    print(f"ok blob-size-ceiling ({biggest} bytes: accepted by all three "
+          f"readers, +1 refused by all three, 2^32+{biggest} refused)")
 
 
 def test_non_provision_at_max():
@@ -1628,14 +1869,26 @@ def test_brick_image_reproducible():
     """A brick is named by the sha256 of its image, so identical content
     must pack to identical bytes. Phase 1 of docs/plans/01.
 
-    Three assertions, and the third is what makes the first two mean
-    anything. Packing the same tree twice and getting one hash is also
-    what you would see if mkfs.erofs were simply deterministic with no
-    flags at all -- so the test would be green while the flag set, which
-    docs/options/08 argues IS the spec, did nothing. The third assertion
-    drops `-U` from the list mkbrick.py exports and requires the two packs
-    to differ: the UUID is random per invocation, so its absence changes
-    every byte while nothing about the content moved.
+    Reproducibility alone is not the claim. Packing the same tree twice and
+    getting one hash is also what you would see if mkfs.erofs were simply
+    deterministic with no flags at all -- so dropping `-U` and requiring the
+    two packs to differ is what makes the agreement evidence about the flag
+    set, which docs/options/08 argues IS the spec.
+
+    Two more assertions arrived on 2026-09-11 because `control` found the
+    test green against packers that cannot possibly be right:
+
+    * **The image must depend on the tree.** Every assertion here survived a
+      `pack()` that threw its `tree` argument away and packed an empty
+      temporary directory instead -- a packer that ignores its input passing
+      the test whose name is "content-addressed", because reproducibility,
+      naming and the `-U` control are all satisfied by packing nothing at
+      all, consistently. Two different trees must get two different names.
+    * **--force-uid/--force-gid must be pinned.** Every tree here was owned
+      by one user, so deleting both flags left the suite green while the
+      sentence they carry -- the same tree packed by two different users is
+      the same brick -- was false. Measured: without them, a 1000-owned copy
+      packs to a different hash.
 
     The flag list is imported, not copied. A second copy here would drift
     from the one in the baker, and then the control would be dropping a
@@ -1689,8 +1942,45 @@ def test_brick_image_reproducible():
            f"reproducibility above is not evidence that the flag set works, "
            f"or -U is no longer the flag that carries it")
 
+    # DIFFERENT content, different name. Without this every assertion above
+    # is satisfied by a packer that ignores its input entirely: `control`
+    # made pack() discard `tree` and pack an empty temporary directory, and
+    # the test stayed green. This is the assertion that says the hash is of
+    # the tree rather than of the act of packing.
+    tree3 = f"{lab}/other"
+    os.makedirs(f"{tree3}/etc")
+    open(f"{tree3}/etc/conf", "w").write("goodbye\n")
+    subprocess.run(["touch", "-d", "2001-02-03 04:05:06",
+                    f"{tree3}/etc/conf"], check=True)
+    e, _ = mk["pack"](tree3, out, quiet=True)
+    expect(e != a,
+           f"two trees with different content packed to the same name "
+           f"({e}) -- the image does not depend on the tree, so every "
+           f"reproducibility assertion above is vacuous")
+
+    # Ownership is excluded from brick identity (docs/options/08 Q2), and
+    # nothing pinned it: every tree above is owned by one user, so deleting
+    # --force-uid/--force-gid left this test green with the claim false.
+    # Needs the ability to chown, which is not a property of the kernel --
+    # say which side ran, per the environment rule.
+    tree4 = f"{lab}/owned"
+    subprocess.run(["cp", "-a", tree, tree4], check=True)
+    chowned = subprocess.run(["chown", "-R", "1000:1000", tree4],
+                             capture_output=True).returncode == 0
+    if chowned:
+        f, _ = mk["pack"](tree4, out, quiet=True)
+        expect(f == a,
+               f"the same tree owned by a different user packed to a "
+               f"different name:\n  root-owned {a}\n  1000-owned {f}\n"
+               f"--force-uid/--force-gid are what exclude ownership from "
+               f"brick identity")
+        own = "and a 1000-owned copy"
+    else:
+        own = "(ownership unpinned here: chown is not permitted)"
+
     print(f"ok brick-image-reproducible (two packs, a moved and re-dated "
-          f"copy, and -U dropped to prove the flags matter)")
+          f"copy, a different tree, {own}, and -U dropped to prove the "
+          f"flags matter)")
 
 
 def test_build_is_reproducible():
@@ -1916,6 +2206,8 @@ def main():
         test_path_traversal_refused, test_dupname_refused,
         test_blob_size_ceiling,
         test_checker_rejects_crafted_fields,
+        test_old_magic_is_refused_as_magic,
+        test_baker_writes_the_declared_layout,
         test_non_provision_at_max,
         test_landlock_confines,
     ]

@@ -31,18 +31,26 @@ NIL_UUID = "00000000-0000-0000-0000-000000000000"
 
 # THE FLAG SET IS THE SPEC. docs/options/08 argues each one; the reasons
 # are repeated here because this is the file someone edits, and a flag
-# dropped here changes every byte of the output while nothing about the
-# content moved.
+# dropped here changes the NAME of the output while nothing about the
+# content moved. It does not change every byte, and the true number is the
+# better argument: dropping -U leaves 20 bytes of the image different --
+# 0.1% of a 20 KiB image, 0.5% of a 4 KiB one, the same 20 bytes either
+# way, because it is the UUID field and its checksum. Twenty bytes are
+# enough to produce a completely different content address. ("changes
+# every byte" stood here until claims measured it.)
 #
 #   -T 0                 every file timestamp. Without it mtimes leak into
 #                        the image and the same tree packed tomorrow gets a
 #                        different name.
-#   -U <nil>             the filesystem UUID is RANDOM BY DEFAULT. This is
-#                        the flag whose absence breaks reproducibility most
-#                        completely and most invisibly -- the image mounts,
-#                        the content is right, and the name is different
-#                        every single run. It is the negative control in
-#                        tests/run.py for exactly that reason.
+#   -U <nil>             the filesystem UUID is RANDOM BY DEFAULT: the
+#                        image mounts, the content is right, and the name
+#                        is different every single run. It is the negative
+#                        control in tests/run.py for that reason -- not
+#                        because it is the worst of the four. Dropping -T 0
+#                        has an identical symptom, measured; the ranking
+#                        that used to be here ("breaks reproducibility most
+#                        completely and most invisibly") was never measured
+#                        and is not needed by the argument.
 #   --force-uid=0        ownership, which docs/options/08 Q2 excludes from
 #   --force-gid=0        brick identity: the same tree packed by two
 #                        different users is the same brick.
@@ -92,9 +100,22 @@ def pack(tree: str, out_dir: str, flags=None, quiet: bool = False) -> tuple:
     fd, tmp = tempfile.mkstemp(prefix=".mkbrick-", suffix=".img", dir=out_dir)
     os.close(fd)
     try:
-        # mkfs.erofs refuses to overwrite a non-empty file, and mkstemp
-        # already created it.
-        os.unlink(tmp)
+        # There was an os.unlink(tmp) here, under a comment saying
+        # "mkfs.erofs refuses to overwrite a non-empty file, and mkstemp
+        # already created it". Both halves were wrong and the second did
+        # not even describe the first: mkstemp creates an EMPTY file, so
+        # the stated rule would not have applied to it anyway. Measured on
+        # erofs-utils 1.7.1, mkfs.erofs truncates and overwrites a fresh
+        # name, an existing empty file, a 1 MB junk file and a valid image
+        # alike, producing identical bytes in every case.
+        #
+        # The line was not merely useless. Unlinking gave up the one thing
+        # mkstemp exists to provide -- a name nothing else holds -- in a
+        # directory that defaults to the shared /nw/bricks, and it threw
+        # away mkstemp's 0600 along with it, which is why the delivered
+        # image used to arrive at umask-derived 0644. It is 0600 now: a
+        # brick image is read by nw-sup as root and has no reason to be
+        # wider than that. fd-auditor and claims found this independently.
         cmd = ["mkfs.erofs"] + list(flags) + [tmp, tree]
         r = subprocess.run(cmd, capture_output=True, text=True)
         if r.returncode != 0:

@@ -66,10 +66,14 @@ fi
 
 BUILD=$OUT/build
 mkdir -p "$BUILD"
+# The fixture houses are globbed, not listed. A hand-written list here is a
+# second declaration of what houses/ contains, and it drifted the day a
+# fixture was added: `make` inside this build dir died with "No rule to make
+# target 'houses/dieterm.c'" while the Makefile's own `all:` had it. One
+# place names the fixtures, and it is the directory they live in.
 for f in dawn.c pid1.c nwcheck.c nwcheck_main.c nwspawn.c nwsup.c lids.c \
          lids.h blob.h rescue.c unit_probe.c Makefile bakery/nw-cc.py \
-         houses/boom.c houses/badcall.c houses/term.c houses/brick.c \
-         houses/slowdie.c
+         $(cd "$ROOT" && ls houses/*.c)
 do
     mkdir -p "$BUILD/$(dirname "$f")"
     cp -f "$ROOT/$f" "$BUILD/$f"
@@ -217,6 +221,33 @@ if [ -n "$MODDIR" ]; then
             break
         done
     done
+    # ASSERT THE ARTIFACT, NOT THE DIRECTORY. The guard above checks that
+    # /lib/modules/$KREL exists; the loop above checks nothing at all. A
+    # headers-only install has the directory and no kernel/ subtree, and a
+    # distro that ships NLS elsewhere has both and neither module -- in
+    # either case this exits 0 having copied nothing, and the failure
+    # arrives much later as
+    #     FAT-fs (vdb): IO charset iso8859-1 not found
+    #     [dawn] FAIL mount /sysroot/efi errno=22
+    #     Kernel panic - not syncing: Attempted to kill init!
+    # which is a console that reads as a dawn bug. That misdiagnosis is the
+    # entire reason the guard above exists, and covering one arm of it left
+    # the other reproducing it verbatim. tcb-review, 2026-09-11.
+    #
+    # A kernel with CONFIG_NLS_ISO8859_1=y needs no module and is legitimate
+    # -- and is indistinguishable from a broken tree by looking at the
+    # filesystem, so it must be said rather than detected.
+    if [ ! -f "$IRD/nls_iso8859_1.ko" ]; then
+        echo "mkboot: $MODDIR has no nls_iso8859-1 module." >&2
+        echo "mkboot: vfat needs it to mount the ESP, and without it the" >&2
+        echo "mkboot: guest panics in dawn with errno=22 -- which reads as" >&2
+        echo "mkboot: a dawn bug and is not one." >&2
+        echo "mkboot: If this kernel has CONFIG_NLS_ISO8859_1=y, set" >&2
+        echo "mkboot: NW_NLS_BUILTIN=1 to say so; nothing here can tell a" >&2
+        echo "mkboot: built-in from a missing one by looking." >&2
+        [ -n "${NW_NLS_BUILTIN:-}" ] || exit 1
+        echo "mkboot: NW_NLS_BUILTIN=1 set; continuing without the module." >&2
+    fi
 fi
 ( cd "$IRD" && find . -print0 | cpio --null -o -H newc --quiet ) > "$INITRD"
 

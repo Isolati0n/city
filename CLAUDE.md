@@ -15,6 +15,7 @@ offline, then a runtime table interpreter executes it. Robustness comes from
 | `nw-sup` | `nwsup.c` + `lids.c` | C | **yes** |
 | `nw-rescue` | `rescue.c` | C | yes |
 | baker (`nw-cc`) | `bakery/nw-cc.py` | Python | **no** |
+| brick packer (`mkbrick`) | `bakery/mkbrick.py` | Python | **no** |
 | test suite | `tests/run.py` | Python | **no** |
 | spec | `plan.als`, `Plan.tla` | Alloy / TLA+ | **no** |
 
@@ -63,8 +64,13 @@ sections after this one and are deliberately not numbered here.
    *This said "a ring of timestamps, never a counter" until 2026-09-10, then
    "a counter over a sliding window" until 2026-09-11. Both were present-tense
    invariants the code did not honour, and the second was worse than a wrong
-   description: the window it described made the budget unbounded. `grep` for
-   `ring` or `window_s` across the C sources returns nothing now.*
+   description: the window it described made the budget unbounded. `grep -w`
+   for `window_s` across the C sources returns two hits, `blob.h` and
+   `nwsup.c`, and both are comments recording its removal — the same shape
+   invariant 1 uses for `mount` in `pid1.c`. There is no `window_s` field
+   and no reset. (This retraction previously claimed the grep returned
+   nothing, which the commit that wrote it had already made false;
+   `claims` ran it.)*
 5. **The init provisions nothing.** Every house gets `/dev/null` on 0 and its
    own log pipe on 1 and 2. `close_others` sweeps the rest. There is no third
    thing, and no mechanism for granting one. (This replaces the pre-2026-09-10
@@ -216,11 +222,21 @@ The branch half is resolved: `main` was fast-forwarded to it — no rebase,
 no squash, no force-push, deliberately, because the tarball names its
 base by hash and rewriting history would have stranded it.
 
-**The tarball half is not resolved, and nothing here should be read as
-saying it is.** `grep` for `RB_POWER_OFF`, `reboot(` or `qemu` across the
-C sources and the `Makefile` returns nothing: none of that work is in the
-tree. It is one agent's next task, and until it lands as commits, the
-section you are reading is describing a delivery that has not happened.
+**Both halves are resolved.** The tarball was merged as `2ed4a45`, whose
+commit message names `4e11c20` as the base it was written against; the
+reap loop, the `RB_POWER_OFF` shutdown, the budget fix, the
+shutdown-restart race and `make qemu` are all in the tree, and
+`HISTORY.md` §36 records the landing.
+
+The rule stands because of what it cost, not because anything is still
+missing. *This paragraph said the opposite until 2026-09-11 — that none of
+that work was in the tree and it was "one agent's next task" — and it named
+`grep` for `RB_POWER_OFF`, `reboot(` or `qemu` as the evidence. Run
+verbatim, that grep returns `pid1.c:164` and `Makefile:102`. `claims`
+found it. A stale sentence here is worse than elsewhere: it instructs, so
+an agent that believes it re-does work that is already committed. Note
+what it is *not* replaced with — a new present-tense claim about what
+remains outstanding. That is the form that has now been wrong twice.*
 
 ### Who owns which file
 
@@ -255,9 +271,15 @@ restart loop in `nwsup.c`. Claude owns the baker and the mount path in
 That is the whole answer, and it is deliberately not derived from
 anything. It is a **scheduling fact about who is working on what**, not a
 property of the code, so it changes when the work changes and a generated
-list will always be either stale or wrong. Three attempts to compute it
-proved that the expensive way. Edit these three sentences when the
-assignment moves; do not build a mechanism.
+list will always be either stale or wrong. Every attempt to produce it
+another way has been wrong — twice written by hand, once derived by a
+tool, each found by `claims` — which proved the point the expensive way.
+Edit the sentences above when the assignment moves; do not build a
+mechanism. (This said "three attempts to compute it" and "edit these
+three sentences": two counts, in the file whose own rule is never to put
+a count in a brief. Only one attempt computed anything, and the second
+count goes wrong the moment a fourth owner is added, which is the one
+thing this paragraph exists to invite.)
 
 ## Dispatching agents
 
@@ -383,8 +405,12 @@ The record, which is the argument:
   and a build driver need" and that "without them any compiler dies
   instantly". It killed `gcc` on the first `exec`. `HISTORY.md` §23.
 - **Invariant 4 in this file** said the restart budget was a ring of
-  timestamps, never a counter. It is a counter. `grep` for `ring` across the C
-  sources has always returned nothing.
+  timestamps, never a counter. It is a counter. `grep -w` for `ring` across
+  the C sources has always returned nothing — and it needs the `-w`, because
+  a plain `grep` matches `string` in a dozen places, which is how a check
+  that looks decisive gives the wrong answer. The replacement description
+  ("a counter over a sliding window") was then wrong in a way that mattered:
+  the window made the budget unbounded. Three tellings, two wrong.
 - **`path_ok_len`** validated a path that could contain `..`, under a comment
   and an invariant both asserting that a house cannot see outside its brick.
   A traversing brick baked clean, passed `nw-check`, booted, and logged

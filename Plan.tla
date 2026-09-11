@@ -15,8 +15,26 @@ LidLandlock == 2
 FdNeed == Reserved + 2 * n
 
 (* Same limit as NW_MAX_BINDS in blob.h, MAX_BINDS in bakery/nw-cc.py and
-   bindNeed in plan.als. Change one, change all four. *)
-BindNeed == Cardinality(UNION {binds[i] : i \in 1..n})
+   bindNeed in plan.als. Change one, change all four.
+
+   This was Cardinality(UNION {binds[i] : i \in 1..n}) until 2026-09-11 --
+   the number of DISTINCT paths, unioned across houses. The blob counts
+   rows, not paths: struct nw_bind is a (unit, path) pair and the baker
+   emits one per house per declared bind, so two houses sharing /shared is
+   one path and two rows. The spec admitted plans nw-check refuses, by a
+   factor that grows with sharing. Summing per-house cardinalities is what
+   the implementations do. Found by `drift`.
+
+   NOT RUN. There is no tlc and no tla2tools jar on this machine, and
+   nothing in the Makefile or tests/run.py executes this file. Plan.tla
+   still has no next-state relation, so what stands here is a type
+   predicate no behaviour is checked against. Treat this as a corrected
+   statement of the format, not as a verified one. *)
+BindNeed == IF n = 0 THEN 0
+            ELSE LET Rows[i \in 1..n] ==
+                     IF i = 1 THEN Cardinality(binds[i])
+                     ELSE Cardinality(binds[i]) + Rows[i - 1]
+                 IN Rows[n]
 
 (* brick[i] = "" means the house shares the machine root. binds[i] is the
    set of paths bound into that house's brick before it pivots. *)

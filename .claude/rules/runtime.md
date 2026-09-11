@@ -122,7 +122,7 @@ accepted.**
 `nwsup.c` blocks in `waitpid(p, &st, 0)` with no time bound. There is no
 heartbeat, no deadline, no timeout, no `alarm`, no `WNOHANG`. There is no
 field to put one in, and nothing in the plan language or the baker expresses
-a deadline. There are no timing primitives left in `nwsup.c` at all: `grep` for `clock_gettime`, `now_ms`, `alarm` or `nanosleep` returns nothing since D18 removed the restart-budget window. The budget counts how often a house has **died**. Different problems; the budget does not touch this
+a deadline. `grep` for `clock_gettime`, `now_ms`, `alarm` or `nanosleep` in `nwsup.c` returns nothing since D18 removed the restart-budget window; `#include <time.h>` survived as dead weight. That is four names, so it is not the same claim as "no timing primitives at all", which is what this line used to say — `usleep`, `setitimer`, `timerfd_create` and a `poll` timeout would all pass it. `claims` widened the search and found none of them, so the stronger claim happens to be true today and its stated check does not establish it. The budget counts how often a house has **died**. Different problems; the budget does not touch this
 one.
 
 **Why refused:** every form of detection needs a guessed constant, and the

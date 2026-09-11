@@ -13,7 +13,10 @@
  * made unreachable for the one class it exists for: one channel carrying
  * two meanings, separated only by which integer, which is bug 9's shape.
  * Found independently by drift and tcb-review, each with the reproduction.
- * The magic and the layout move together or the diagnosis lies. */
+ * The magic and the layout MUST move together or the diagnosis lies --
+ * a rule for whoever changes the layout, not something the code enforces.
+ * The asserts below say so in every message they print, because that is
+ * the one moment a reader is guaranteed to be looking. */
 #define NW_MAGIC        "NWPLAN06"
 #define NW_NAME_LEN     32
 #define NW_PATH_LEN     128
@@ -108,55 +111,114 @@ struct nw_hdr {
     uint32_t crc32;
 } __attribute__((packed));
 
-/* The on-disk layout, pinned field by field.
+/* The on-disk layout, pinned field by field: offset, extent and type.
  *
- * WHAT THIS CATCHES AND WHAT IT DOES NOT, because the comment that stood
- * here claimed more than the code did. It said "NWPLAN05 and
+ * WHAT THIS CATCHES AND WHAT IT DOES NOT, because every comment that has
+ * stood here claimed more than the code did. The first said "NWPLAN05 and
  * sizeof(nw_unit) are one agreement"; the assert it introduced mentions
- * no magic, and a SIZE constant cannot see a REORDER. `drift` and
- * `fd-auditor` found that independently, with the same reproduction:
- * swap `budget` and `lids` in the struct above and the build is green
- * under -Werror with every assert passing, while a plan that declares
- * `lids=none` boots under seccomp and its restart budget silently
- * becomes 0. Green build, green assert, nw-check says OK -- this
- * project's characteristic failure standing next to the guard that was
- * supposed to prevent it.
+ * no magic, and a SIZE constant cannot see a REORDER. Swapping `budget`
+ * and `lids` was green under -Werror with that size-only assert (check it
+ * against 2ed4a45, where it still reproduces); a plan declaring
+ * `lids=none` booted under seccomp with its restart budget silently 0,
+ * and nw-check said OK.
  *
- * Caught now: a field added, removed, resized or MOVED, and `_pad`
- * reused for something with a different offset. The offsets are the
- * layout, so pinning them is pinning the format.
+ * The offsets that replaced it were green for two more mutations, both
+ * found by tcb-review at 944e9e7 and both written INTO THIS STRUCT, which
+ * is the block the pin sits under:
+ *
+ *   - shrink `exec_path` by 8 and spend the bytes on a new field. Offsets
+ *     and NW_UNIT_SIZE are unchanged, so the build and the suite are
+ *     green -- and nwcheck.c validates with path_ok_len(s, NW_PATH_LEN),
+ *     a macro rather than a sizeof, so it reads 8 bytes past the array
+ *     into the new field and refuses any nonzero value as NW_E_PATH. Bug
+ *     12's shape, under a comment saying a field addition is caught.
+ *   - `uint8_t budget` -> `int8_t budget`. Same offsets, same size, green
+ *     build, green suite; nwspawn.c sign-extends through
+ *     snprintf(bbuf, 8, "%u", ...) and a budget of 200 reaches the house
+ *     as 4294967. nwcheck.c range-checks `budget` nowhere, which is why
+ *     this member and not another.
+ *
+ * So the extent and type asserts below are not belt-and-braces: each one
+ * is a mutation that was green. Offset alone pins where a member STARTS
+ * and what the struct TOTALS, and nothing else -- not how far a member
+ * reaches, not what it is.
+ *
+ * Caught now: a field added, removed, resized, retyped or MOVED, and
+ * `_pad` reused for anything of a different offset, extent or type.
  *
  * NOT caught, and there is no version field to catch it with: changing
  * what a byte MEANS while leaving it where it is -- redefining `kind`'s
  * values, say. Only the magic can carry that, and nothing forces the
- * magic to move when the layout does. That gap is real and named here
- * rather than papered over; docs/options/09 is where a `unit_size` or a
- * version field would be argued if it is worth one.
+ * magic to move when the layout does, which is why every message below
+ * says so at the one moment a reader is guaranteed to be looking. That
+ * gap is real and named here rather than papered over; it has no options
+ * doc yet (docs/options/09 was the file-ownership question and was
+ * deleted at 5422f5b).
  *
- * The trailing 4 is deliberately the only hand-written number: the other
- * three terms are the same macros the struct uses, so they cannot drift,
- * and a wrong 4 is a build error rather than a wrong blob. */
+ * NOT caught either: __attribute__((packed)) is asserted by nothing. It
+ * is inert on any plausible ABI here -- nw_unit is all char and uint8_t,
+ * nw_hdr's u32s already sit at 8/12/16 -- but do not read this block as
+ * protecting it.
+ *
+ * The trailing 4 in NW_UNIT_SIZE is hand-written; the other three terms
+ * are the same macros the struct uses, so a wrong 4 is the only way that
+ * constant can be wrong, and it is a build error rather than a wrong
+ * blob. The offsets below are hand-written too, which is the point of
+ * them: they are a second, independent statement of the layout. */
+
+/* Offset, extent and type, each with the sentence the reader needs at the
+ * moment the build stops. Written as macros so the three cannot be given
+ * different messages, or one of them quietly left off a member. */
+#define NW_AT(s, m, off) \
+    _Static_assert(offsetof(struct s, m) == (off), \
+                   #s "." #m " moved: the layout changed, bump NW_MAGIC")
+#define NW_EXTENT(s, m, n) \
+    _Static_assert(sizeof(((struct s *)0)->m) == (n), \
+                   #s "." #m " extent changed: bump NW_MAGIC")
+#define NW_TYPE(s, m, t) \
+    _Static_assert(_Generic(((struct s *)0)->m, t: 1, default: 0), \
+                   #s "." #m " retyped: same bytes, different meaning, " \
+                   "bump NW_MAGIC")
+/* Arrays need the address-of form. `_Generic` applies lvalue conversion, so
+ * a bare `name` decays to `char *` under gcc -- but CBMC's frontend keeps
+ * the array type and the assert fires during Type-checking, which took
+ * `make proof` down with `CONVERSION ERROR` while `make test` was green.
+ * Taking the address sidesteps the decay and both frontends agree. The
+ * proofs are part of the toolchain; an assert that only gcc can parse is
+ * an assert that removes them. */
+#define NW_ARR_TYPE(s, m, t, n) \
+    _Static_assert(_Generic(&((struct s *)0)->m, t (*)[n]: 1, default: 0), \
+                   #s "." #m " retyped: same bytes, different meaning, " \
+                   "bump NW_MAGIC")
 #define NW_UNIT_SIZE (NW_NAME_LEN + NW_PATH_LEN + NW_BRICK_LEN + 4)
 _Static_assert(sizeof(struct nw_unit) == NW_UNIT_SIZE,
                "unit size drifted: a field was added, removed or resized");
-_Static_assert(offsetof(struct nw_unit, name)      == 0,   "name moved");
-_Static_assert(offsetof(struct nw_unit, exec_path) == 32,  "exec_path moved");
-_Static_assert(offsetof(struct nw_unit, brick)     == 160, "brick moved");
-_Static_assert(offsetof(struct nw_unit, kind)      == 256, "kind moved");
-_Static_assert(offsetof(struct nw_unit, budget)    == 257, "budget moved");
-_Static_assert(offsetof(struct nw_unit, lids)      == 258, "lids moved");
-_Static_assert(offsetof(struct nw_unit, _pad)      == 259, "_pad moved");
+NW_AT(nw_unit, name,      0);    NW_EXTENT(nw_unit, name,      NW_NAME_LEN);
+NW_AT(nw_unit, exec_path, 32);   NW_EXTENT(nw_unit, exec_path, NW_PATH_LEN);
+NW_AT(nw_unit, brick,     160);  NW_EXTENT(nw_unit, brick,     NW_BRICK_LEN);
+NW_AT(nw_unit, kind,      256);  NW_TYPE(nw_unit, kind,   uint8_t);
+NW_AT(nw_unit, budget,    257);  NW_TYPE(nw_unit, budget, uint8_t);
+NW_AT(nw_unit, lids,      258);  NW_TYPE(nw_unit, lids,   uint8_t);
+NW_AT(nw_unit, _pad,      259);  NW_TYPE(nw_unit, _pad,   uint8_t);
+/* The three arrays are char, not uint8_t: nwcheck.c hands them to
+ * path_ok_len and name_ok as char *, and the extent asserts above are what
+ * stop a member being shortened to make room for something else. */
+NW_ARR_TYPE(nw_unit, name,      char, NW_NAME_LEN);
+NW_ARR_TYPE(nw_unit, exec_path, char, NW_PATH_LEN);
+NW_ARR_TYPE(nw_unit, brick,     char, NW_BRICK_LEN);
 
-_Static_assert(sizeof(struct nw_bind) == 130, "bind size drifted");
-_Static_assert(offsetof(struct nw_bind, unit) == 0, "bind.unit moved");
-_Static_assert(offsetof(struct nw_bind, path) == 2, "bind.path moved");
+_Static_assert(sizeof(struct nw_bind) == 130,
+               "bind size drifted: a field was added, removed or resized");
+NW_AT(nw_bind, unit, 0);  NW_TYPE(nw_bind, unit, uint16_t);
+NW_AT(nw_bind, path, 2);  NW_EXTENT(nw_bind, path, NW_PATH_LEN);
+NW_ARR_TYPE(nw_bind, path, char, NW_PATH_LEN);
 
 _Static_assert(sizeof(NW_MAGIC) - 1 == 8, "magic must fill nw_hdr.magic");
 _Static_assert(sizeof(struct nw_hdr) == 20, "hdr is magic[8] + 3 * u32");
-_Static_assert(offsetof(struct nw_hdr, magic)   == 0,  "hdr.magic moved");
-_Static_assert(offsetof(struct nw_hdr, n_units) == 8,  "hdr.n_units moved");
-_Static_assert(offsetof(struct nw_hdr, n_binds) == 12, "hdr.n_binds moved");
-_Static_assert(offsetof(struct nw_hdr, crc32)   == 16, "hdr.crc32 moved");
+NW_AT(nw_hdr, magic,   0);   NW_EXTENT(nw_hdr, magic, 8);
+NW_AT(nw_hdr, n_units, 8);   NW_TYPE(nw_hdr, n_units, uint32_t);
+NW_AT(nw_hdr, n_binds, 12);  NW_TYPE(nw_hdr, n_binds, uint32_t);
+NW_AT(nw_hdr, crc32,   16);  NW_TYPE(nw_hdr, crc32,   uint32_t);
 
 #define NW_BLOB_SIZE(nu, nb) \
     (sizeof(struct nw_hdr) + (nu) * sizeof(struct nw_unit) \

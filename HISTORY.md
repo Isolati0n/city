@@ -2631,8 +2631,21 @@ The field is gone. `nw_unit` is kind, budget, lids, pad. Baker rejects
 `window=`. `nw-sup` counts `deaths` for its own life and stops when
 `deaths > budget` (budget 0 means never restart). Control:
 `test_budget_is_hard_total` — death=1,2,3 present, death=4 absent,
-exactly three `restart drip` lines in a 7 s hold. A sliding window
-logs death=4 inside that hold.
+exactly three `restart drip` lines in a 7 s hold.
+
+*Corrected 2026-09-11: this ended "A sliding window logs death=4 inside
+that hold." It does not. A window resets the tally to 0 before the
+increment, so every line reads `death=1` forever and `death=4` never
+appears — which means `death=4 absent` is satisfied by the very defect it
+was cited against. `claims` restored a 1 s window and read the log: five
+`restart drip death=1` lines, no `death=2`, no `death=4`. What actually
+catches a restored window is `death=2` being present together with the
+count being three. The correction had already been made in the test's
+inline comment and was written fresh into this section anyway, and into
+the same test's docstring — reworded in one place, survived by being
+moved to two others. This section is dated the day it was written and
+stated the behaviour in the present tense, so it is not a "correct
+history" exemption.*
 
 Consequence, recorded rather than built: a house that exhausts its
 budget is dead for the session. Silent recovery only helps an operator
@@ -2669,13 +2682,32 @@ with nothing enforcing it. `shutdown_city` now refuses unless
 its namespace, so the happy path is unchanged. A stray call from a
 helper on the host HALTs instead of taking the lab down.
 
-### Format version pinned to `sizeof(struct nw_unit)`
+### The layout pinned field by field — and the magic still is not
 
-There was no `_Static_assert` tying `NWPLAN05` to the unit size.
-`window_s` leaving the trailer changed the on-disk layout; the
-proofs work was editing the same struct. `NW_UNIT_SIZE` and the
-assert live in `blob.h`. Changing the trailer without changing the
-constant fails the build.
+`window_s` leaving the trailer changed the on-disk layout while the
+proofs work was editing the same struct, and nothing tied the two
+together. `NW_UNIT_SIZE` and the asserts live in `blob.h`.
+
+*This section was headed "Format version pinned to `sizeof(struct
+nw_unit)`" and said "There was no `_Static_assert` tying `NWPLAN05` to
+the unit size", which reads as though one now exists. There is not, and
+the heading claimed the opposite of what was built. A size constant
+cannot see a reorder either — `drift` and `fd-auditor` both swapped
+`budget` and `lids` under it and got a green build. Offsets replaced the
+size-only assert the same day; `tcb-review` then defeated those twice,
+with mutations written into the struct itself: shrink `exec_path` by 8
+and spend the bytes on a new field (every offset unchanged, suite green,
+`nwcheck.c` reading 8 bytes past the array), and `uint8_t budget` →
+`int8_t budget` (every offset unchanged, suite green, a budget of 200
+reaching the house as 4294967 through `snprintf`'s `%u`). Extent and
+type asserts closed both, and every assert message now names
+`NW_MAGIC`.*
+
+**What is still not pinned, and the heading must not imply otherwise:**
+nothing ties the magic to the layout. A byte that changes MEANING without
+moving — redefining `kind`'s values — is caught by none of it, and
+bumping `NW_MAGIC` remains a rule for whoever edits the struct rather
+than something the build enforces.
 
 ### NLS stays in mkboot, with the reason written there
 
@@ -2727,3 +2759,205 @@ green line honest, and only if someone reads it.
 The stay-up tree lived in `artifacts/*.tar.gz` while `main` moved
 from `d84da58` to `4e11c20`. The divergence was invisible until
 someone cloned the repo. CLAUDE.md now says the same sentence.
+
+## 37. Five reviewers against one commit, and what they defeated (2026-09-11)
+
+Based on `944e9e7`. `drift`, `control`, `claims`, `tcb-review` and
+`fd-auditor` were dispatched against the same packet. Between them they
+defeated two guards written the day before and found four prose
+statements naming commands whose output contradicts them. Nothing here
+was found by reading.
+
+### The offset pin was blind twice, in the block it sits under
+
+`tcb-review` wrote both mutations into `struct nw_unit` itself:
+
+- **Extent.** Shrink `exec_path` by 8 and spend the bytes on a new
+  field. Every offset unchanged, `NW_UNIT_SIZE` unchanged, build green
+  under `-Werror`, suite green. `nwcheck.c` validates with
+  `path_ok_len(s, NW_PATH_LEN)` — a macro, not a `sizeof` — so it reads
+  8 bytes past the array into the new field and refuses any nonzero
+  value as `NW_E_PATH`. Bug 12's shape, under a comment claiming a field
+  addition was caught.
+- **Type.** `uint8_t budget` → `int8_t budget`. Same offsets, same size,
+  green build, green suite. `nwspawn.c` sign-extends through
+  `snprintf(bbuf, 8, "%u", ...)`, so a budget of 200 reaches the house as
+  `4294967`: a house restarts four million times instead of two hundred
+  and `nw-check` says `OK`. It lands on `budget` because `nwcheck.c`
+  range-checks that member nowhere — the others survive signedness
+  changes by accident (`< 1`, an arithmetic conversion, a `& ~` mask),
+  not by design.
+
+`NW_AT` / `NW_EXTENT` / `NW_TYPE` now pin offset, extent and type per
+member, and every message ends "bump NW_MAGIC" — the build error is the
+one moment a reader is guaranteed to be looking, and the old messages
+said only "exec_path moved". Five controls run; all five fail.
+
+**A toolchain trap inside the fix.** `_Generic` applies lvalue
+conversion, so a bare array member decays to `char *` under gcc — and
+CBMC's frontend keeps the array type, fires the assert during
+Type-checking, and takes `make proof` down with `CONVERSION ERROR` while
+`make test` stays green. `NW_ARR_TYPE` takes the address instead and both
+frontends agree. An assert only gcc can parse is an assert that deletes
+the proofs.
+
+### The pin covered the reader; the writer was pinned by nothing
+
+Swap `lids` and `budget` in `bakery/nw-cc.py`'s `struct.pack` alone: a
+plan reading `lids=seccomp budget=0` bakes to `lids=0 budget=1`,
+`nw-check` reports `OK`, and the house runs with **no seccomp filter**
+while the plan says it is confined. Invariant 6's "the plan lying",
+reached from the side the C asserts do not watch.
+
+`test_baker_writes_the_declared_layout` bakes distinct trailer values and
+reads each byte back at the offset `blob.h` declares. Two details are the
+difference between it working and looking like it works: the byte
+assertions run **before** the `nw-check` assertion (the first values tried
+made the swap produce landlock-without-a-brick, so the test failed on
+`nw-check refused it` — red for the value-luck reason it exists to stop
+depending on), and a second unit uses values that stay legal under the
+swap, where nothing but position can catch it.
+
+The old suite caught the swap only because the fixture's `budget=3` is not
+a legal kind. `budget=4` walked straight through.
+
+### `NWPLAN06` was double-booked
+
+`drift` and `tcb-review` both found `docs/plans/01` and
+`docs/options/07` reserving `NWPLAN06` for phase 3's 198-byte unit, while
+the `window_s` removal had already spent it on a 260-byte one. An agent
+landing phase 3 by following the plan would find `NW_MAGIC` already saying
+`NWPLAN06`, change nothing, and ship a second incompatible layout under
+the same name — the defect the bump removed, re-created inside the version
+namespace. Phase 3 is `NWPLAN07` in both documents.
+
+`test_old_magic_is_refused_as_magic` pins the property both agents had
+verified by hand in separate scratch trees. Its second control is the one
+that matters: keep the check and return `NW_E_SIZE` from it, and the test
+fails on the diagnosis rather than the rejection.
+
+### Four sentences that named their own refutation
+
+`claims` ran the commands the prose cited.
+
+- `CLAUDE.md`'s "the tarball half is not resolved… `grep` for
+  `RB_POWER_OFF`, `reboot(` or `qemu` returns nothing" returns `pid1.c:164`
+  and `Makefile:102`. Worse than stale: it instructed, so an agent
+  believing it would re-do work already committed at `2ed4a45`. It is now
+  past tense and names the commit — deliberately not replaced with a new
+  present-tense claim about what remains, which is the form that has been
+  wrong twice.
+- Invariant 4's retraction claimed `grep` for `ring` or `window_s` across
+  the C sources "returns nothing now". It returns two hits, both comments
+  written by the same commit. Invariant 1's idiom ("returns one hit and it
+  is a comment") was available and is now used. The `ring` half needs
+  `-w`: a plain `grep` matches `string` in a dozen places.
+- "A sliding window logs `death=4` inside that hold" survived in the test
+  docstring **and** in §35 while the correction sat in an inline comment
+  eight lines below one of them. A window resets before the increment, so
+  every line reads `death=1` forever — meaning `death=4 absent` is
+  satisfied by the defect it was cited against. Reworded in one place,
+  survived by being moved to two others.
+- `mkbrick.py`'s "mkfs.erofs refuses to overwrite a non-empty file" is
+  false on erofs-utils 1.7.1 in all four cases, and did not describe the
+  situation it justified: `mkstemp` creates an *empty* file. The
+  `os.unlink` it justified gave up the exclusivity `mkstemp` exists to
+  provide, in a directory defaulting to the shared `/nw/bricks`, and threw
+  away its `0600` along with it. Deleted; the image is `0600` now and the
+  bytes are identical.
+
+### Two tests that could not fail
+
+- **The 4 GiB case was the one point a zero-guard rescues.** `1 << 32`
+  truncates to exactly 0. `control` put the `uint32_t` cast back on both
+  operands and the entire suite passed while a 4 GiB plan produced
+  `*** buffer overflow detected ***` and killed PID 1. The case now lands
+  *inside* the truncation window, at `2^32 + biggest`.
+- **The grace derivation derived nothing.** `pid1_grace_ms()` looked for
+  `NW_GRACE_MS` and for the word "grace"; `pid1.c` has neither. Both
+  patterns missed on every run and the fallback — written as 400, and
+  therefore right — was returned. Setting `pid1.c`'s loop to 1500 left the
+  `ok` line saying 400ms, green. It matches the real loop now and raises
+  rather than defaulting: a default that silently equals the truth is how
+  this survived.
+
+And `shutdown-no-restart` was green for `if (stopping && deaths == 0)`,
+because its house had never died. `unit-dieterm` banks a death before
+shutdown so the guard is asserted on the state it exists for.
+
+### The specs disagreed with the blob about what a bind is
+
+`plan.als` counted `#(House.binds)` and `Plan.tla`
+`Cardinality(UNION ...)` — **distinct paths**. `struct nw_bind` is a
+`(unit, path)` pair and the baker emits one row per house per bind, so two
+houses sharing `/shared` is one path and two rows. The specs admitted
+plans `nw-check` refuses, by a factor that grows with sharing, and sharing
+a bind is the normal case. Both now count rows. Neither was run: there is
+no `alloy`, no `tlc` and no `tla2tools` jar on this machine, and nothing
+in the `Makefile` or `tests/run.py` executes either file.
+
+### Phase 2's negative control does not exist
+
+Measured before writing any TCB code, by prototyping the whole sequence
+outside the tree. `docs/plans/01` said "drop `MS_RDONLY` from the mount
+and the write succeeds". It does not — the mount dies with `Permission
+denied` before the house runs. The kernel forces `LO_FLAGS_READ_ONLY`
+when either the backing-file fd or the `/dev/loopN` fd is `O_RDONLY`, and
+erofs has no write path, so it mounts `ro` even with **every** read-only
+mechanism dropped. The seal is over-determined; no flag we pass enforces
+it. The control that works is the brick as a *directory* — today's
+`nwsup.c` — where the same house prints `write into brick SUCCEEDED`.
+
+`max_loop` reads 8 against `NW_MAX_UNITS` 64, which is literally the
+plan's "what would make this the wrong plan" condition. It is not a
+ceiling: `LOOP_CTL_GET_FREE` gave 64 distinct devices for one image and 80
+overall. `mount -o loop` reuses a device already backing the same file, so
+64 mounts consumed one — measure the call the code makes, not the one that
+is convenient.
+
+### mkboot's modules guard covered one arm
+
+The hard error fires when `/lib/modules/$KREL` is missing. The copy loop
+below it asserted nothing: create the directory without the NLS module and
+the build says nothing and exits 0, then the guest panics with
+`IO charset iso8859-1 not found` and `[dawn] FAIL mount /sysroot/efi
+errno=22` — a console that reads as a dawn bug, which is the misdiagnosis
+the guard exists to prevent. It asserts the artifact now, with
+`NW_NLS_BUILTIN=1` for the legitimate `CONFIG_NLS_ISO8859_1=y` case,
+because nothing can tell a built-in from a missing one by looking.
+
+Its source list was also a second declaration of what `houses/` contains,
+and it drifted the day a fixture was added. Globbed now.
+
+### Left for the agent who owns the boot chain
+
+Reported, not fixed, because `pid1.c`, `dawn.c` and the restart loop in
+`nwsup.c` belong to another agent this week:
+
+- **No `sync(2)` before `reboot(RB_POWER_OFF)`.** `grep` for `sync(` across
+  the C sources returns nothing and dawn mounts the root read-write. The
+  syscall does not flush the page cache. `fd-auditor` labelled the
+  consequence a HYPOTHESIS — the lab never powers anything off — but the
+  absence is verbatim, and every other init calls it.
+- **Every logger process holds PID 1's signalfd.** `spawn_logger` closes
+  the other houses' pipe ends and not `sfd`, and a logger never `exec`s so
+  `SFD_CLOEXEC` does nothing for it. Inert today; the loggers now live for
+  the life of the machine and there are `n_units` of them. Moving the
+  `signalfd()` call below the loop makes it impossible to inherit rather
+  than requiring a `close()` someone can forget.
+- **The loggers inherit a blocked TERM.** Inert because shutdown SIGKILLs
+  them — and it is a trap laid directly across the natural fix for the log
+  drain, since switching that kill to TERM would silently do nothing.
+  D11's exact shape.
+- **`--hold-ms` with a negative or malformed argument silently becomes
+  production**: `atoi` is unchecked and the gates are `hold_ms > 0`.
+- **`NW_HOLD_MS` is still parsed by the production binary**; only the
+  detection was hardened.
+- **The oldroot detach tolerates `EINVAL`**, the errno meaning the detach
+  did not happen.
+- **`nw-sup`'s `stopping` check sits after `waitpid`**, so a TERM between
+  `fork()` and `child = p` is swallowed.
+- **A failed `reboot()` falls through to `_exit(0)`** — the panic the
+  change exists to remove.
+- `budget-hard-total` is green against a 30-second window, so it pins "no
+  reset inside a 7s hold" rather than "hard total".

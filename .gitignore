@@ -9,6 +9,11 @@
 *.o
 nw-*
 unit-*
+# tools/mkboot.sh's output: a source copy, a static build, an initrd, and two
+# 64 MiB disk images. Rebuilt from scratch on every run (the ESP is dd'd from
+# /dev/zero), so nothing in it is worth tracking and one `make qemu` would
+# otherwise stage ~130 MB.
+boot-out/
 .reviews/
 *.gcov
 *.gcno
