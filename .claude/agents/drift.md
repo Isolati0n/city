@@ -25,9 +25,47 @@ remembering. You are the version that does not depend on that.
 | units | `NW_MAX_UNITS` | `MAX_UNITS` | scope / `fdNeed` | `MaxUnits` |
 | descriptors | `NW_MAX_FDS`, `NW_FD_RESERVED` | `MAX_FDS`, `FD_RESERVED` | `fdNeed` | `FdNeed`, `Reserved` |
 | binds | `NW_MAX_BINDS` | `MAX_BINDS` | `bindNeed` | `MaxBinds` |
-
-**The `plan.als` and `Plan.tla` columns are GENERATED as of 2026-09-11.** `MaxUnits`, `MaxFds`, `Reserved` and `MaxBinds` come from `specs/Plan.cfg`, and `nwReserved[]` and friends from `specs/limits.als`, both written out of `blob.h` by `tools/gen-spec-limits.py`. Those cells cannot disagree with the header, so do not report them as a mismatch — `plan.als` already records the cost of that once. A *limit* change is now a two-place change (`blob.h`, `bakery/nw-cc.py`); the *arithmetic* still appears in four places and is what "change one, change all four" now means. The one number still hand-written in a spec is Alloy's `but 12 Int` bitwidth, and `test_specs_are_checked` asserts it covers `NW_MAX_FDS`.
 | name / path / brick lengths | `NW_NAME_LEN`, `NW_PATH_LEN`, `NW_BRICK_LEN` | `NAME_LEN`, `PATH_LEN`, `BRICK_LEN` | — | — |
+
+**The `plan.als` and `Plan.tla` columns are GENERATED as of 2026-09-11**,
+with one exception named below. `MaxUnits`, `MaxFds`, `Reserved` and
+`MaxBinds` come from `specs/Plan.cfg`, and `nwReserved[]` and friends from
+`specs/limits.als`, both written out of `blob.h` by
+`tools/gen-spec-limits.py`. Those cells cannot disagree with
+the header, so do not report them as a mismatch — `plan.als` already
+records the cost of that once. A *limit* change is now a two-place change
+(`blob.h`, `bakery/nw-cc.py`); the *arithmetic* still appears in four
+places and is what "change one, change all four" now means.
+
+**The exception is the `units` row's `plan.als` cell, and it is half
+generated.** `fdNeed` is derived; the **scope** (`for 8`) is hand-written on
+each of the three commands and is derived from nothing — `plan.als`
+declares no bound on `#House`, so there is no header value for it to
+disagree with. `test_specs_are_checked` requires the three commands to
+agree with each other and imposes a floor; it does not check the scope
+against `NW_MAX_UNITS`, and neither should you. Report the commands
+disagreeing *among themselves*; do not report the scope against
+`NW_MAX_UNITS`. (`drift` did exactly that once, and the answer is that
+the cell is empty rather than that the numbers disagree.)
+The other still-hand-written number is Alloy's `but 12 Int` bitwidth, and
+that one *does* track the header — `test_specs_are_checked` asserts it
+covers `NW_MAX_FDS`.
+
+*This paragraph sat between two rows of the table above until
+2026-09-11, which orphaned the length row from its header, and its
+blanket "do not report them as a mismatch" covered the one cell that is
+not generated. `claims` found both.*
+
+Both generated files live under `specs/`, which is gitignored and written
+by `make stage`. On a tree that has never been staged they are absent;
+that is not drift, it is an unbuilt tree. Run `make stage` first.
+<!-- nw-init:absent-ok specs/limits.als -->
+That marker is why `sh install-agents.sh --check` still passes on a fresh
+clone: without it the check fails naming *this brief*, for a file no brief
+is wrong about, and `.claude/agents/claims.md` and this file both tell a reviewer to run
+it directly. `control` found it. (`specs/Plan.cfg` needs no marker — the
+check only looks at `.c/.h/.py/.als/.tla/.md/.sh`, so a `.cfg` is invisible
+to it, and declaring one would assert a check that is not happening.)
 
 **Struct layout** — the Python `struct.pack` format against the C structs.
 Check by size, not by reading, and **take the format from the baker rather

@@ -3258,7 +3258,9 @@ not a plain literal refused loudly.
 must fit. At 2048 it wraps: `Sealed` acquires a counterexample and the
 model goes vacuous — two messages that both blame the spec for a scope
 problem, which is exactly the wrong-diagnosis shape `Plan.tla`'s ASSUME
-note was written about. Today's headroom is one doubling. The test now
+note was written about. Today's margin is a factor of two: NW_MAX_FDS is 1024 and 2048 is
+the first value that wraps, so the headroom ends AT one doubling rather
+than including it. The test now
 computes the required bitwidth from `blob.h` and says so by name.
 
 ### Corrected sentences that survived by being moved, again
@@ -3317,13 +3319,149 @@ its figure.*
 `control`'s position is that 58 s was already over the line between
 "run after every edit" and "run before you push", and that an expensive
 test which also cries wolf gets routed around. The crying wolf is fixed
-(three false alarms, above). The cost is accepted rather than reduced:
-running the probes at a smaller scope saves about 30% per probe — 4.4 s
-against 6.3 s, measured — which does not change the picture, because the
-bulk is JVM startup and the main `plan.als` run. The lever if it becomes
-intolerable is to put the three Alloy probes behind a flag CI sets, with
-a named `skip()` so `main()` refuses a bare pass. Not taken: the probes
-are the only thing showing these checks can fail at all.
+— the three false alarms are recorded in `tests/run.py`'s own comments,
+beside each guard, not in this section.
+
+**The cost is accepted, and the obvious lever does not exist.** This
+first said a smaller probe scope "saves about 30% per probe — 4.4 s
+against 6.3 s", which was one sample, did not name the scope it meant,
+and is wrong twice over. `claims` ran three repetitions at three
+scopes: 6.90 s at 8, 5.04 s at 4, 4.10 s at 2 — a 27% saving at scope
+4, not 30%, and neither absolute reproduces. Worse, **at scope 4 and
+below the budget probe returns UNSAT**: `nwMaxFds` is 16 and
+`fdNeed = 8 + 2·#House` cannot exceed it with four houses, so the probe
+stops being able to fail and the suite would refuse it. Lowering the
+scope does not buy 30%; it costs one of the three probes.
+
+The lever that remains is a flag CI sets, with a named `skip()` so
+`main()` refuses a bare pass. Not taken: the probes are the only thing
+showing these checks can fail at all.
 
 Anyone tempted to raise `12 Int` should measure first — Alloy's cost
 scales badly with the bitwidth.
+
+## 42. Round four: the corrections overshot, and the ladder lied above 10,000 (2026-09-11)
+
+`control` and `claims` against `547f7ba`, on exactly the fixes round three
+made. Most of what came back was mine, and the shape repeats: **a sentence
+corrected into an absolute is a new wrong sentence**, and this round has
+four of them.
+
+### The overshoot, four times
+
+- "One hand-written number remains" (`CLAUDE.md`, `.claude/rules/plan.md`,
+  `.claude/agents/drift.md`, `plan.als`). `for 8` is hand-written three
+  times in `plan.als`. The sentence is now qualified: one hand-written
+  number *that must track the header*. The scope tracks nothing, because
+  `plan.als` declares no bound on `#House`; the suite requires the three
+  commands to agree and imposes a floor, and derives nothing.
+- "A blob.h change cannot fail the ASSUME" (in `tools/gen-spec-limits.py`,
+  the file that writes the config, so every generated cfg carried it —
+  the fourth place this sentence has been wrong). `MaxUnits = 0` fails it.
+  Qualified to positive values, with the zero case named.
+- `harness.md` called raising `NW_MAX_UNITS` "a four-place change" in the
+  same round that established limits are a two-place change. It is slow
+  because of the rebuild, not the arity.
+- `.claude/rules/plan.md` sent a reader to §39 for TLC hand-controls that
+  are in §41.
+
+### A count inside an assertion message is still a count
+
+`test_specs_are_checked` asserted `scope == 8` under a message saying
+"three briefs and HISTORY 39/41 state the bound as 8". One brief states
+it. CLAUDE.md's carve-out for counts is for counts *in a condition*,
+where being wrong fails something; this one was in the message, where
+being wrong fails nothing. The equality was also a fourth copy of the
+number. It is a floor now — `scope >= 2`, below which the binds must-fail
+probe cannot reach a counterexample, which is the only property the
+equality was really protecting. `control`'s `for 1` mutation still fails.
+
+### Comments are not commands, and a prefix match cannot tell
+
+Round three narrowed the Int-bitwidth guard from "`re.findall` over the
+whole file" to "lines starting `check ` or `run `". `plan.als` is mostly
+prose *about* `check Sealed` and `run sealed`. `control` added one comment
+line beginning "check Sealed is the one carrying…" and got
+`['12','12','12'] over 4 commands` — three identical values reported as a
+disagreement. Worse, the same predicate fed the probes' stripper: a
+comment line starting `check ` that also closed the block comment was
+deleted from every probe copy, unterminating the comment, and the failure
+read *the must-fail probe for Sealed did not solve* — pointing at the
+probe for a defect in `plan.als`. Decided once now, on the source with
+comments blanked, carrying line numbers so the stripper drops exactly the
+lines the guard counted.
+
+Same class in the TLC config check: `named` read to EOF, so any trailing
+line — a comment TLC ignores — joined the set and failed under a message
+claiming an invariant had been dropped. Bare identifiers only.
+
+### The ladder reported a timeout at every rung above 10,000
+
+The width fix (`w = max(4, len(str(n-1)))`) reached the baker and both
+report readers and **missed the wait loop's own `house=(u\d{4})`**.
+Measured on the expression: at n=10001 it finds 1001 distinct names, at
+n=10240 it finds 1024. So above the four-digit boundary the loop could
+never see completion and always ran to the deadline — inside the interval
+this tool exists to characterise. Found by grepping for the literal after
+the fix rather than by running, because at those rungs the city dies
+first and the death exit hides it.
+
+Fixing the deadline branch alongside it nearly broke the tool's headline
+result. `control` was right that `timed_out = ... and t_open is None`
+missed a city that opens and is then too slow. But the loop has **three**
+exits, not two, and `timed_out = not completed` would have relabelled the
+third — PID 1 exiting on its own, which is what the documented break *is*
+— as a hang. Verified by running the breaking rung:
+
+```
+FAIL n=10240 phase=boot     open=Nones all-ran=0.1s fds=20488 dupslots=16384
+     why: city did not open with 10240 houses; last: [nw-root] HALT: log pipe
+```
+
+Seconds, not the 5120 s deadline a timeout message would have claimed.
+A flag at each exit; nothing inferred.
+
+### The ladder repairs invariant-3 drift rather than detecting it
+
+`control`: `blob.h` at `NW_FD_RESERVED 10`, the repo baker hand-set to
+99, and the built tree read 10 at every rung. `build_at()` rewrites the
+baker's whole limit tuple from the header, so a real disagreement is
+overwritten and the ladder stays green through it. That is correct for a
+measurement harness and wrong to read as coverage; `_blob_int`'s docstring
+frames the drift class as the thing it fixed, so the docstring now says
+which half.
+
+### Two ways the roster lied
+
+`sh install-agents.sh --list` from any directory but the repo root printed
+its headings, no agents, no territories, and **exited 0**. Every path is
+relative and both loops skip a missing file. CLAUDE.md sends an agent here
+to find out who to dispatch and the answer was "nobody" — strictly worse
+than the stale heredoc it replaced, which was never empty. `cd
+"$(dirname "$0")"`.
+
+And `--check` had acquired a dependency on a build product: `drift.md`
+names `specs/limits.als`, which `make stage` generates, so a reviewer
+following `claims.md`'s own instruction to run it directly on a fresh
+clone got a failure about a *brief*. Declared with the script's own
+`absent-ok` marker. Putting two markers on two lines then exposed a
+latent bug in the script: the match separates on spaces and the markers
+were joined by a newline, so both silently stopped matching.
+
+### drift.md's generated-columns paragraph
+
+It sat between two rows of the table, orphaning the lengths row from its
+header, and its blanket "do not report them as a mismatch" covered the one
+cell that is *not* generated — the `units` row's `plan.als` scope. Moved
+below the table, with the exception named: report the commands disagreeing
+among themselves, never the scope against `NW_MAX_UNITS`.
+
+### Not fixed, recorded
+
+- The TLC invariants still have no in-suite must-fail probe; their
+  controls were run by hand and are in §41. `plan.md` separates them from
+  the Alloy side for exactly this reason.
+- `scale-probe.py`'s `missing`/`dupes` are O(n²) in Python — 3.46 s and
+  1.01 s at n=10240, fine at every documented rung, minutes above ~32k.
+- A *different but working* Alloy version is untested. The parse is
+  fail-safe (the arity guard trips), so no hash check was added.

@@ -2057,7 +2057,13 @@ def test_specs_are_checked():
     expect(len(inv_block) == 2,
            f"the generated Plan.cfg has no INVARIANTS block, so TLC "
            f"checks nothing:\n{cfg_text}")
-    named = {l.strip() for l in inv_block[1].splitlines() if l.strip()}
+    # Bare identifiers only. Reading to EOF meant any trailing line --
+    # including a comment TLC ignores -- joined the set and failed the
+    # assertion under a message claiming an invariant had been dropped.
+    # `control` appended `\\* end of generated config` and watched it fire
+    # on a config TLC checks completely.
+    named = {l.strip() for l in inv_block[1].splitlines()
+             if l.strip() and re.fullmatch(r"[A-Za-z_]\w*", l.strip())}
     expect(named == {"FdBudgetCovers", "FdNeedAgrees", "LargestCityFits",
                      "TypeOK"},
            f"the generated Plan.cfg names invariants {sorted(named)}. "
@@ -2101,8 +2107,25 @@ def test_specs_are_checked():
     # the failure arrived as "the spec disagrees with blob.h's limits" --
     # the exact wrong-diagnosis this assertion exists to prevent,
     # reproduced while it was in place and green. `control`.
-    cmds = [l for l in open(f"{lab}/plan.als").read().splitlines()
-            if l.lstrip().startswith(("check ", "run "))]
+    # COMMENTS ARE NOT COMMANDS, and a prefix match on a raw line cannot
+    # tell the difference -- in a file that is mostly prose about `check
+    # Sealed` and `run sealed`. `control` added a comment line beginning
+    # "check Sealed is the one carrying..." and got "commands do not all
+    # fix the same Int bitwidth: ['12','12','12'] over 4 commands", three
+    # identical values reported as a disagreement. Worse, the same
+    # predicate drives the probes' stripper below: a comment line
+    # starting `check ` that also closes the block comment was deleted
+    # from every probe copy, unterminating the comment, and the failure
+    # read "the must-fail probe for Sealed did not solve" -- pointing at
+    # the probe for a defect in plan.als.
+    #
+    # So decide it once, on the source with comments blanked out, and
+    # carry the line NUMBERS so the stripper below drops exactly these.
+    als_raw = open(f"{lab}/plan.als").read().splitlines()
+    als_bare = strip_c_comments("\n".join(als_raw)).splitlines()
+    cmd_ix = [i for i, l in enumerate(als_bare)
+              if l.lstrip().startswith(("check ", "run "))]
+    cmds = [als_bare[i] for i in cmd_ix]
     bits = [m.group(1) for m in
             (re.search(r"but (\d+) Int", l) for l in cmds) if m]
     scopes = [m.group(1) for m in
@@ -2111,20 +2134,30 @@ def test_specs_are_checked():
            f"plan.als's Alloy commands do not all fix the same Int "
            f"bitwidth: {bits} over {len(cmds)} commands")
     # THE SCOPE IS A LIMIT TOO, and it was pinned by nothing: `control`
-    # set every command to `for 1` and the test passed while three briefs
-    # and HISTORY 39/41 all say the results are bounded "at scope 8". The
-    # must-fail probes made it worse by hardcoding their own `for 8`, so
-    # they kept finding counterexamples at a scope the real checks had
-    # stopped using.
+    # set every command to `for 1` and the test passed while
+    # `.claude/rules/plan.md` and HISTORY 39/41 say the results are
+    # bounded "at scope 8". The must-fail probes made it worse by
+    # hardcoding their own `for 8`, so they kept finding counterexamples
+    # at a scope the real checks had stopped using.
     expect(len(scopes) == len(cmds) and len(set(scopes)) == 1,
            f"plan.als's Alloy commands do not all use the same scope: "
            f"{scopes} over {len(cmds)} commands")
     scope = int(scopes[0])
-    expect(scope == 8,
-           f"plan.als runs Alloy at scope {scope}; three briefs and "
-           f"HISTORY 39/41 state the bound as 8. Change them together or "
-           f"not at all -- a bound stated in prose and set in a command "
-           f"is two places.")
+    # A FLOOR, not an equality. `scope == 8` was a fourth copy of the
+    # number (plan.als x3 and here), and its message said "three briefs"
+    # when one brief says it -- a count, in the one place CLAUDE.md
+    # permits one, but inside a MESSAGE rather than a condition, so being
+    # wrong failed nothing. `control`. The floor keeps the control that
+    # matters -- `control` set every command to `for 1`, and at scope 1
+    # `#binds` cannot exceed 1, so the binds probe could not find its
+    # counterexample -- without giving the bound another place to be
+    # edited. The consistency check above is what stops the commands
+    # disagreeing; plan.als is the single source of the value.
+    expect(scope >= 2,
+           f"plan.als runs Alloy at scope {scope}. Below 2 the binds "
+           f"must-fail probe cannot reach a counterexample (#binds "
+           f"cannot exceed the scope), so the bind half of Sealed would "
+           f"be certified by a probe that cannot fail.")
     have = int(bits[0])
     need = 2
     while (1 << (need - 1)) - 1 < vals["nwMaxFds"]:
@@ -2248,8 +2281,8 @@ def test_specs_are_checked():
                f"this means the header changed shape -- fix the pattern; "
                f"do not delete the probe, it is the only thing showing "
                f"this check can fail.")
-        pl = "\n".join(l for l in pl.splitlines()
-                        if not l.lstrip().startswith(("check ", "run ")))
+        pl = "\n".join(l for i, l in enumerate(pl.splitlines())
+                        if i not in set(cmd_ix))
         pl += f"\ncheck {name} for {scope} but {have} Int\n"
         open(f"{d}/plan.als", "w").write(pl)
         open(f"{d}/limits.als", "w").write(lm)

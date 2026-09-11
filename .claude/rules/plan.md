@@ -86,16 +86,28 @@ suite breaks the thing each one is about and requires a counterexample.
 `Sealed` gets two probes, one per conjunct, because the bind half admits
 no counterexample at the scope the fd half fails at.
 The TLC invariants have no such probe: their controls were run by hand
-once and are recorded in `HISTORY.md` §39, which is weaker and is why
-this sentence separates them.
+once and are recorded in `HISTORY.md` §41, which is weaker and is why
+this sentence separates them. (This pointed at §39 until 2026-09-11.
+§39 is the round the jars landed; the TLC hand-controls are §41.
+`claims`.)
 
 The limits both specs use are generated from `blob.h` by
 `tools/gen-spec-limits.py` — including the lid bits, as of 2026-09-11.
-**One hand-written number remains**, Alloy's `but 12 Int` bitwidth in
-`plan.als`, and `test_specs_are_checked` asserts it covers `NW_MAX_FDS`.
+**One hand-written number remains that must track the header**, Alloy's
+`but 12 Int` bitwidth in `plan.als`, and `test_specs_are_checked`
+asserts it covers `NW_MAX_FDS`. The qualifier is load-bearing: `for 8`
+is hand-written three times in the same file and is *not* covered by
+that sentence, because nothing in `blob.h` corresponds to it — this
+file declares no bound on `#House`. The suite requires the three
+commands to agree and imposes a floor of 2 (below which the binds
+must-fail probe cannot reach a counterexample); it does not derive the
+value, and the prose copies of "scope 8" — here, and in `HISTORY.md`
+§39 and §41 — are pinned by nothing.
 (This said "neither file holds a limit to drift", which the same round's
-own work disproved three lines later in `plan.als`. Correcting a
-sentence into an absolute is how the last four of these went wrong.)
+own work disproved three lines later in `plan.als`; then "one
+hand-written number remains", which `claims` disproved by pointing at
+`for 8`. Correcting a sentence into an absolute is how the last five of
+these went wrong.)
 
 *This section said the opposite until 2026-09-11 — "you cannot verify by
 running … no `alloy`, no `tlc`, and nothing in the `Makefile` or
@@ -116,26 +128,30 @@ the fd budget. `HISTORY.md` §39.
 
 - **TLC's `BindNeed` is only ever evaluated at 0.** It is reachable only
   through `TypeOK`, and `Init` gives every house an empty bind set.
-  Measured: adding `BindNeed = 0` as a `TypeOK` conjunct holds in all 64
-  states, and `BindNeed # 0` is violated in the initial state. Replacing
-  the whole recursion with `BindNeed == 0` runs clean.
+  Measured: adding `BindNeed = 0` as a `TypeOK` conjunct holds in every
+  state TLC explores, and `BindNeed # 0` is violated in the initial
+  state. Replacing the whole recursion with `BindNeed == 0` runs clean.
 
   *This was written as a TLA+ limitation, and it was not: `control`
   deleted the bind conjunct from Alloy's `pred sealed` -- half the
-  predicate the check is named for -- and the suite passed, because at
-  scope 8 `#binds` cannot exceed 64 while `nwMaxBinds` is 128, so no
-  counterexample exists at any legal header value.* The Alloy half is
-  pinned now, by a third must-fail probe that lowers `nwMaxBinds` below
-  what the scope can reach. The TLA+ half is still unpinned; exercising
-  it needs an `Init` that ranges over bind sets.
+  predicate the check is named for -- and the suite passed, because
+  `#binds` is capped by the scope times itself while `nwMaxBinds` is
+  `NW_MAX_BINDS`, and at today's values the first cannot exceed the
+  second, so no counterexample exists at any legal header value.* The
+  Alloy half is pinned now, by a third must-fail probe that lowers
+  `nwMaxBinds` below what the scope can reach. The TLA+ half is still
+  unpinned; exercising it needs an `Init` that ranges over bind sets.
 - `plan.als`'s three cross-field facts (`brickNeedsNewNS`,
   `bindsNeedBrick`, `landlockNeedsBrick`) are facts, not assertions, so
   they constrain instances rather than being tested. `control` inverted
   `brickNeedsNewNS` into the plan `nwcheck.c` rejects and every check
   stayed green. Their enforcement is `nwcheck.c` plus
   `test_checker_rejects_crafted_fields`.
-- Both results are bounded: Alloy at scope 8 with a 12-bit `Int`, TLC at
-  one state per legal unit count.
+- Both results are bounded: Alloy at the scope and bitwidth written on
+  the commands in `plan.als` (8 and 12 today, and the suite asserts the
+  bitwidth covers `NW_MAX_FDS`), TLC at one state per legal unit count.
+  Read the numbers off the commands, not off this line — see the
+  `but 12 Int` note above for why the scope has nothing to track.
 
 So a spec still says nothing about descriptor handling at runtime, which
 is where every real bug in this project has been. It now says something

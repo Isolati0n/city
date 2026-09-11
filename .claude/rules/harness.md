@@ -205,8 +205,8 @@ machine will not have it.
 ## Scale: measured 2026-09-11, and the numbers are in the tool
 
 The gap is closed by `tools/scale-probe.py`. It rebuilds the tree at a
-raised `NW_MAX_UNITS` — a four-place change, so far too slow for
-`make test` — bakes a city of N units, boots it under
+raised `NW_MAX_UNITS` — a full rebuild plus a re-bake, so far too slow
+for `make test` — bakes a city of N units, boots it under
 `unshare --pid --fork --mount-proc`, and checks that every unit ran,
 reported exactly once, held no ungranted descriptor, and was reaped.
 
@@ -226,6 +226,28 @@ house and the spawner inherits PID 1's ~2n log pipes, so the sweep is
 n × 2n. Dividing the measured time by 2n² gives 1.26, 1.47 and 1.61 µs
 per swept descriptor at 1024/2048/4096 — consistent to within 30%, which
 a wrong model would not be.
+
+**The break is a DEATH, and a large-N harness has to tell three exits
+apart.** Its wait loop ends when every house has reported, when the
+deadline expires, or when PID 1 exits on its own — and the last is what
+the break above *is*. Collapsing the last two into "timed out" relabels
+the tool's headline result as a hang: verified 2026-09-11 by running the
+breaking rung, which returns in seconds with
+`why: city did not open with 10240 houses; last: [nw-root] HALT: log
+pipe`. A timeout message there would have been both wrong and slow.
+Conversely the deadline branch must not require that the city never
+opened: one that opens and is then too slow falls through to the content
+checks and reads as lost units. Set a flag at each exit; do not infer
+which one was taken.
+
+**And parameterise every reader by the name width, including the ones
+inside the wait loop.** The width fix reached the baker and the two
+report readers and missed the loop's own `house=(u\d{4})`, so above the
+four-digit boundary the loop never saw completion and ran to the
+deadline at every rung — inside the interval the tool exists to
+characterise. Found by grepping for the literal after the fix, not by
+running: at the rungs where it bites, the city dies first and the death
+exit hides it.
 
 ### Three traps this found, all in the probe rather than the code
 

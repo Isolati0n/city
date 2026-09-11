@@ -54,9 +54,14 @@ sections after this one and are deliberately not numbered here.
    `specs/Plan.cfg`, generated out of `blob.h` by
    `tools/gen-spec-limits.py`, so those two cells cannot disagree with
    the header — the drift class is removed there rather than checked.
-   One hand-written number survives in a spec, Alloy's `but 12 Int`
-   bitwidth, and `test_specs_are_checked` asserts it covers
-   `NW_MAX_FDS`. (`Plan.tla` also hand-copied the lid bits until
+   One hand-written number *that must track the header* survives in a
+   spec: Alloy's `but 12 Int` bitwidth, and `test_specs_are_checked`
+   asserts it covers `NW_MAX_FDS`. This said "one hand-written number"
+   flat until 2026-09-11, and `plan.als` also writes `for 8` three
+   times — a hand-written number with nothing in `blob.h` to track,
+   because the file declares no bound on `#House` at all. The suite
+   requires the three to agree and imposes a floor; it does not derive
+   the value. `claims`. (`Plan.tla` also hand-copied the lid bits until
    2026-09-11; nothing checked them and their only consumers are
    unchecked predicates, so `LidNewNS == 999` ran clean. Generated now.)
 4. **`nw-spawn` exits; its death is not a failure mode.** It forks one
@@ -189,7 +194,8 @@ rediscover them.
 make            # all binaries
 make stage      # stages to /tmp/nw-init-run
 make test       # stage + install-agents.sh --check + nw-check
-                # + tests/run.py + tools/coverage-tcb.sh (99% floor)
+                # + tests/run.py + tools/coverage-tcb.sh (the floor is
+                #   the script's own default -- read it there, not here)
 make proof      # the CBMC proofs of the validator, and their controls
 ```
 
@@ -248,9 +254,11 @@ The rule stands because of what it cost, not because anything is still
 missing. *This paragraph said the opposite until 2026-09-11 — that none of
 that work was in the tree and it was "one agent's next task" — and it named
 `grep` for `RB_POWER_OFF`, `reboot(` or `qemu` as the evidence. Run
-verbatim, that grep returns hits in `pid1.c` and the `Makefile` --
-line numbers deliberately not quoted, because the ones this sentence
-gave went stale within one commit when `sync()` shifted them. `claims`
+verbatim, that grep returns hits in `dawn.c`, `pid1.c` and the
+`Makefile` -- line numbers deliberately not quoted, because the ones
+this sentence gave went stale within one commit when `sync()` shifted
+them, and `dawn.c` was missed off this list for exactly as long as the
+list was written from memory rather than run. `claims`
 found it. A stale sentence here is worse than elsewhere: it instructs, so
 an agent that believes it re-does work that is already committed. Note
 what it is *not* replaced with — a new present-tense claim about what

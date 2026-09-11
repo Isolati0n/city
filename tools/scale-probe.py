@@ -54,7 +54,16 @@ def _blob_int(name, src=None):
     checking against 8: the baker accepts a city the C budget cannot
     hold, silently, on every rung. Invariant 3's drift class,
     reintroduced by the tool whose job is changing that limit.
-    `control`."""
+    `control`.
+
+    THIS REPAIRS THAT DRIFT, IT DOES NOT DETECT IT. build_at() rewrites
+    the baker's whole limit tuple from blob.h, so a wrong FD_RESERVED
+    already sitting in bakery/nw-cc.py is overwritten on every rung and
+    the ladder stays green through a genuine invariant-3 disagreement.
+    `control` verified it: blob.h at 10, the repo baker at 99, and the
+    built tree read 10. Reconciling is right for a measurement harness --
+    the ladder is not a drift check. `drift` is, and the paragraph above
+    should not be read as saying otherwise."""
     src = src or open(os.path.join(ROOT, "blob.h")).read()
     m = re.search(rf"^[ \t]*#[ \t]*define[ \t]+{name}[ \t]+(\S+)[ \t]*$",
                   src, re.M)
@@ -199,6 +208,7 @@ def probe(n_units, work, hold_ms=None):
     # nothing closes the city but this probe.
     log = os.path.join(work, f"c{n_units}.log")
     t_open = t_reaped = None
+    completed = died = False
     deadline = time.time() + max(120, 0.5 * n_units)
     with open(log, "wb") as fh:
         p = subprocess.Popen(
@@ -209,6 +219,7 @@ def probe(n_units, work, hold_ms=None):
             t1 = time.time()
             while time.time() < deadline:
                 if p.poll() is not None:
+                    died = True
                     break
                 try:
                     seen = open(log, "rb").read().decode("utf-8", "replace")
@@ -220,11 +231,32 @@ def probe(n_units, work, hold_ms=None):
                     t_reaped = time.time() - t1
                 # Every house is oneshot, so "all reported" is the real
                 # end of work; the reap line only appears at shutdown.
+                # `w`, NOT a literal 4. This line was the one survivor
+                # of the width fix at 186 -- the readers at 312/313 were
+                # parameterised and this one was not, so from 10001 units
+                # up the set never reached n_units, the loop always ran
+                # to the deadline, and the tool reported a timeout at
+                # every rung above the width boundary. That is inside the
+                # interval this tool exists to characterise.
                 if t_open is not None and \
-                        len(set(re.findall(r"house=(u\d{4})", seen))) == n_units:
+                        len(set(re.findall(rf"house=(u\d{{{w}}})", seen))) \
+                        == n_units:
+                    completed = True
                     break
                 time.sleep(0.05)
-            timed_out = time.time() >= deadline and t_open is None
+            # NOT `and t_open is None`. That clause meant a city which
+            # opened and was then too slow to finish reporting fell
+            # through to the content checks and read as "N units never
+            # reported" -- the exact conflation the timeout branch was
+            # written against, surviving on the far side of t_open.
+            # `control`. But the loop has THREE exits, not two, and
+            # `not completed` alone made the third one lie: PID 1
+            # exiting on its own is how the documented break at ~10k
+            # presents (`HALT: log pipe`), and calling that "the city
+            # did not open within Ns" would have relabelled this tool's
+            # own headline result as a timeout. A death falls through to
+            # the content checks, which quote the halt line.
+            timed_out = not completed and not died
             work_s = time.time() - t1
             # The city may already be gone -- at sizes past a real limit
             # it dies on its own, and reading /proc for a pid that has

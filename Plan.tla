@@ -106,11 +106,12 @@ BindsNeedBrick ==
    tools/gen-spec-limits.py, so this file holds no copy of a limit to
    drift from the header.
 
-   It does NOT follow that a blob.h change fails anything here, and this
-   paragraph claimed it did until `claims` ran the case: raising
+   It does NOT follow that a SANE blob.h change fails anything here, and
+   this paragraph claimed it did until `claims` ran the case: raising
    NW_MAX_UNITS to 128 gives 128 states and a clean run, because the
    ASSUME is `MaxUnits \in Nat \ {0}` and every positive value satisfies
-   it. That is the point of deriving them -- there is nothing left to
+   it. Zero does not: NW_MAX_UNITS 0 fails the ASSUME, which is why the
+   qualifier is there rather than a flat "cannot". That is the point of deriving them -- there is nothing left to
    disagree. What the invariants below check is the RELATIONSHIP between
    the limits, which is the part a header edit can genuinely break.
 

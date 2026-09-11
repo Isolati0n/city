@@ -146,7 +146,11 @@ check Sealed for 8 but 12 Int
    stated.
 
    `but 12 Int` IS a real limit, and it is the one hand-written number
-   left in this file. Alloy's signed 12-bit Int spans -2048..2047, so it
+   left in this file THAT TRACKS THE HEADER. The qualifier matters:
+   `for 8` above is hand-written too, three times, and `claims` read
+   the unqualified sentence as claiming otherwise. The difference is
+   that the bitwidth has something in blob.h to be wrong about and the
+   scope does not. Alloy's signed 12-bit Int spans -2048..2047, so it
    must cover NW_MAX_FDS; at 2048 the value wraps and the failure
    presents as a counterexample to Sealed plus a vacuous model -- the
    right problem under two wrong names. test_specs_are_checked asserts

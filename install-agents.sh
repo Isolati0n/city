@@ -28,6 +28,16 @@
 
 set -eu
 
+# RUN FROM THE REPOSITORY ROOT WHATEVER THE CALLER'S CWD IS. Every path
+# below is relative, and both roster loops skip a missing file with
+# `[ -e "$f" ] || continue` -- so from any other directory --list printed
+# its headings, no agents, no territories, and exited 0. An empty roster
+# that succeeds is worse than the stale heredoc it replaced: CLAUDE.md
+# sends an agent here to find out who to dispatch, and the answer was
+# "nobody". `control` found it from /tmp. --check was already loud
+# (it fails on the missing directory), which is why this went unnoticed.
+cd "$(dirname "$0")"
+
 DIR=.claude/agents
 MARK='<!-- nw-init:install-agents v1 -->'
 
@@ -145,8 +155,13 @@ take it from the code at run time instead"
         # paths (/dev/null, /nw/bin, /tmp/nw-init-run) and are not repo files.
         # A brief that deliberately names something gone declares it:
         #   <!-- nw-init:absent-ok wire_order.py pkeybench.c -->
+        # `tr` because the case match below separates on spaces: two
+        # markers on two lines joined with a newline, and the path either
+        # side of it stopped matching -- silently, leaving the fail it was
+        # written to suppress.
         okpaths=$(grep -o '<!-- nw-init:absent-ok [^>]*-->' "$f" 2>/dev/null \
-                  | sed 's/<!-- nw-init:absent-ok //; s/ *-->//' || true)
+                  | sed 's/<!-- nw-init:absent-ok //; s/ *-->//' \
+                  | tr '\n' ' ' || true)
         for p in $(grep -o '`[A-Za-z0-9_][A-Za-z0-9_./-]*\.\(c\|h\|py\|als\|tla\|md\|sh\)`' \
                    "$f" 2>/dev/null | tr -d '`' | sort -u); do
             case " $okpaths " in *" $p "*) continue ;; esac
