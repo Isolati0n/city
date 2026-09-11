@@ -41,14 +41,41 @@ def read_blob_h(path=None):
     src = open(path or os.path.join(ROOT, "blob.h")).read()
     out = {}
     for spec_name, c_name in WANTED.items():
-        m = re.search(rf"^#define\s+{c_name}\s+(\d+)", src, re.M)
-        if not m:
+        # `(\d+)` alone reads 0x8 as 0 and 0200 as 200, silently, and
+        # re.search takes the FIRST #define so an #ifdef pair hands back
+        # whichever arm is written first. `control` put
+        # `#define NW_FD_RESERVED 0x8` in blob.h -- identical to the C
+        # preprocessor, every _Static_assert intact -- and both specs
+        # then reasoned with Reserved = 0 and both passed, because
+        # FdArithmetic uses it on both sides and FdBudgetCovers only got
+        # slacker. Removing the second copy does not help if the first
+        # one is read wrong.
+        pat = rf"^[ \t]*#[ \t]*define[ \t]+{c_name}[ \t]+(\S+)[ \t]*$"
+        found = re.findall(pat, src, re.M)
+        if not found:
             raise SystemExit(
-                f"gen-spec-limits: {c_name} not found in blob.h. The specs "
-                f"derive their limits from it; a rename here is a four-place "
+                f"gen-spec-limits: {c_name} not found in blob.h as a plain "
+                f"single-line #define. The specs derive their limits from "
+                f"it; a rename or a computed value here is a four-place "
                 f"change (invariant 3) and must not be papered over with a "
                 f"default.")
-        out[spec_name] = int(m.group(1))
+        if len(found) > 1:
+            raise SystemExit(
+                f"gen-spec-limits: {c_name} is defined {len(found)} times "
+                f"in blob.h ({found}). Which one the compiler uses depends "
+                f"on #if arms this tool cannot see, so it refuses to guess.")
+        tok = found[0]
+        try:
+            # base 0: honours 0x.. and 0.. exactly as C does.
+            val = int(tok, 0)
+        except ValueError:
+            raise SystemExit(
+                f"gen-spec-limits: {c_name} is `{tok}`, which is not an "
+                f"integer literal this tool can read. Spell it as one, or "
+                f"teach this tool to run cpp -- do not let it guess.")
+        if val < 0:
+            raise SystemExit(f"gen-spec-limits: {c_name} is negative")
+        out[spec_name] = val
     return out
 
 
@@ -80,6 +107,9 @@ NEXT Next
 
 INVARIANTS
     FdBudgetCovers
+    FdNeedAgrees
+    LargestCityFits
+    TypeOK
 """
 
 

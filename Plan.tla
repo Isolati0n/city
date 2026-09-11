@@ -49,11 +49,18 @@ FdNeed == Reserved + 2 * n
    factor that grows with sharing. Summing per-house cardinalities is what
    the implementations do. Found by `drift`.
 
-   NOT RUN. There is no tlc and no tla2tools jar on this machine, and
-   nothing in the Makefile or tests/run.py executes this file. Plan.tla
-   still has no next-state relation, so what stands here is a type
-   predicate no behaviour is checked against. Treat this as a corrected
-   statement of the format, not as a verified one. *)
+   RUN as of 2026-09-11, but NOT by much: BindNeed is reachable only
+   through TypeOK, and Init gives every house an empty bind set, so the
+   value checked is always 0. The correction above is still reasoning
+   rather than a checked result. Exercising it needs an Init that ranges
+   over bind sets, which multiplies the state space; not done, and said
+   here rather than left to be assumed from the file being executed.
+
+   (This paragraph read "NOT RUN. There is no tlc and no tla2tools jar
+   on this machine ... Plan.tla still has no next-state relation" until
+   `claims` pointed out it was sitting 64 lines above the Next the same
+   commit added. Corrected in plan.als and missed here -- the same
+   survived-by-being-moved shape this file has now produced twice.) *)
 BindNeed == IF n = 0 THEN 0
             ELSE LET Rows[i \in 1..n] ==
                      IF i = 1 THEN Cardinality(binds[i])
@@ -93,10 +100,16 @@ BindsNeedBrick ==
    unit count rather than read.
 
    The constants come from specs/Plan.cfg, generated out of blob.h by
-   tools/gen-spec-limits.py, so the ASSUME above is a live comparison
-   against the header rather than a remembered copy. Change NW_MAX_UNITS
-   in blob.h alone and the ASSUME fails here -- which is invariant 3
-   enforced instead of recalled.
+   tools/gen-spec-limits.py, so this file holds no copy of a limit to
+   drift from the header.
+
+   It does NOT follow that a blob.h change fails anything here, and this
+   paragraph claimed it did until `claims` ran the case: raising
+   NW_MAX_UNITS to 128 gives 128 states and a clean run, because the
+   ASSUME is `MaxUnits \in Nat \ {0}` and every positive value satisfies
+   it. That is the point of deriving them -- there is nothing left to
+   disagree. What the invariants below check is the RELATIONSHIP between
+   the limits, which is the part a header edit can genuinely break.
 
    FdBudgetCovers is the same claim as the _Static_assert in blob.h, said
    in a second place and checked by a different tool: the descriptor
@@ -120,6 +133,23 @@ Init ==
 Next == UNCHANGED <<n, kind, lids, brick, binds>>
 
 FdBudgetCovers == FdNeed <= MaxFds
+
+(* FdNeed computed a SECOND way, so the formula itself is pinned and not
+   just its consequence. FdBudgetCovers gets EASIER as FdNeed shrinks:
+   `control` changed `Reserved + 2 * n` to `Reserved + n` and the whole
+   suite stayed green. That is the same defect the Alloy side got
+   FdArithmetic for -- the fd formula is one of the four places
+   invariant 3 names, and its TLA+ copy was as unpinned as Alloy's was
+   for the file's whole life. *)
+FdNeedAgrees == FdNeed = Reserved + n + n
+
+(* THE BOUNDARY, which a state count cannot see. Init ranges over n, and
+   asserting "64 distinct states" says how many were explored, not which:
+   `control` shifted Init to 0..MaxUnits-1, still got 64 states, and the
+   only case FdBudgetCovers exists for -- the largest legal city -- was
+   never checked. This is a constant, so it holds regardless of what
+   Init does. *)
+LargestCityFits == Reserved + 2 * MaxUnits <= MaxFds
 
 (* NoLiveRewrite is deliberately NOT restated as a predicate here.
    With edges removed, e was the only variable with a plausible runtime

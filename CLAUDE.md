@@ -31,8 +31,10 @@ sections after this one and are deliberately not numbered here.
 
 1. **No allocation, no parsing, no recursion after start in PID 1.** The blob
    is already validated; PID 1 reads a table, it does not interpret text.
-   **PID 1 mounts nothing** — `grep` for `mount` in `pid1.c` returns one hit
-   and it is a comment; there is no `mount(2)` call.
+   **PID 1 mounts nothing** — `grep` for `mount` in `pid1.c` returns only
+   comments; there is no `mount(2)` call. (This said "one hit" until
+   2026-09-11, when there were two. A count in an invariant is a hostage,
+   which this file's own rule says and this line disproved twice.)
    `dawn` mounts and hands PID 1 a path; nothing in the TCB below `dawn`
    learns what a filesystem is. The one text PID 1 reads is
    `<slots>/current`, at boot, bounded to `NW_NAME_LEN` and validated to
@@ -43,9 +45,18 @@ sections after this one and are deliberately not numbered here.
 2. **No compile-time file descriptor numbers alongside dynamic allocation.**
    This produced bugs 5, 9 and 13. Sweep `/proc/self/fd`; do not hardcode.
 3. **Limits are derived, never declared twice.** `NW_MAX_UNITS` feeds the
-   `_Static_assert` fd budget in `blob.h`. The same arithmetic appears in
-   `bakery/nw-cc.py`, `plan.als` (`fdNeed`) and `Plan.tla` (`FdNeed`). Change
-   one, change all four, or they drift.
+   `_Static_assert` fd budget in `blob.h`. The same *arithmetic* appears in
+   `bakery/nw-cc.py`, `plan.als` (`fdNeed`) and `Plan.tla` (`FdNeed`) —
+   change one, change all four, or they drift.
+
+   The *values* are now a two-place change: `blob.h` and
+   `bakery/nw-cc.py`. Both specs read theirs from `specs/limits.als` and
+   `specs/Plan.cfg`, generated out of `blob.h` by
+   `tools/gen-spec-limits.py`, so those two cells cannot disagree with
+   the header — the drift class is removed there rather than checked.
+   One hand-written number survives in a spec, Alloy's `but 12 Int`
+   bitwidth, and `test_specs_are_checked` asserts it covers
+   `NW_MAX_FDS`.
 4. **`nw-spawn` exits; its death is not a failure mode.** It forks one
    supervisor per unit, double-forked so PID 1 adopts the houses, reports the
    pids and exits 0. PID 1 requires a complete report *and* a clean exit —
@@ -145,7 +156,9 @@ where the work would land so it cannot be undone by someone being helpful.
 - **Freeze detection.** A house that goes silent but never exits is undetected
   by anything. Every form of detection needs a guessed constant, and the rule
   was attempted and wrong three times. See the Liveness section of
-  `.claude/agents/runtime.md`, which carries the full reasoning. (It was in
+  `.claude/rules/runtime.md`, which carries the full reasoning. (It was
+  `.claude/agents/` until the territories became rules; the path here
+  went stale in the same move.) (It was in
   `supervisor.md` until 2026-09-10; that brief merged into `runtime.md`.)
 - **Nothing a house does halts the city.** Exactly two things halt it: the
   plan fails validation at boot, or PID 1 dies. The `critical` flag was
@@ -173,7 +186,8 @@ rediscover them.
 ```
 make            # all binaries
 make stage      # stages to /tmp/nw-init-run
-make test       # stage + install-agents.sh --check + nw-check + tests/run.py
+make test       # stage + install-agents.sh --check + nw-check
+                # + tests/run.py + tools/coverage-tcb.sh (99% floor)
 make proof      # the CBMC proofs of the validator, and their controls
 ```
 

@@ -3000,7 +3000,7 @@ window the old field could have named, or a mutation that puts
 fixture is the design call; a 7s hold against 1.2s deaths is
 not that pin.
 
-## 38. The specs run, and neither of them parsed (2026-09-11)
+## 39. The specs run, and neither of them parsed (2026-09-11)
 
 Based on `554b6f9`. `tools/jars/` now carries TLC and Alloy, and
 `test_specs_are_checked` executes both. Everything below was invisible
@@ -3103,7 +3103,7 @@ call matches systemd, busybox and util-linux. The absence of `sync(` in
 the C sources before this was verbatim; the consequence was, and remains,
 a hypothesis.
 
-## 39. Scale, measured at last: quadratic, and it breaks at ~9,996 (2026-09-11)
+## 40. Scale, measured at last: quadratic, and it breaks at ~9,996 (2026-09-11)
 
 `tools/scale-probe.py`. The gap `harness.md` had carried since it was
 written — nothing tests scale, bugs have been correct at 4 units and
@@ -3187,3 +3187,123 @@ unit write its line twice and the test fails naming that unit.
 Separating routing from interleaving needs per-unit capture. That is the
 logging pass's problem, and it is the second thing that pass now has to
 answer for (the first is the group-TERM drain, §38).
+
+## 41. Two reviewers against the specs: ~25 findings, most of them mine (2026-09-11)
+
+`control` and `claims` against `713d4f7`. The landing that made the specs
+runnable was itself full of holes, and the pattern is worth naming: **a
+test that runs a solver is not a test that reads its answer.**
+
+### The verdict parser trusted output and ignored the exit code
+
+Alloy prints a command's error ON THE COMMAND'S OWN LINE, so a check that
+could not be solved still matched the verdict regex whenever the error
+text contained `SAT` or `UNSAT` — and the error text is the spec's
+absolute path. `control` put the lab in a directory named `UNSAT` and
+every assertion passed on a run where `Sealed` was never solved and Alloy
+exited 1. The exit code was sitting unread the whole time. Same for TLC.
+
+### Four more ways the checks could stop happening
+
+- **The `INVARIANTS` block could be deleted from the generated config.**
+  TLC then explored 64 states, checked nothing, exited 0, printed the
+  success string — and the `ok` line still said "invariant holds". The
+  generated config is now asserted to name each invariant.
+- **The check NAMES were parsed and thrown away.** `check Sealed`
+  renamed to a second `check FdArithmetic` kept the count at two while
+  the check carrying the whole budget claim stopped running.
+- **`FdNeed` in `Plan.tla` was unpinned.** `FdBudgetCovers` gets *easier*
+  as `FdNeed` shrinks, so `Reserved + 2 * n` → `Reserved + n` was green.
+  That is the same defect the Alloy side got `FdArithmetic` for. Now
+  `FdNeedAgrees` computes it a second way.
+- **The boundary was never checked.** Asserting "64 distinct states" says
+  how many, not which: shifting `Init` to `0..MaxUnits-1` still gave 64
+  states with the largest legal city never explored. `LargestCityFits` is
+  a constant invariant, so it holds whatever `Init` does. Verified: with
+  `MaxFds=135` it fails under both the pristine and the shifted `Init`.
+
+### Negating an assertion does not detect vacuity, and I shipped that first
+
+`control` made `Sealed` vacuous — `#House > 8 => sealed`, whose
+antecedent is unsatisfiable at scope 8 — and the check went vacuously
+UNSAT while the `run` stayed SAT and the `ok` line still said
+"non-vacuous". It also disarmed the recorded `NW_MAX_FDS=16` control.
+
+My first fix negated each assertion and required a counterexample. **It
+passed the control**, because `check ~A` asks for an instance where `A`
+holds, and a vacuously-true `A` holds everywhere — so `~A` is false
+everywhere and the counterexample is found either way. SAT for both.
+
+What separates them is breaking the thing the assertion is *about*: the
+negative control this project already asks for by hand, now run every
+time. `Sealed` must fail against a too-small budget; `FdArithmetic` must
+fail against the `+` union form. The vacuous `Sealed` stays UNSAT under a
+small budget, so it is caught.
+
+### The limit reader was silently wrong on three legal headers
+
+`#define NW_FD_RESERVED 0x8` read as **0** — `(\d+)` matches the leading
+zero and stops. `0200` read as 200, not 128. An `#ifdef` pair handed back
+whichever arm came first. `control` put the hex form in `blob.h` —
+identical to the C preprocessor, every `_Static_assert` intact — and both
+specs reasoned with `Reserved = 0` and both passed, because
+`FdArithmetic` uses it on both sides and `FdBudgetCovers` only got
+slacker. **Removing the second copy does not help if the first is read
+wrong.** Now: `int(tok, 0)`, duplicate defines refused, anything that is
+not a plain literal refused loudly.
+
+### The drift class was not removed; it moved into `but 12 Int`
+
+`claims`. Alloy's signed 12-bit Int spans −2048..2047, and `NW_MAX_FDS`
+must fit. At 2048 it wraps: `Sealed` acquires a counterexample and the
+model goes vacuous — two messages that both blame the spec for a scope
+problem, which is exactly the wrong-diagnosis shape `Plan.tla`'s ASSUME
+note was written about. Today's headroom is one doubling. The test now
+computes the required bitwidth from `blob.h` and says so by name.
+
+### Corrected sentences that survived by being moved, again
+
+Three more, all found by running the command the prose named:
+
+- **`.claude/rules/plan.md`** still said the specs "cannot be verified by
+  running … no `alloy`, no `tlc`, and nothing in the `Makefile` or
+  `tests/run.py` references either file" — every clause false, in the
+  file `tools/rules-hook.sh` hands to the next agent to touch a spec.
+  `plan.als`'s copy was corrected; this one was not.
+- **`Plan.tla` itself** kept a "NOT RUN … no next-state relation"
+  paragraph 64 lines above the `Next` the same commit added.
+- **`.claude/rules/runtime.md`** described `NW_PROF_BUILD` as assembled
+  from `NW_PROF_STRICT` plus `build_extra[]`. That profile was deleted on
+  2026-09-10; `CLAUDE.md` invariant 6 already said so.
+
+And one claim that was simply wrong: `Plan.tla`'s new comment said a
+`blob.h` change would fail the ASSUME. It cannot — the ASSUME is
+`MaxUnits \in Nat \ {0}` now, and raising `NW_MAX_UNITS` to 128 gives 128
+states and a clean run. That is the *point* of deriving the constants,
+and the paragraph claiming otherwise was describing the thing it had just
+replaced.
+
+### Counts, again
+
+Invariant 1 said `grep` for `mount` in `pid1.c` "returns one hit". It
+returns two, both comments. The invariant holds; its count did not — and
+invariant 4's repaired retraction had just anchored itself to that line
+as the model to follow. Third time the no-counts rule has been broken
+inside the numbered list. Both copies now say "only comments".
+
+`HISTORY.md` also had two sections numbered 38, which the record cites by
+number throughout. Renumbered; this is 41.
+
+### What `-Xss512m` actually is
+
+Stated as a flat "it overflows without this". `claims` ran it six times
+unflagged: three succeeded, three crashed. The flag is required **because
+the failure is intermittent** — a passing run without it proves nothing,
+which is the worst possible signal to hand a reader.
+
+### Cost
+
+`test_specs_are_checked` adds ~20 s to a ~29 s suite, effectively all
+Alloy, and the must-fail probes add two more solver runs. Still a
+run-it-every-time number, and TLC costs under a second. Anyone tempted to
+raise `12 Int` should measure first: Alloy's cost scales badly with it.

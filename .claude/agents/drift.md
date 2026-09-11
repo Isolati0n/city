@@ -25,6 +25,8 @@ remembering. You are the version that does not depend on that.
 | units | `NW_MAX_UNITS` | `MAX_UNITS` | scope / `fdNeed` | `MaxUnits` |
 | descriptors | `NW_MAX_FDS`, `NW_FD_RESERVED` | `MAX_FDS`, `FD_RESERVED` | `fdNeed` | `FdNeed`, `Reserved` |
 | binds | `NW_MAX_BINDS` | `MAX_BINDS` | `bindNeed` | `MaxBinds` |
+
+**The `plan.als` and `Plan.tla` columns are GENERATED as of 2026-09-11.** `MaxUnits`, `MaxFds`, `Reserved` and `MaxBinds` come from `specs/Plan.cfg`, and `nwReserved[]` and friends from `specs/limits.als`, both written out of `blob.h` by `tools/gen-spec-limits.py`. Those cells cannot disagree with the header, so do not report them as a mismatch — `plan.als` already records the cost of that once. A *limit* change is now a two-place change (`blob.h`, `bakery/nw-cc.py`); the *arithmetic* still appears in four places and is what "change one, change all four" now means. The one number still hand-written in a spec is Alloy's `but 12 Int` bitwidth, and `test_specs_are_checked` asserts it covers `NW_MAX_FDS`.
 | name / path / brick lengths | `NW_NAME_LEN`, `NW_PATH_LEN`, `NW_BRICK_LEN` | `NAME_LEN`, `PATH_LEN`, `BRICK_LEN` | — | — |
 
 **Struct layout** — the Python `struct.pack` format against the C structs.

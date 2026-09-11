@@ -66,6 +66,21 @@ fact landlockNeedsBrick { all h: House | Landlock in h.lids => some h.brick }
 
 fact namesAreHouses { #House >= 1 }
 
+/* THE THREE FACTS ABOVE ARE NOT CHECKED, and nothing here could check
+   them: a fact constrains which instances exist, so asserting one back
+   is a tautology. `control` INVERTED brickNeedsNewNS into the plan
+   nwcheck.c rejects -- `some h.brick => NewNS not in h.lids` -- and
+   every check in this file stayed green while the run was still SAT,
+   because no check mentions bricks.
+
+   They are enforced in nwcheck.c (NW_E_BRICKNS, NW_E_BINDIDX,
+   NW_E_LLBRICK) and pinned by test_checker_rejects_crafted_fields,
+   which crafts a blob the baker would never emit and asserts the
+   reason string. What they do here is shape the instances the two
+   checks below run against, which is worth having and is not the same
+   as being verified. Plan.tla carries the equivalent note; this file
+   did not until `claims` asked why. */
+
 /* Derived budget: reserved + 2 per house, both from blob.h. */
 fun fdNeed[]: Int { plus[nwReserved[], 2.mul[#House]] }
 
@@ -112,18 +127,30 @@ pred sealed { lte[fdNeed[], nwMaxFds[]] and lte[bindNeed[], nwMaxBinds[]] }
 assert FdArithmetic {
   fdNeed[] = plus[nwReserved[], plus[#House, #House]]
 }
-assert Sealed { sealed }
+assert Sealed {
+  sealed
+}
 
 check FdArithmetic for 8 but 12 Int
 check Sealed for 8 but 12 Int
 
-/* NOT a unit limit. `for 8 House` is Alloy's search scope -- how large a
-   model it will look for a counterexample in -- and it is 8 against
-   NW_MAX_UNITS = 64 in blob.h, MAX_UNITS in bakery/nw-cc.py and MaxUnits in
-   Plan.tla. This file declares no upper bound on #House at all, so there is
-   nothing here for those three to drift against; what would drift is a
-   reader taking 8 for the limit. Raising the scope costs solver time and
-   proves nothing extra about a bound that is not stated.
+/* NOT a unit limit. `for 8` is Alloy's search scope -- how large a model
+   it will look for a counterexample in -- and it is 8 against an
+   NW_MAX_UNITS this file deliberately does not name. It quoted the value
+   as 64 until 2026-09-11: a spec whose limits are generated should not
+   carry a hand-copied number in its prose either, and that one goes
+   stale the day the header moves. `claims`. This file declares no upper
+   bound on #House at all, so there is nothing here to drift against;
+   what would drift is a reader taking 8 for the limit. Raising the scope
+   costs solver time and proves nothing extra about a bound that is not
+   stated.
+
+   `but 12 Int` IS a real limit, and it is the one hand-written number
+   left in this file. Alloy's signed 12-bit Int spans -2048..2047, so it
+   must cover NW_MAX_FDS; at 2048 the value wraps and the failure
+   presents as a counterexample to Sealed plus a vacuous model -- the
+   right problem under two wrong names. test_specs_are_checked asserts
+   the bitwidth covers the generated limit, by name, before Alloy runs.
 
    Recorded 2026-09-11 after `drift` reported the 8-versus-64 row as a
    mismatch. It is a real question and the answer is that the cell is empty,

@@ -77,21 +77,46 @@ The boundary that does matter here is not between files, it is **trust**:
 
 ## The specs, honestly
 
-`plan.als` and `Plan.tla` are the one part of this repository **you
-cannot verify by running.** Nothing executes them: no `alloy`, no `tlc`,
-and nothing in the `Makefile` or `tests/run.py` references either file.
-The Alloy scope is small, `Plan.tla` has no next-state relation, and what
-remains is a type predicate no behaviour is checked against.
+**They run.** `tools/jars/` holds TLC and Alloy, and
+`test_specs_are_checked` in `tests/run.py` executes both inside
+`make test`. `TypeOK`, `FdBudgetCovers`, `FdNeedAgrees` and
+`LargestCityFits` are TLC invariants; `FdArithmetic` and `Sealed` are
+Alloy checks, each one shown failing when the thing it is about is
+broken. Their limits are generated from `blob.h` by
+`tools/gen-spec-limits.py`, so neither file holds a limit to drift.
 
-So when you edit a spec, say plainly that you could not run it. If someone
-treats these files as evidence the implementation is correct, correct them:
-they constrain the plan *format* and say nothing about descriptor handling at
-runtime, which is where every real bug in this project has been.
+*This section said the opposite until 2026-09-11 — "you cannot verify by
+running … no `alloy`, no `tlc`, and nothing in the `Makefile` or
+`tests/run.py` references either file" — for a day after all three
+clauses became false. `plan.als`'s own copy of that paragraph was
+corrected and this one was not, which is the survived-by-being-moved
+shape, in the file `tools/rules-hook.sh` hands to the next agent to
+touch a spec. `claims` found it.*
 
-**Waiting on a prerequisite:** `java` is present and the TLA+ tools are a
-single jar. The day that lands, wire `TypeOK` into `make test` — that is
-what turns invariant 3 from a rule people remember into one the build
-enforces.
+**What running them found immediately** is the reason to keep saying
+this out loud: neither file PARSED. Alloy refused `plan.als` for a
+missing scope; TLC refused `Plan.tla` for a use-before-definition. And
+`fdNeed` did not add — Alloy's `+` on `Int` is set union, so the fd
+formula, one of the four places invariant 3 names, had never computed
+the fd budget. `HISTORY.md` §39.
+
+**What is still not checked, so do not cite it:**
+
+- `BindNeed` is reachable only through `TypeOK`, and `Init` gives every
+  house an empty bind set, so the value evaluated is always 0. The bind
+  half of invariant 3 is pinned by `nwcheck.c` and the suite, not here.
+- `plan.als`'s three cross-field facts (`brickNeedsNewNS`,
+  `bindsNeedBrick`, `landlockNeedsBrick`) are facts, not assertions, so
+  they constrain instances rather than being tested. `control` inverted
+  `brickNeedsNewNS` into the plan `nwcheck.c` rejects and every check
+  stayed green. Their enforcement is `nwcheck.c` plus
+  `test_checker_rejects_crafted_fields`.
+- Both results are bounded: Alloy at scope 8 with a 12-bit `Int`, TLC at
+  one state per legal unit count.
+
+So a spec still says nothing about descriptor handling at runtime, which
+is where every real bug in this project has been. It now says something
+checkable about the format, which it did not before.
 
 ## Definition of done
 

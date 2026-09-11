@@ -2044,9 +2044,22 @@ def test_specs_are_checked():
     # generate() already wrote limits.als and Plan.cfg into lab.
     assert cfg_path == f"{lab}/Plan.cfg" and als_path == f"{lab}/limits.als"
     shutil.copy(os.path.join(ROOT, "Plan.tla"), f"{lab}/Plan.tla")
+    # The generated config must actually name the invariants, or TLC
+    # explores the state space and checks nothing. `control` deleted the
+    # INVARIANTS block and this test still printed "invariant holds".
+    cfg_text = open(cfg_path).read()
+    for inv in ("FdBudgetCovers", "FdNeedAgrees", "LargestCityFits"):
+        expect(inv in cfg_text,
+               f"{inv} is not in the generated Plan.cfg, so TLC checked "
+               f"it not at all:\n{cfg_text}")
+
     t = run(["java", "-cp", tla, "tlc2.TLC", "-config", "Plan.cfg",
              "Plan.tla"], cwd=lab)
     tout = t.out + t.err
+    # Exit code first. A solver that failed to run is not a solver that
+    # agreed with you.
+    expect(t.returncode == 0,
+           f"TLC exited {t.returncode}.\n{tout[-2000:]}")
     expect("Model checking completed. No error has been found." in tout,
            f"TLC rejected Plan.tla against blob.h's limits "
            f"({vals}).\n{tout[-2000:]}")
@@ -2057,18 +2070,63 @@ def test_specs_are_checked():
            f"ranging over n, the invariant is being checked at one size "
            f"and the run says nothing about the others.\n{tout[-1200:]}")
 
-    # Alloy. -Xss512m because the existential `run` overflows the default
-    # JVM stack at 12-bit Int; measured, not guessed.
     shutil.copy(os.path.join(ROOT, "plan.als"), f"{lab}/plan.als")
+
+    # THE Int BITWIDTH IS THE ONE LIMIT STILL WRITTEN IN plan.als, so it
+    # is the one place the drift class survives. Alloy's signed n-bit Int
+    # spans -2^(n-1) .. 2^(n-1)-1; if nwMaxFds does not fit, it wraps and
+    # the failure surfaces as "Sealed has a counterexample" plus "the
+    # model is vacuous" -- two messages that both blame the spec for a
+    # scope problem. Measured: at NW_MAX_FDS 2048 both appear. That is
+    # the wrong-diagnosis shape Plan.tla's ASSUME note is about, so catch
+    # it here by name before Alloy gets the chance.
+    bits = re.findall(r"but (\d+) Int", open(f"{lab}/plan.als").read())
+    expect(bits and len(set(bits)) == 1,
+           f"plan.als's Alloy commands do not agree on an Int bitwidth: "
+           f"{bits}")
+    have = int(bits[0])
+    need = 2
+    while (1 << (need - 1)) - 1 < vals["nwMaxFds"]:
+        need += 1
+    expect(have >= need,
+           f"plan.als runs Alloy at {have}-bit Int, which spans up to "
+           f"{(1 << (have - 1)) - 1}, but blob.h's NW_MAX_FDS is "
+           f"{vals['nwMaxFds']} and needs at least {need} bits. Left "
+           f"alone this wraps and reports itself as a counterexample to "
+           f"Sealed -- the right problem with the wrong name. Raise the "
+           f"bitwidth in plan.als, and measure: Alloy's cost scales "
+           f"badly with it.")
+
+    # Alloy. -Xss512m because the existential `run` can overflow the
+    # default JVM stack at 12-bit Int -- intermittently, which is why the
+    # flag is not optional: `claims` measured 3 of 6 unflagged runs
+    # succeeding, and a passing run without it proves nothing.
     a = run(["java", "-Xss512m", "-jar", alloy, "exec", "-f", "plan.als"],
             cwd=lab)
     aout = a.out + a.err
+    # Alloy prints a command's error ON THE COMMAND'S OWN LINE, so a
+    # check that could not be solved still matches the verdict regex
+    # whenever the error text contains SAT or UNSAT -- and the error text
+    # is the spec's absolute path. `control` built a lab directory named
+    # UNSAT and every assertion below passed on a run where `Sealed` was
+    # never solved and Alloy exited 1. The exit code was sitting there
+    # unread the whole time.
+    expect(a.returncode == 0,
+           f"Alloy exited {a.returncode}; a command did not solve.\n"
+           f"{aout[-1500:]}")
     checks = re.findall(r"\d+\.\s+check\s+(\w+)\s+.*?(SAT|UNSAT)", aout)
     runs = re.findall(r"\d+\.\s+run\s+(\w+)\s+.*?(SAT|UNSAT)", aout)
     expect(len(checks) == 2 and len(runs) == 1,
            f"expected two checks and one run from plan.als, parsed "
            f"checks={checks} runs={runs}. A command that stopped being "
            f"executed is a check that stopped happening.\n{aout[-1500:]}")
+    # BY NAME. The arity guard pins how many checks ran, not which:
+    # `control` renamed `check Sealed` to a second `check FdArithmetic`
+    # and the count stayed 2 while the check carrying the whole blob.h
+    # budget claim stopped running.
+    expect({n for n, _ in checks} == {"FdArithmetic", "Sealed"},
+           f"plan.als ran checks {sorted(n for n, _ in checks)}, expected "
+           f"FdArithmetic and Sealed.\n{aout[-1500:]}")
     # For a `check`, SAT means a counterexample was FOUND.
     for name, verdict in checks:
         expect(verdict == "UNSAT",
@@ -2082,9 +2140,68 @@ def test_specs_are_checked():
                f"no plan at all, so both checks above passed vacuously and "
                f"prove nothing.\n{aout[-1500:]}")
 
-    print(f"ok specs-are-checked (TLC: {vals['nwMaxUnits']} states, invariant "
-          f"holds; Alloy: {len(checks)} checks clean and the model is "
-          f"non-vacuous; limits generated from blob.h)")
+    # PER-ASSERTION VACUITY, which the `run` above does not establish.
+    # Model-level consistency and assertion-level non-vacuity are
+    # different properties: `control` changed `assert Sealed { sealed }`
+    # to `{ #House > 8 => sealed }`, whose antecedent is unsatisfiable in
+    # a scope of 8, and the check went vacuously UNSAT while the run
+    # stayed SAT and the ok line still said "non-vacuous".
+    #
+    # NEGATING THE ASSERTION DOES NOT DETECT THIS, and the first version
+    # of this code did exactly that and passed the control. `check ~A`
+    # asks for an instance where A holds; a vacuously-true A holds
+    # everywhere, so ~A is false everywhere and the counterexample is
+    # found either way. SAT for both.
+    #
+    # What separates them is breaking the thing the assertion is about
+    # and requiring it to notice -- which is the negative control this
+    # project already asks for by hand, run every time instead. The
+    # vacuous Sealed stayed UNSAT under a too-small budget, so this is
+    # the probe that catches it.
+    for name, mutate, what in (
+            ("Sealed", ("limits", f"fun nwMaxFds[]: Int {{ {vals['nwMaxFds']} }}",
+                        "fun nwMaxFds[]: Int { 16 }"),
+             "a budget too small for the scope"),
+            ("FdArithmetic", ("plan", "plus[nwReserved[], 2.mul[#House]]",
+                              "nwReserved[] + 2.mul[#House]"),
+             "the `+` set-union form of fdNeed"),
+    ):
+        which, old, new_txt = mutate
+        d = f"{lab}/mustfail-{name}"
+        os.makedirs(d, exist_ok=True)
+        pl = open(f"{lab}/plan.als").read()
+        lm = open(f"{lab}/limits.als").read()
+        if which == "limits":
+            expect(old in lm, f"cannot find {old!r} in the generated limits")
+            lm = lm.replace(old, new_txt, 1)
+        else:
+            expect(old in pl, f"cannot find {old!r} in plan.als")
+            pl = pl.replace(old, new_txt, 1)
+        # Only this assertion's check, so one run answers one question.
+        pl = "\n".join(l for l in pl.splitlines()
+                        if not l.startswith(("check ", "run ")))
+        pl += f"\ncheck {name} for 8 but {have} Int\n"
+        open(f"{d}/plan.als", "w").write(pl)
+        open(f"{d}/limits.als", "w").write(lm)
+        v = run(["java", "-Xss512m", "-jar", alloy, "exec", "-f",
+                 "plan.als"], cwd=d)
+        vout = v.out + v.err
+        expect(v.returncode == 0,
+               f"the must-fail probe for {name} did not solve "
+               f"(exit {v.returncode})\n{vout[-800:]}")
+        got = re.findall(r"\d+\.\s+check\s+\w+\s+.*?(SAT|UNSAT)", vout)
+        expect(got == ["SAT"],
+               f"{name} did NOT find a counterexample when given {what} "
+               f"({got}). The check passes above without being able to "
+               f"fail, so it is evidence of nothing -- an assertion whose "
+               f"antecedent is unsatisfiable in scope reads exactly like "
+               f"one that holds.\n{vout[-800:]}")
+
+    print(f"ok specs-are-checked (TLC: {vals['nwMaxUnits']} states, 4 "
+          f"invariants incl. the boundary; Alloy: {len(checks)} checks "
+          f"clean at {have}-bit Int, each shown failing when its "
+          f"subject is broken; "
+          f"limits generated from blob.h)")
 
 
 def test_baker_writes_the_declared_layout():

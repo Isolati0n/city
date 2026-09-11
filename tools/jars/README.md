@@ -5,10 +5,17 @@
 
 | jar | version | sha256 | source |
 |---|---|---|---|
-| `tla2tools.jar` | TLC 2026.09.10.191157 (v1.8.0 release) | `957b23b2bb31d08f19346e105e23585f93fea9a139a712b0ac347eedaf26afea` | `https://github.com/tlaplus/tlaplus/releases/download/v1.8.0/tla2tools.jar` |
+| `tla2tools.jar` | TLC 2026.09.10.191157, rev c3af5e2 | `957b23b2bb31d08f19346e105e23585f93fea9a139a712b0ac347eedaf26afea` | `https://github.com/tlaplus/tlaplus/releases/download/v1.8.0/tla2tools.jar` |
 | `alloy.jar` | Alloy 6.2.0 | `6b8c1cb5bc93bedfc7c61435c4e1ab6e688a242dc702a394628d9a9801edb78d` | `https://github.com/AlloyTools/org.alloytools.alloy/releases/download/v6.2.0/org.alloytools.alloy.dist.jar` |
 
 Verify with `sha256sum tools/jars/*.jar`.
+
+**The TLA jar is a master nightly, not a release build**, despite the
+`v1.8.0` URL. Its manifest says `X-Git-Branch: master`, `X-Git-Tag:` empty,
+`Build-TimeStamp: 2026-09-10`. That tag is a rolling pre-release, so the
+pinned sha256 will stop matching the URL without the URL changing. If it
+stops matching, that is expected and not tampering — but do not silently
+re-pin: check the new jar's manifest and record what moved. `claims`.
 
 ## Why they are committed rather than fetched
 
@@ -47,9 +54,14 @@ and from one holding `plan.als` + `limits.als`:
 java -Xss512m -jar tools/jars/alloy.jar exec -f plan.als
 ```
 
-**`-Xss512m` is not optional.** The existential `run sealed` overflows the
-default JVM stack at 12-bit Int (`StackOverflowError` inside Kodkod's CNF
-translator). Measured, not guessed.
+**`-Xss512m` is not optional, and the reason is that the failure is
+INTERMITTENT.** The existential `run sealed` overflows the default JVM
+stack at 12-bit Int — `StackOverflowError` inside
+`kodkod.engine.fol2sat.Bool2CNFTranslator$PolarityDetector.visit`. Measured
+over six unflagged runs: three succeeded, three crashed; five of five were
+clean with the flag. So a run that works without it proves nothing, which
+is the worst possible signal to hand a reader. This was stated as a flat
+"it overflows" until `claims` ran it six times.
 
 ## Reading the output
 

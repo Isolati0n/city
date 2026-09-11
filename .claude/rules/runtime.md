@@ -35,7 +35,8 @@ environment — so a change to any link is a change to everything below it.
   for `/dev`, `/proc`, `/sys` and cgroup2, where `EBUSY` means the
   requirement is already met.
 - **PID 1 mounts nothing, and must keep mounting nothing.** `grep` for
-  `mount` in `pid1.c` returns one hit and it is a comment. It cannot
+  `mount` in `pid1.c` returns only comments — it said "one hit" until
+  2026-09-11, when there were two. It cannot
   mount the thing it needs in order to learn what to mount; the alternative
   is a device name compiled into the trusted core, which is the
   fixed-descriptor-number class in a new costume.
@@ -70,10 +71,15 @@ environment — so a change to any link is a change to everything below it.
   5, 9 and 13 were one mistake three times, and none of them produced an
   error — they produced silently wrong routing. Sweep `/proc/self/fd`.
 - **One seccomp table.** `nwsup.c` calls `nw_apply_house_seccomp()` in
-  `lids.c`; it once carried a verbatim second copy. `NW_PROF_BUILD` is
-  assembled as `NW_PROF_STRICT` **plus** `build_extra[]` at filter-build
-  time, so a syscall added to the application filter is automatically in the
-  build one and the two cannot drift. If you find yourself adding a filter
+  `lids.c`; it once carried a verbatim second copy. There is one allow-list,
+  `strict_allow[]`, and a house does not choose it. *This described
+  `NW_PROF_BUILD` as "assembled as `NW_PROF_STRICT` plus `build_extra[]`
+  at filter-build time" until 2026-09-11; `grep` for `NW_PROF` or
+  `build_extra` across the C sources returns one hit, `blob.h:65`, and it
+  is a comment recording the removal. The profile went on 2026-09-10
+  (`HISTORY.md` §23) and `CLAUDE.md` invariant 6 already said so — this
+  copy did not. Found by `claims`, in the file the hook hands to an agent
+  editing `nwsup.c` or `lids.c`.* If you find yourself adding a filter
   anywhere but `lids.c`, you are recreating the bug that was removed.
 - **Adding a syscall to the allow-list requires naming the unit that needs it
   and why.** The suite asserts seccomp kills a house that calls
