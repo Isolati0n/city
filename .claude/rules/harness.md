@@ -313,6 +313,12 @@ the probe still does not exercise it. The numbers say nothing about
 per-unit loop devices, namespaces or seccomp filters at scale. `control`
 caught the mismatch between the tool and the sentence justifying it.
 
+**Handed over 2026-09-11:** `tools/HANDOFF-scale.md` carries the ladder
+result — clean at 8192, a named `HALT: log pipe` at 10240, the
+`(ulimit − reserved) / 2` model and its control, and the quadratic shape
+— for whoever takes scale on better hardware. It says plainly that the
+measurement is done and **the test is not**.
+
 **Still open:** nothing in `make test` runs above `NW_MAX_UNITS`. Not
 because of the rebuild — that is under a second, see the top of this
 section — but because the boot above a few thousand units is quadratic
