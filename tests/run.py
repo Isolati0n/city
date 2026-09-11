@@ -1069,32 +1069,62 @@ def test_last_words_survive_group_term():
                 time.sleep(0.02)
             return buf.decode("utf-8", "replace")
         finally:
-            for x in (init, p.pid):
-                if x:
-                    try:
-                        os.kill(x, 9)
-                    except ProcessLookupError:
-                        pass
-            p.wait()
+            # reap_nested, NOT a hand-rolled kill pair. On the path where
+            # nested_init returns None this rolled its own teardown,
+            # killed only the `unshare` parent, and left PID 1, its
+            # logger and the supervisor alive at ppid 1 with hold_ms=0
+            # -- i.e. forever. reap_nested's own docstring is the
+            # sentence that says why: KILLING THE PARENT DOES NOT KILL
+            # WHAT IT FORKED. `control` forced the path and caught three
+            # strays, and found a live one on this machine from the
+            # session that wrote this test.
+            p.stdout.close()
+            reap_nested(p)
 
-    for mode in ("init", "group"):
+    # THE SIZE IS THE TEST. Five lines is 320 bytes and survived an
+    # unconditional SIGKILL of the loggers by luck of scheduling;
+    # `tcb-review` took it to 2500 lines (~160 KiB) and three runs
+    # relayed 2500, 2433 and 2451, losing a CONTIGUOUS TAIL -- the end
+    # of the output, which is the part that says why the machine is
+    # going down. A property pinned only at the size where it happens to
+    # hold is the characteristic failure with a test attached.
+    for label, binary, lines in (("small", "unit-lastwords", 5),
+                                 ("many", "unit-lastwordsmany", 2500)):
+      open(city, "w").write(f"house lw {BIN}/{binary} kind=longrun lids=none\n")
+      b = run(["python3", CC, "--city", city, "--out", blob])
+      expect(b.returncode == 0, f"bake {label}\n{b.out}{b.err}")
+      for mode in ("init", "group"):
         out = shutdown_by(mode)
         # PAIRED. "all five lines are present" is satisfied by the drain
         # working AND by a fixture that never ran at all, and those are
         # opposite outcomes. The house announcing itself is what makes the
         # count below a claim about the drain.
         expect("waiting for TERM" in out,
-               f"[{mode}] the house never started, so the line count below "
-               f"would be about nothing\n{out[-1200:]}")
-        missing = [i for i in range(1, 6) if f"bye {i} of 5" not in out]
+               f"[{label}/{mode}] the house never started, so the line "
+               f"count below would be about nothing\n{out[-1200:]}")
+        # RECONSTITUTE THE BYTE STREAM BEFORE COUNTING. The logger
+        # appends a newline when a read does not end in one and prefixes
+        # each chunk, so above one chunk a line arrives split mid-token
+        # and a naive count reads as loss. `tcb-review`'s first pass
+        # reported 185 of 200 for exactly that reason and was wrong;
+        # padding makes the split impossible here, and stripping makes
+        # the assertion independent of that still being true.
+        flat = out.replace("[lw] ", "").replace("\n", "")
+        got = set(int(m) for m in
+                  re.findall(rf"\[lastwords\] bye (\d+) of {lines}", flat))
+        missing = sorted(set(range(1, lines + 1)) - got)
         expect(not missing,
-               f"[{mode}] the house wrote 5 final lines and "
-               f"{len(missing)} never reached the console "
-               f"(missing {missing}). A house that exhausts its hard-total "
-               f"budget stays dead until reboot; that is only safe while "
-               f"the death is visible.\n{out[-1500:]}")
-    print("ok last-words-survive (TERM to PID 1 and to the whole group; "
-          "5 of 5 lines each, written as 5 separate write(2) calls)")
+               f"[{label}/{mode}] the house wrote {lines} final lines and "
+               f"{len(missing)} never reached the console (first missing "
+               f"{missing[0] if missing else None}, "
+               f"contiguous tail: {missing == list(range(missing[0], lines + 1)) if missing else False}). "
+               f"A house whose death count is a hard total stays down "
+               f"until reboot; that is only safe while the death is "
+               f"visible, and a lost TAIL is the part that says "
+               f"why.\n{out[-1500:]}")
+    print("ok last-words-survive (TERM to PID 1 and to the whole group, "
+          "at 5 lines and at 2500 -- ~160 KiB, more than the log pipe "
+          "holds, so the loggers must drain and not be killed mid-pipe)")
 
 
 def test_orphans_across_restarts():
@@ -1151,6 +1181,38 @@ def test_orphans_across_restarts():
            f"the fixture reported {forked} successful forks across "
            f"{runs} runs, expected {runs * 3}. Nothing below is about "
            f"reaping until the orphans exist.\n{out[-1500:]}")
+    # PROMPT, not merely eventual. HISTORY 48 states "reaped promptly"
+    # as a finding and nothing tested it: `control` disabled the SIGCHLD
+    # reap for the whole life of the city, so twelve zombies were held
+    # until the final sweep at shutdown, and this test passed
+    # identically. The assertion's own message says "a zombie held for
+    # the life of the machine, and at scale that is pids" -- so assert
+    # it. An orphan line before the shutdown line is that claim.
+    #
+    # SCOPE: this detects "nothing reaped during the city's life", not
+    # "the SIGCHLD branch is gone". There are TWO reap sites in the main
+    # loop -- the SIGCHLD branch and the poll-timeout branch -- and
+    # either one keeps reaping prompt, so disabling only the first
+    # leaves this green. Verified both ways. Do not read a pass here as
+    # covering the SIGCHLD path specifically.
+    shut = out.find("shutdown TERM houses")
+    first_orphan = out.find("orphan pid=")
+    expect(first_orphan != -1 and shut != -1 and first_orphan < shut,
+           f"no orphan was reaped before shutdown began, so they were "
+           f"swept at the end rather than as they died. A zombie held "
+           f"for the life of the machine is a pid held, and at scale "
+           f"that is the resource that runs out.\n{out[-1500:]}")
+    # And the marker has to earn its keep: runs 1..4, each exactly once.
+    # `control` deleted the marker logic and planted a stale marker, and
+    # the test passed three times each way, because nothing read the run
+    # number the marker exists to produce.
+    for k in range(1, 5):
+        got = len(re.findall(rf"\[orphan\] run={k} leaving", out))
+        expect(got == 1,
+               f"run={k} appears {got} times, expected exactly once. "
+               f"Either a restart was missed or /tmp/nw-orphan.mark was "
+               f"stale -- which used to be silent, because no assertion "
+               f"read the run number.\n{out[-1500:]}")
     m = re.search(r"orphans=(\d+)", out)
     expect(m and int(m.group(1)) == forked,
            f"PID 1 reaped {m.group(1) if m else '?'} orphans; the fixture "
@@ -1192,9 +1254,31 @@ def test_orphans_across_restarts():
     rc, out = boot(plan=slow_blob, hold=150)
     wall = time.time() - t0
     expect(city_closed(rc, out), f"orphan-B rc={rc}\n{out[-1500:]}")
-    expect("leaving 3 behind" in out,
-           f"the fixture never forked, so nothing below is about "
-           f"orphans\n{out[-1500:]}")
+    # PAIRED ON THE EFFECT, exactly as case A above -- which was fixed
+    # first and left this one reading `leaving 3 behind`, a line the
+    # fixture prints whether or not any fork returned. `control` made
+    # only the slow fixture fork nothing and this stayed green, under an
+    # ok line saying shutdown does not wait for orphans still alive.
+    # Twenty lines below the comment explaining why that is wrong.
+    slow_forked = len(re.findall(r"\[orphan\] run=\d+ child=\d+ pid=\d+",
+                                 out))
+    expect(slow_forked == 12,
+           f"the slow fixture reported {slow_forked} successful forks, "
+           f"expected 12. Nothing below is about orphans until they "
+           f"exist.\n{out[-1500:]}")
+    # AND THAT THEY WERE STILL ALIVE. `wall` bounds shutdown's duration
+    # and says nothing about there being anything to wait for:
+    # `control` set -DORPHAN_SLEEP_MS=0 -- one character in the Makefile
+    # -- so every child exited at once, and the test stayed green with
+    # the property vacuous. orphans=0 here is the positive evidence,
+    # because the children outlive the hold: twelve were made, none was
+    # reaped, so twelve were alive and deliberately left.
+    mb = re.search(r"orphans=(\d+)", out)
+    expect(mb and int(mb.group(1)) == 0,
+           f"the closed line reports orphans={mb.group(1) if mb else '?'}, "
+           f"expected 0. Nonzero means the children died before shutdown "
+           f"and none was alive to be waited for, so the bound below "
+           f"would be measuring nothing.\n{out[-1500:]}")
     # The property is that shutdown did not WAIT. The children sleep 3s
     # and the hold is 150ms, so a shutdown that waits cannot finish
     # before ~3s while one that does not closes in ~0.2s. The bound sits

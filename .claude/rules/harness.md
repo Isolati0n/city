@@ -29,6 +29,28 @@ lines; a fixture that writes more than a chunk gets split mid-line. So: have
 the fixture tag every line with its own unit name, and do not write assertions
 against the logger's prefix for anything but the first line.
 
+**And self-tagging is not enough, which this section used to imply.** The
+logger *appends a newline* when a read does not end in one, so a line
+straddling a chunk boundary arrives split **mid-token**:
+`[orphan] run=3 leav` / `[orph] ing 3 behind`. A tag on every line does
+not help — the tag is intact and the word you are counting is in two
+pieces. Measured: `test_orphans_across_restarts` failed 5 times in 12
+under load on a tree where the reaping was perfect, under a message
+blaming the restart budget. `tcb-review` independently mis-reported a
+drain result for the same reason and caught itself.
+
+Two ways out, and use both:
+
+- **Pad every fixture line to a divisor of the logger's buffer** (64
+  works for 256). Every write is then one whole line, the pipe only ever
+  holds whole lines, and a bounded read can only return whole lines — the
+  split becomes impossible rather than unlikely. `houses/lastwords.c` and
+  `houses/orphan.c` are the worked examples.
+- **Reconstitute the byte stream before counting** — strip the prefix and
+  the newlines, then match. That keeps the assertion correct even if the
+  padding assumption stops holding, which is the point: do not let one
+  fixture's arithmetic be the only thing between you and a false failure.
+
 ## A test whose outcome depends on the environment must say so
 
 **Never let a test pass down a branch the environment forced.** `lid-landlock`
@@ -333,6 +355,14 @@ here, and the number it pointed at was removed by the same edit. A
 correction applied to the top of a section and not its foot is the
 survived-by-not-being-moved shape, which this repository has now
 produced in five separate files. `claims`.*
+
+## A note for reviewers working read-only
+
+`make STAGE=<path> test` needs a **short** stage path: `tests/run.py`
+caps `NW_STAGE` at the slack left by `NW_BRICK_LEN`, and a session
+scratchpad path is far longer. Pick something short under `/tmp`, and
+pick it distinctly — two agents sharing `/tmp/nwc` will silently fight
+over one stage. `tcb-review` hit this and it cost a round trip.
 
 ## Definition of done
 

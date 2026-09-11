@@ -18,27 +18,60 @@
  * parent's own exit path in the kernel and never reaches PID 1. The
  * sleep is a lab constant in a fixture, not a timeout in the TCB.
  *
- * Every line is self-tagged and carries the run number, because PID 1's
- * logger prefixes a write CHUNK and not a line (harness.md, the
- * log-chunk trap). The run number comes from a marker file, the same
- * device unit-dieterm uses and for the same reason: the suite removes
- * it before booting, and a stale marker makes the test fail loudly
- * rather than quietly change what is measured.
+ * EVERY LINE IS PADDED TO WIDTH BYTES, and self-tagging is not enough
+ * on its own. The comment here used to say it was. PID 1's logger reads
+ * 256 bytes and APPENDS a newline when the read does not end in one, so
+ * a line straddling a chunk boundary comes out split mid-token:
+ * `[orphan] run=3 leav` / `[orph] ing 3 behind`. Self-tagging defends
+ * against a missing prefix; it does nothing about that. `control`
+ * measured the suite failing 5 times in 12 under load, with a message
+ * blaming the restart budget for a defect in how the console was read.
+ *
+ * WIDTH divides the logger's buffer, and every write here is one padded
+ * line, so the pipe only ever holds whole lines and a 256-byte read can
+ * only ever return whole lines. The split becomes impossible rather
+ * than unlikely.
+ *
+ * The run number comes from a marker file, the same device
+ * unit-dieterm uses. The suite clears it before booting AND asserts
+ * that runs 1..4 each appear exactly once, so a stale marker fails
+ * loudly. It did not until 2026-09-11: nothing read the run number, so
+ * `control` deleted the marker logic entirely and the test passed three
+ * times, and planted a stale marker and it passed three more. A fixed
+ * path in a fixture is acceptable; one that nothing checks is a
+ * decoration claiming to be a guard.
  *
  * Not in the TCB.
  */
 #define _GNU_SOURCE
 #include <fcntl.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
 #define KIDS 3
+#define WIDTH 64          /* divides the logger's 256-byte buffer */
 #ifndef ORPHAN_SLEEP_MS
 #define ORPHAN_SLEEP_MS 400
 #endif
 #define MARK "/tmp/nw-orphan.mark"
+
+/* One padded line, one write(2). Not signal-safe and does not need to
+   be: nothing here runs from a handler. */
+static void say_padded(char *buf, const char *fmt, ...)
+{
+    va_list ap;
+    va_start(ap, fmt);
+    int n = vsnprintf(buf, WIDTH, fmt, ap);
+    va_end(ap);
+    if (n < 0) n = 0;
+    if (n > WIDTH - 1) n = WIDTH - 1;
+    memset(buf + n, '.', (size_t)(WIDTH - 1 - n));
+    buf[WIDTH - 1] = '\n';
+    ssize_t r = write(1, buf, WIDTH); (void)r;
+}
 
 int main(void)
 {
@@ -55,10 +88,8 @@ int main(void)
         close(fd);
     }
 
-    char line[96];
-    int n = snprintf(line, sizeof line,
-                     "[orphan] run=%d forking %d children\n", run, KIDS);
-    ssize_t r = write(1, line, (size_t)n); (void)r;
+    char line[WIDTH + 1];
+    say_padded(line, "[orphan] run=%d forking %d children", run, KIDS);
 
     for (int i = 0; i < KIDS; i++) {
         pid_t p = fork();
@@ -67,16 +98,12 @@ int main(void)
             usleep(ORPHAN_SLEEP_MS * 1000);
             _exit(0);
         }
-        if (p > 0) {
-            n = snprintf(line, sizeof line,
-                         "[orphan] run=%d child=%d pid=%d\n", run, i, (int)p);
-            r = write(1, line, (size_t)n); (void)r;
-        }
+        if (p > 0)
+            say_padded(line, "[orphan] run=%d child=%d pid=%d", run, i,
+                       (int)p);
     }
 
-    n = snprintf(line, sizeof line,
-                 "[orphan] run=%d leaving %d behind\n", run, KIDS);
-    r = write(1, line, (size_t)n); (void)r;
+    say_padded(line, "[orphan] run=%d leaving %d behind", run, KIDS);
 
     /* Nonzero: nw-sup restarts, so the next run orphans again. */
     return 1;

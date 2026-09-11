@@ -116,6 +116,45 @@ environment — so a change to any link is a change to everything below it.
   as well, which is D11's exact shape laid across the natural fix. The
   process group makes the signal not arrive while
   `kill(logger, SIGTERM)` still works.
+
+  **The lexical check lives here, not in `pid1.c`.** Nothing this tree
+  ships sends a group-directed signal:
+  `grep -nE "killpg|kill\(-|kill\(0|tcsetpgrp|setsid" *.c` returns
+  nothing. It is written in this file rather than beside the code
+  because a comment naming the tokens it greps for is a hit for its own
+  check — which is exactly how invariant 1's `mount` check was weakened
+  to "returns only comments" and stopped being decisive.
+
+  **Precondition, and it is not hypothetical for long:** this is safe
+  while PID 1 has no controlling terminal. Give it one and two things
+  flip together. `^C` becomes a kernel-generated group signal, which
+  makes the `setpgid` load-bearing on real hardware; and the loggers,
+  no longer the foreground group, become subject to `SIGTTOU` on
+  `write(2)` when `TOSTOP` is set. `SIGTTOU` is not in the set PID 1
+  blocks, so the default action applies and **the logger stops** — the
+  pipe fills, the house blocks in `write` forever, and freeze detection
+  is refused by design, so nothing notices. Demonstrated on a pty by
+  `tcb-review`, same program either side, only the `setpgid` differing.
+  If a console lands, block `SIGTTOU`/`SIGTTIN` in the logger.
+
+- **Shutdown lets the loggers drain, and SIGKILL is the deadline
+  action, not the first one.** `shutdown_city` waits for each logger to
+  reach EOF and exit — PID 1 closed its own write ends at boot, so the
+  last house's death closes the pipe — bounded by `NW_GRACE_MS` and
+  concurrent across units, so the bound is still the grace period and
+  not grace × units.
+
+  It was an unconditional SIGKILL until 2026-09-11, racing the drain.
+  It won small and lost large: `tcb-review` measured 2500 final lines
+  (~160 KiB) relaying 2500, 2433 and 2451 across three runs, and the
+  loss was a **contiguous tail** — the end of the output, which is the
+  part that says why the machine is going down. At five lines it never
+  lost anything, and five lines was the size the suite pinned. A
+  property tested only at the size where it holds by luck is the
+  characteristic failure with a test attached to it.
+  `test_last_words_survive_group_term` now runs 5 and 2500; restoring
+  the unconditional SIGKILL turns the 2500 case red and leaves the 5
+  case green, which is the whole argument for the second size.
 - **Signal-safety:** writes go through `write(2, ...)` directly. No
   `printf` in a signal or post-fork path.
 

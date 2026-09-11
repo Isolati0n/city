@@ -4085,3 +4085,128 @@ probe together.
 
 `pid1.c` was **not** modified. The fixture, the Makefile rules and the
 test are harness files; the decision is recorded in the territory rules.
+
+## 49. Two reviewers on the boot-chain work: the property was not delivered (2026-09-11)
+
+`control` and `tcb-review` against `ae19cbc`, the first round run on a
+pushed trunk. Eight findings. The `setpgid` line itself survived every
+attack; almost everything else around it did not.
+
+### The drain did not work, and the test pinned the one size where it did
+
+`tcb-review` took the fixture to 2500 final lines (~160 KiB) and three
+runs relayed **2500, 2433, 2451** — losing a **contiguous tail**, which
+is the end of the output, which is the part that says why the machine is
+going down. At five lines nothing was ever lost. Five lines was the size
+the suite pinned.
+
+`shutdown_city` SIGKILLed the loggers unconditionally, racing their
+drain: it wins small and loses large. The property the whole previous
+round was written to protect — *a house's last words are a correctness
+property* — was a present-tense rule next to code that delivered it by
+luck of scheduling. That is the characteristic failure **with a test
+attached to it**, which is a worse version than the usual.
+
+Fixed with no new constant and no new mechanism: PID 1 already closes
+its own write ends at boot, so the last house's death gives the logger
+EOF and it exits by itself. Shutdown now waits for that, bounded by the
+same `NW_GRACE_MS` and concurrent across units, so the bound is still
+the grace period and not grace × units. **SIGKILL became the deadline
+action instead of the first one.**
+
+The test runs 5 and 2500 now. Restoring the unconditional SIGKILL turns
+2500 red — `512 never reached the console, first missing 1989,
+contiguous tail: True` — and leaves 5 green. That difference is the
+entire argument for the second size, and it is why "we have a test" was
+not the same as "the property holds".
+
+### I falsified invariant 1's own grep, in the commit that fixed a drain
+
+`CLAUDE.md` and `runtime.md` both say: *`grep` for `budget`, `restart`
+or `respawn` in `pid1.c` returns nothing.* My comment explaining the
+`setpgid` used the words "restart budget", so the check the invariant
+names returned a hit. `git log -S"restart budget" -- pid1.c` names the
+commit: `d76a779`, mine.
+
+This is the second time this exact invariant has been falsified by
+prose, and the first time it was "repaired" by weakening the check to
+"returns only comments" — which is how a decisive lexical check stops
+being decisive. Reworded instead, to `nw-sup`'s *death count*, which
+says the same thing and trips nothing. The check is clean again.
+
+The same trap caught the fix for it: a comment naming the tokens it
+greps for is a hit for its own check. The group-signal check therefore
+lives in `.claude/rules/runtime.md`, where the `*.c` grep cannot see it,
+and the code comment points at it.
+
+### The log-chunk trap is worse than the brief said, and it was live
+
+`control` found `test_orphans_across_restarts` failing **5 times in 12
+under load** on a tree where the reaping was perfect. The logger appends
+a newline when a read does not end in one, so a line straddling a chunk
+boundary arrives split mid-token: `[orphan] run=3 leav` /
+`[orph] ing 3 behind`. `out.count("leaving")` returned 3.
+
+`houses/orphan.c` claimed self-tagging defended against this. It does
+not — the tag is intact and the word being counted is in two pieces.
+`tcb-review` independently mis-reported a drain result the same way and
+caught itself.
+
+Both fixtures now pad every line to 64 bytes, a divisor of the logger's
+buffer: every write is one whole line, so the pipe only ever holds whole
+lines and a bounded read can only return whole lines. The split becomes
+impossible rather than unlikely. The assertions **also** reconstitute
+the byte stream before counting, so they stay correct if the padding
+assumption ever stops holding.
+
+### Four ways the new tests passed for the wrong reason
+
+All found by `control`, all now failing their controls:
+
+- **Five separate `write(2)` calls bought nothing.** The fixture said
+  they distinguished a one-chunk drain; a pipe coalesces and 115 bytes
+  fit in one 256-byte read. A logger relaying only its first chunks
+  passed **9 of 9**. Padding to 320 bytes is what makes the drain do two
+  reads.
+- **Case B paired on the announcement** — `leaving 3 behind`, printed
+  whether or not any fork returned — twenty lines below the comment
+  explaining why case A's identical defect was wrong.
+- **Case B never asserted an orphan was alive.** `-DORPHAN_SLEEP_MS=0`,
+  one character, made the property vacuous and the test stayed green.
+  `orphans=0` in the closed line is the positive evidence and is
+  asserted now.
+- **The marker file was decorative.** `houses/orphan.c` said a stale
+  marker "makes the test fail loudly"; nothing read the run number, so
+  deleting the marker logic passed three times and planting a stale
+  marker passed three more. `run=1..4` each exactly once is asserted
+  now, which also catches a missed restart.
+
+### And one the test leaked
+
+`test_last_words_survive_group_term` rolled its own teardown and, on the
+path where `nested_init` returns `None`, killed only the `unshare`
+parent — leaving PID 1, its logger and the supervisor alive at ppid 1
+with `hold_ms = 0`, forever. `reap_nested`'s own docstring is the
+sentence that says why that does not work. **There was a live instance
+on this machine from the session that wrote the test**, running two
+hours; killed. Now uses `reap_nested`.
+
+### Recorded, with its scope
+
+The prompt-reaping assertion detects "nothing reaped during the city's
+life", **not** "the SIGCHLD branch is gone": there are two reap sites in
+the main loop and either keeps reaping prompt, so disabling one leaves
+the test green. Verified both ways and written into the test, because a
+pass there would otherwise read as covering more than it does.
+
+`tcb-review` also demonstrated on a pty that if PID 1 ever acquires a
+controlling terminal, `setpgid` makes the loggers a background group and
+`SIGTTOU` — which PID 1 does not block — **stops** them: the pipe fills,
+the house blocks in `write` forever, and freeze detection is refused by
+design, so nothing notices. Not reachable today; recorded beside the
+call and in `runtime.md` as the precondition it is.
+
+And "PID 1 is its own session on real hardware" was a kind-1 sentence
+with nothing behind it — nothing in the tree calls `setsid`. The
+conclusion was right and the premise was invented; replaced with the
+check that actually supports it.

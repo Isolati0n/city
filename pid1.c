@@ -107,6 +107,13 @@ static void reap_all(int block)
     }
 }
 
+/* One bound for the whole shutdown, not one per stage and not grace x
+   units. Used twice below: once waiting for houses to exit, once
+   waiting for the loggers to drain. Both waits are concurrent over all
+   units, so the total stays bounded by two grace periods regardless of
+   how many houses there are. */
+#define NW_GRACE_MS 400
+
 static void shutdown_city(void)
 {
     shutting_down = 1;
@@ -115,7 +122,7 @@ static void shutdown_city(void)
         if (houses[i].pid > 0) kill(houses[i].pid, SIGTERM);
     }
     long long t0 = now_ms();
-    while (now_ms() - t0 < 400) {
+    while (now_ms() - t0 < NW_GRACE_MS) {
         reap_all(0);
         int live = 0;
         for (uint32_t i = 0; i < n_houses; i++)
@@ -133,6 +140,37 @@ static void shutdown_city(void)
         spawner = 0;
         int st;
         waitpid(p, &st, 0);
+    }
+    /* LET THE LOGGERS DRAIN, then kill what is left. SIGKILLing a
+     * reader with data still in its pipe discards it, and the last
+     * thing a house writes is the thing worth keeping -- nw-sup's
+     * death count is a hard total, so a house that exhausts it stays
+     * down until reboot, which was only acceptable because that is
+     * visible.
+     *
+     * This used to be an unconditional SIGKILL here, racing the drain.
+     * It won at small sizes and lost at large ones: measured by
+     * `tcb-review` at 2500 final lines (~53 KiB), three runs relayed
+     * 2500, 2433 and 2451, and the loss was a CONTIGUOUS TAIL -- the
+     * end of the output, which is the part that says why the machine
+     * is going down. At five lines it never lost anything, which is
+     * exactly the size the suite pinned.
+     *
+     * No new constant and no new mechanism: PID 1 closed its own write
+     * ends at boot, so once the last house is reaped the logger reads
+     * EOF and exits by itself. This waits for that, bounded by the same
+     * grace period already used above and concurrently across all
+     * units, so shutdown stays bounded by the grace period rather than
+     * grace x units. SIGKILL becomes the deadline action instead of the
+     * first one. */
+    long long t1 = now_ms();
+    while (now_ms() - t1 < NW_GRACE_MS) {
+        reap_all(0);
+        int live = 0;
+        for (uint32_t i = 0; i < n_houses; i++)
+            if (houses[i].logger > 0) live++;
+        if (!live) break;
+        poll(NULL, 0, 20);
     }
     for (uint32_t i = 0; i < n_houses; i++) {
         if (houses[i].logger > 0) kill(houses[i].logger, SIGKILL);
@@ -198,8 +236,8 @@ static void spawn_logger(uint32_t i)
          * relays 0 of 5. The house still writes them -- its reader is
          * simply gone.
          *
-         * That matters beyond tidiness. The restart budget is a hard
-         * total (invariant 4), so a house that exhausts it stays dead
+         * That matters beyond tidiness. nw-sup's death count is a hard
+         * total (invariant 4), so a house that exhausts it stays down
          * until reboot, and that was only acceptable because the death
          * is VISIBLE. Discard the last lines and it is a black screen
          * with no explanation, which is the property that made a hard
@@ -212,10 +250,35 @@ static void spawn_logger(uint32_t i)
          * `kill(logger, SIGTERM)` from a drain pass still works.
          *
          * Not reachable on real hardware as far as this can be shown:
-         * PID 1 there is its own session and nothing outside is placed
-         * to group-signal it. It is reachable in the lab and under any
-         * supervisor that signals a group, and the cost of being wrong
-         * about that is silence. */
+         * nothing this tree ships sends a group-directed signal, and a
+         * bootloader handoff places nothing above PID 1 to send one.
+         * The grep that establishes the first half is in
+         * .claude/rules/runtime.md and deliberately NOT written out
+         * here -- a comment naming the tokens it greps for is a hit for
+         * its own check, which is how invariant 1's `mount` check got
+         * weakened to "returns only comments" and stopped being
+         * decisive. Keep the lexical check in the brief, where the
+         * source grep cannot see it.
+         * (This said "PID 1 there is its own session", which nothing
+         * establishes: PID 1 inherits its session from the kernel and
+         * every descendant stays in it. Right conclusion, unbacked
+         * premise; `tcb-review`.) It IS
+         * reachable in the lab and under any supervisor that signals a
+         * group, and the cost of being wrong is silence.
+         *
+         * PRECONDITION, because a console is a plausible next change
+         * and the suite can never see it: this is safe while PID 1 has
+         * no controlling terminal. Give it one and two things flip at
+         * once. A `^C` becomes a kernel-generated group signal, which
+         * makes this fix load-bearing -- and the loggers, no longer in
+         * the foreground group, become subject to SIGTTOU on write(2)
+         * if TOSTOP is set. SIGTTOU is not in the set blocked below,
+         * so the default action applies and the logger STOPS: the pipe
+         * fills, the house blocks in write forever, and freeze
+         * detection is refused by design, so nothing notices.
+         * Demonstrated standalone on a pty by `tcb-review`, same
+         * program either side, only this call differing. If a console
+         * lands, block SIGTTOU/SIGTTIN here. */
         setpgid(0, 0);
         close(houses[i].log_w);
         for (uint32_t j = 0; j < n_houses; j++) {
