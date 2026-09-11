@@ -2586,3 +2586,19 @@ that no valid input can ever exercise.
 The suite pins the comparison out to the byte where its colliding pair
 first differs, chosen as late as the candidate set allows and printed in
 the `ok` line so the bound is visible rather than assumed.
+
+**Measured afterwards, because the division of labour between the two
+artifacts was a hypothesis until it was run:**
+
+```
+n < 31 against the proof:  leaf_name_dup  PASS  ** 0 of 344 failed  102s
+n < 30 against the proof:  leaf_name_dup  FAIL  ** 1 of 344 failed   64s
+  [main.assertion.1] a duplicate is reported exactly when one exists: FAILURE
+```
+
+So the cover is complete and the seam is exactly where it looked: the
+suite pins bytes 0 through 29 (its colliding pair differs at 29), the
+proof pins byte 30, and byte 31 cannot distinguish two accepted names
+because `name_ok` forces it to zero — which is why both artifacts accept
+that truncation and are right to. No byte of the field is unguarded, and
+the gap I assumed existed did not.
