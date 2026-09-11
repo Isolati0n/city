@@ -149,8 +149,12 @@ int main(void)
         die("make-private", "/");
 
     if (chdir(NW_ROOT_MNT) < 0) die("chdir", NW_ROOT_MNT);
+    /* Which branch ran decides whether /oldroot is a mount point. Carry
+     * the answer rather than inferring it from an errno afterwards. */
+    int oldroot_is_mounted = 0;
     if (syscall(SYS_pivot_root, ".", NW_OLD_ROOT) == 0) {
         say("pivoted", "pivot_root");
+        oldroot_is_mounted = 1;
     } else {
         /* The current root is the kernel's initramfs rootfs. pivot_root
          * is defined to fail there (EINVAL: "the current root is on the
@@ -186,12 +190,29 @@ int main(void)
      * exists in nw-sup and none should be added until that work. */
     ensure_mount("cgroup2", "/sys/fs/cgroup", "cgroup2", 0);
 
-    /* /oldroot only exists after a successful pivot_root. The MS_MOVE
-     * path overmounts / and leaves no oldroot to detach; ENOENT is
-     * that path, not a failed detach. EINVAL ("not a mount point")
-     * and ENODEV are a failed detach: oldroot is still mounted under
-     * the new root. Do not swallow those. */
-    if (umount2("/" NW_OLD_ROOT, MNT_DETACH) < 0 && errno != ENOENT)
+    /* No errno is tolerated here, because the branch above already knows
+     * the answer this code used to guess at.
+     *
+     * The condition was `errno != ENOENT && errno != EINVAL &&
+     * errno != ENODEV` under a comment saying "the MS_MOVE path leaves no
+     * oldroot to detach; ENOENT is that path". The comment named the wrong
+     * errno. mkpath() creates NW_ROOT_MNT/oldroot BEFORE either branch
+     * runs, so on the MS_MOVE path /oldroot exists as a plain directory
+     * that was never mounted on, and umount2 answers EINVAL -- never
+     * ENOENT. Tolerating EINVAL was the thing keeping that path alive.
+     *
+     * Narrowing the list to ENOENT, which is what the comment defended,
+     * panicked a real boot on the first try: `[dawn] FAIL umount oldroot
+     * errno=22` then `Kernel panic - not syncing: Attempted to kill init`.
+     * Measured under `make qemu` 2026-09-11 -- the MS_MOVE branch is the
+     * one harness.md records as having no lab coverage, so the suite was
+     * green throughout.
+     *
+     * So: do not tolerate an errno, and do not call umount2 where it is
+     * meaningless. On the pivot_root branch /oldroot IS a mount point and
+     * any failure is a real one. On the MS_MOVE branch there is nothing
+     * mounted there and nothing to detach. */
+    if (oldroot_is_mounted && umount2("/" NW_OLD_ROOT, MNT_DETACH) < 0)
         die("umount oldroot", NULL);
     if (rmdir("/" NW_OLD_ROOT) < 0 &&
         errno != EBUSY && errno != ENOTEMPTY && errno != ENOENT)

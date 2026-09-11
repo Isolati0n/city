@@ -6,10 +6,12 @@ import hashlib
 import os
 import re
 import shutil
+import signal
 import struct
 import subprocess
 import sys
 import tempfile
+import time
 import zlib
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -601,17 +603,74 @@ def test_dawn_real_boot():
         subprocess.run(["umount", f"{lab}/mr"], check=True)
         subprocess.run(["umount", f"{lab}/me"], check=True)
 
-        def boot_dawn():
+        def boot_dawn(expect_open=True, timeout=25):
+            """Boot dawn for real and close it the way production closes.
+
+            This used to pass `NW_HOLD_MS=800` in the environment and let
+            dawn forward `--hold-ms` to PID 1, so the city shut itself
+            down on a timer and the test read the exit status. That timer
+            was a production control surface: NW_HOLD_MS reached PID 1
+            through the KERNEL COMMAND LINE, and putting NW_HOLD_MS=800
+            there made a real unattended boot power itself off. dawn no
+            longer reads it, so this helper has to close the city itself.
+
+            SIGTERM to PID 1 of the nested pid namespace is the production
+            close path -- the same signal `shutdown_city` exists to
+            handle. `unshare --fork` does not forward signals, so the
+            child is found through /proc rather than signalled by proxy.
+
+            The timeout is a failure, not a close: without `city_closed`
+            paired against a line proving TERM was delivered, a hang that
+            got killed here would present exactly like a clean shutdown.
+            """
             cmd = ["unshare", "--mount", "--pid", "--fork", "--",
                    "env", f"NW_ROOT={rootdev}", "NW_ROOT_FSTYPE=ext4",
                    f"NW_ESP={espdev}", f"NW_ESP_FSTYPE={esp_fs}",
-                   "NW_HOLD_MS=800",
                    f"{BIN}/nw-dawn"]
-            p = run(cmd)
-            return p.returncode, p.out + p.err
+            log = f"{lab}/console.log"
+            with open(log, "wb") as f:
+                p = subprocess.Popen(cmd, stdout=f, stderr=subprocess.STDOUT)
+                deadline = time.time() + timeout
+                signalled = False
+                while time.time() < deadline:
+                    if p.poll() is not None:
+                        break
+                    if expect_open and not signalled:
+                        try:
+                            seen = open(log, "rb").read().decode(
+                                "utf-8", "replace")
+                        except FileNotFoundError:
+                            seen = ""
+                        if "city open" in seen:
+                            # PID 1 of the nested ns is unshare's only child.
+                            kids = open(
+                                f"/proc/{p.pid}/task/{p.pid}/children"
+                            ).read().split()
+                            if kids:
+                                os.kill(int(kids[0]), signal.SIGTERM)
+                                signalled = True
+                    time.sleep(0.05)
+                else:
+                    p.kill()
+                    p.wait()
+                    out = open(log, "rb").read().decode("utf-8", "replace")
+                    raise SystemExit(
+                        f"FAIL: dawn boot did not finish within {timeout}s "
+                        f"(city open seen: {'city open' in out}, TERM sent: "
+                        f"{signalled}). A hang is not a shutdown.\n{out[-1500:]}")
+            return p.returncode, open(log, "rb").read().decode(
+                "utf-8", "replace")
 
         rc, out = boot_dawn()
         expect(city_closed(rc, out), f"dawn boot rc={rc}\n{out}")
+        # Pair the close with proof the TERM arrived. city_closed alone is
+        # satisfied by anything that ends after printing `closed`, and the
+        # whole point of this boot is that the production shutdown path ran
+        # rather than a lab timer expiring.
+        expect("shutdown TERM houses" in out,
+               f"the city closed without shutdown_city having been entered "
+               f"by signal -- something other than the production close "
+               f"path ended this boot\n{out}")
         expect("mounted /sysroot" in out, f"root not mounted\n{out}")
         expect("mounted /sysroot/efi" in out, f"esp not mounted\n{out}")
         expect("pivoted" in out, f"no pivot_root\n{out}")
@@ -628,6 +687,8 @@ def test_dawn_real_boot():
         subprocess.run(["umount", f"{lab}/me"], check=True)
         rc, out = boot_dawn()
         expect(city_closed(rc, out), f"slot B rc={rc}\n{out}")
+        expect("shutdown TERM houses" in out,
+               f"slot B closed without the production shutdown path\n{out}")
         expect("live slot /efi/slots/B" in out, f"B not selected\n{out}")
         expect("houses=1" in out, f"slot B should hold 1 unit\n{out}")
 
@@ -636,8 +697,60 @@ def test_dawn_real_boot():
         open(f"{lab}/me/slots/current", "w").write("../../etc\n")
         subprocess.run(["sync"], check=True)
         subprocess.run(["umount", f"{lab}/me"], check=True)
-        rc, out = boot_dawn()
+        rc, out = boot_dawn(expect_open=False)
         expect("HALT: slots/current" in out, f"traversal not refused\n{out}")
+
+        # NW_HOLD_MS MUST BE INERT IN PRODUCTION. This is the property the
+        # variable's removal was for, and dropping it from the boot above
+        # does not assert it -- a test that stops setting a variable cannot
+        # notice it working again. Measured: re-adding the forwarding to
+        # dawn.c left this whole test green until this case existed.
+        #
+        # NW_HOLD_MS reached PID 1 through the kernel command line, so a
+        # bootloader could make a real unattended machine power itself off
+        # mid-boot. The city must open and STAY open with it set.
+        subprocess.run(["mount", espdev, f"{lab}/me"], check=True)
+        open(f"{lab}/me/slots/current", "w").write("A\n")
+        subprocess.run(["sync"], check=True)
+        subprocess.run(["umount", f"{lab}/me"], check=True)
+        cmd = ["unshare", "--mount", "--pid", "--fork", "--",
+               "env", f"NW_ROOT={rootdev}", "NW_ROOT_FSTYPE=ext4",
+               f"NW_ESP={espdev}", f"NW_ESP_FSTYPE={esp_fs}",
+               "NW_HOLD_MS=400", f"{BIN}/nw-dawn"]
+        log = f"{lab}/inert.log"
+        with open(log, "wb") as f:
+            p = subprocess.Popen(cmd, stdout=f, stderr=subprocess.STDOUT)
+            # Four times the timer it must be ignoring. THE SNAPSHOT IS
+            # TAKEN BEFORE THE TERM, and that ordering is the test: the
+            # first version of this read the log after signalling and
+            # asserted `closed` was absent, which fails against a correct
+            # tree because the signal is what closes it. Assert on what
+            # happened while nothing was being asked of it.
+            try:
+                p.wait(timeout=1.6)
+                exited_on_its_own = True
+            except subprocess.TimeoutExpired:
+                exited_on_its_own = False
+            snap = open(log, "rb").read().decode("utf-8", "replace")
+            if not exited_on_its_own:
+                kids = open(f"/proc/{p.pid}/task/{p.pid}/children").read().split()
+                if kids:
+                    os.kill(int(kids[0]), signal.SIGTERM)
+                try:
+                    p.wait(timeout=15)
+                except subprocess.TimeoutExpired:
+                    p.kill(); p.wait()
+        # Paired: the city must have OPENED, or "did not close" is also
+        # satisfied by a boot that never got anywhere.
+        expect("city open" in snap,
+               f"the NW_HOLD_MS boot never opened a city within 1.6s, so its "
+               f"not having closed proves nothing\n{snap}")
+        expect(not exited_on_its_own and
+               "closed" not in snap.split("city open", 1)[1],
+               f"NW_HOLD_MS=400 in the environment shut the city down within "
+               f"1.6s and nothing had signalled it: the lab timer is "
+               f"reachable from the kernel command line again, which is how "
+               f"an unattended boot powers itself off\n{snap}")
     finally:
         for d in (f"{lab}/mr", f"{lab}/me"):
             subprocess.run(["umount", d], check=False,
@@ -702,8 +815,19 @@ def test_budget_is_hard_total():
     between deaths, so budget=3 never fired. Pairing is the restart lines
     that did happen, then the one that must not.
 
-    This docstring used to end "Control: restore a window reset and this
-    test sees death=4 inside the hold." It does not, and the correction had
+    THE NAME CHANGED on 2026-09-11, from budget-hard-total to
+    budget-no-reset, because the old one claimed more than any boot can
+    show. A 7s hold against 1.2s deaths pins "no reset inside 7s"; a
+    30-second window is green against it, which `control` demonstrated.
+    "Hard total" is a claim about all time and a timing test cannot
+    reach it -- so the structural assertions at the end of this function
+    carry that half: `deaths` is assigned exactly twice in nwsup.c (one
+    init, one increment) and the file has no clock, so there is nowhere
+    for a reset to live. Handed over by the agent who owns the restart
+    loop, who was right that keeping the old name was the wrong answer.
+
+    This docstring also used to end "Control: restore a window reset and
+    this test sees death=4 inside the hold." It does not, and the correction had
     already been written into the body comment below while this sentence,
     eight lines above it, kept the false version -- reworded in one place
     and survived by being moved, which `claims` found by running the
@@ -748,7 +872,37 @@ def test_budget_is_hard_total():
            f"budget did not bound: death=4\n{out}")
     n = out.count("restart drip death=")
     expect(n == 3, f"expected 3 restarts, got {n}\n{out}")
-    print("ok budget-hard-total")
+
+    # THE STRUCTURAL HALF, which is the half the name claims and no boot
+    # can establish. "A hard total" is a statement about all time; a 7s
+    # hold cannot distinguish it from a 30s window, and `control` proved
+    # that by restoring one and watching this test stay green.
+    #
+    # What makes it a hard total is that there is nowhere for a reset to
+    # live: `deaths` is initialised once and incremented once, nothing
+    # else assigns it, and nwsup.c has no clock at all. That is checkable
+    # exactly, cheaply, and for all time -- so check it here instead of
+    # pretending a longer hold would settle it. Handed over by the agent
+    # who owns the restart loop; the file is ours, so the test is ours.
+    sup = open(os.path.join(ROOT, "nwsup.c")).read()
+    assigns = re.findall(r"\bdeaths\s*(?:=[^=]|\+\+|--|[-+*/]=)", sup)
+    expect(len(assigns) == 2,
+           f"nwsup.c assigns `deaths` {len(assigns)} times, expected exactly "
+           f"two -- one initialisation and one increment. A third assignment "
+           f"is where a window reset would live, and no boot-length test can "
+           f"see one: {assigns}")
+    clocks = re.findall(
+        r"\b(clock_gettime|now_ms|alarm|nanosleep|usleep|setitimer|"
+        r"timerfd_create|gettimeofday|time)\s*\(", sup)
+    expect(not clocks,
+           f"nwsup.c has regained a timing primitive: {sorted(set(clocks))}. "
+           f"A budget that can read a clock can reset on one, which is D18 "
+           f"coming back, and this suite's timing assertions above would "
+           f"stay green against any window longer than their hold.")
+
+    # The name says what is pinned, and no more.
+    print("ok budget-no-reset (3 restarts in a 7s hold, and nwsup.c has one "
+          "increment, no other assignment to deaths, and no clock)")
 
 
 def test_shutdown_does_not_restart():
