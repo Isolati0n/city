@@ -170,9 +170,21 @@ harness can fail, and the passes mean something.
 | `n_units == 1`, `n_binds == 0` | the `len != need` size check rejects every other shape at this length *before* the unit loop and before anything asserted, so no input that could falsify a post-condition is excluded |
 | unit loop unwound to 2 | `--unwinding-assertions` stayed on and passed, so CBMC confirmed 2 suffices rather than being told to assume it |
 
-The proof copy is generated mechanically from `nwcheck.c` — five `static`
-definitions replaced by `extern`, nothing rewritten — so what is proven is
-what ships.
+**CORRECTION, 2026-09-11.** This paragraph said, in the present tense, that
+"the proof copy is generated mechanically from `nwcheck.c` — five `static`
+definitions replaced by `extern`". There was no generator. There was a
+hand-edited copy of `nwcheck.c`, in a session scratch directory, and no
+harness, no `cbmc` target and no reference to any of it anywhere in the
+tree: `grep -rn cbmc Makefile tests/ tools/` returned nothing. `nwcheck.c`
+was edited twice after this was written and nothing re-ran. `tcb-review`
+found it, reconstructed the harness, and confirmed the underlying result
+still holds — which is lucky, not evidence, and is exactly the shape
+`CLAUDE.md` names as the characteristic failure with a proof standing in for
+the sentence.
+
+It is true now: `proofs/mkcomp.py` derives the copy at run time and fails
+loudly if a leaf is renamed or inlined; `make proof` runs every harness with
+its control; `proofs/README.md` states the bounds. See `HISTORY.md` §28.
 
 ### What is NOT proven, stated because the gap is the interesting part
 
@@ -180,11 +192,43 @@ what ships.
   through the duplicate-name table, and that is precisely what is stubbed.
   `n_units > 1` is untouched.
 - **Anything with binds.** `n_binds == 0` throughout.
-- **That duplicate detection works.** `name_dup` has no contract; nothing
-  here claims it detects duplicates. It is now a function and can be proven
-  on its own — that is the obvious next step, and it is also the code
-  `NW_E_DUPNAME` shows no test has ever reached.
+- ~~**That duplicate detection works.**~~ Done, 2026-09-11 — see below.
 - **The runtime.** Unchanged and unreachable by this method.
+
+## Tier A+ — `name_dup` proven, 2026-09-11
+
+`proofs/leaf_name_dup.c`, in the tree and run by `make proof`:
+
+```
+  leaf_name_dup              PASS (want PASS)  ** 0 of 342 failed  88s
+  leaf_name_dup_vacuity      FAIL (want FAIL)  ** 1 of 342 failed  16s
+```
+
+The property is the one `nw_check` relies on, in both directions: running
+`name_dup` over units in order against a table that started empty reports a
+duplicate **exactly when** two of them share a name. Both directions,
+because a checker that answers `NW_E_DUPNAME` to everything satisfies the
+first. Names are free across all 2^(8×32) values; the assumption is only
+that each is non-empty and NUL-padded, which is what `name_ok` — proven
+separately, and asserting exactly that pair of post-conditions — guarantees
+about every name that reaches `name_dup` in `nw_check`.
+
+**The interesting limit, found by a control that passed.** At two units the
+probe chain is never needed: equal names have equal hashes, so a duplicate's
+home slot is exactly where its match sits. Truncating the chain to one slot
+leaves this proof SUCCESSFUL. Probing is only required when a *different*
+name got there first, which needs three units. So the proof at N=2 is a
+proof about matching, not about probing.
+
+Probing is covered from the other side, by test, with a control that does
+fail: `test_dupname_refused` plants a pair that `nwcheck.c`'s own hash puts
+in the same slot — asked at run time through a throwaway that includes the
+translation unit, so a change to the hash cannot silently turn the test back
+into the weaker one — and truncating the chain fails it.
+
+The caller proof also grew three post-conditions it did not have: kind is
+one of the two, no lid bit outside the closed set, and a bind names a unit
+that exists and has a brick.
 
 ### What it cost, including the wrong turns
 

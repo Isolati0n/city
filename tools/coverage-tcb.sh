@@ -19,7 +19,21 @@ set -eu
 # 2026-09-10, once the percentage was read from gcov rather than recomputed
 # wrongly. A bare `make stage` gives less -- the same code with fewer inputs
 # -- which is what the corpus guard below exists to distinguish.
-FLOOR=${1:-83}
+# Ratcheted to 99 on 2026-09-11. What the uncovered list bought, in one day:
+# nw_crc32 was a dead export and is gone; NW_E_DUPNAME, NW_E_KIND,
+# NW_E_LIDS and NW_E_LLBRICK were checks no test had ever reached, because
+# the baker refuses all four and every blob the suite had came from the
+# baker -- crafted-blob tests reach them now. Leaving the floor at 83 while
+# the measurement climbed to 99 would have let sixteen points slide out
+# silently, which is the defect this script exists to catch, one layer up;
+# tcb-review found it. If this fails on your machine, that is a finding to
+# report, not a number to lower.
+#
+# The one line still uncovered is name_dup's full-table return, and it is
+# uncovered because blob.h asserts at compile time that the table cannot
+# fill. Unreachable by construction is the right reason for a line to be
+# cold; "no test does that" is not.
+FLOOR=${1:-99}
 ROOT=$(pwd)
 W=$(mktemp -d)
 trap 'rm -rf "$W"' EXIT

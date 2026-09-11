@@ -27,6 +27,26 @@ _Static_assert(NW_MAX_UNITS * 2 + NW_FD_RESERVED <= NW_MAX_FDS,
 _Static_assert(NW_MAX_UNITS * 2 + NW_FD_RESERVED <= NW_FD_SWEEP,
                "sweep must cover the whole legal descriptor range");
 
+/* Slots in nwcheck.c's duplicate-name table. Not a plan-format limit -- no
+ * blob and no spec mentions it -- but it is a second number that must stay
+ * larger than NW_MAX_UNITS, so it lives here beside the first one and the
+ * assert holds the relation.
+ *
+ * name_dup returns 0 from a full table: it inserts nothing and reports no
+ * duplicate. That is correct only while the table cannot fill. It was five
+ * bare 128s inside nwcheck.c until 2026-09-11, with the relation stated in a
+ * comment and enforced by nothing: raising NW_MAX_UNITS to 256 compiled with
+ * no warning, every static assert passing, and a 130-unit blob whose units
+ * 128 and 129 share a name validated NW_OK -- accepted by the TCB and
+ * rejected by the baker, at the one scale nothing in the suite boots.
+ * Invariant 3, found by fd-auditor on af03922. Power of two because the
+ * probe masks. */
+#define NW_DUP_SLOTS    128
+_Static_assert(NW_MAX_UNITS < NW_DUP_SLOTS,
+               "duplicate-name table must never fill: see name_dup");
+_Static_assert((NW_DUP_SLOTS & (NW_DUP_SLOTS - 1)) == 0,
+               "duplicate-name table size must be a power of two");
+
 /* There is one seccomp filter and a house does not choose. A second profile
  * (NW_PROF_BUILD, for a toolchain) existed briefly on 2026-09-10 and was
  * removed the same day: its allow-list was written from a table rather than
@@ -103,10 +123,12 @@ enum {
 };
 
 const char *nw_errstr(int e);
-uint32_t nw_crc32(const void *data, uint32_t len);
-/* CRC over two regions. nw_check needs the header with its crc field zeroed
- * followed by the body, which is not one buffer; nw_crc32 delegates here so
- * there is one implementation. See the comment in nwcheck.c. */
+/* CRC over two regions, which is the shape nw_check needs: the header with
+ * its crc field zeroed, followed by the body. There is no one-region
+ * convenience wrapper -- nw_crc32(data, len) existed, exported, called by
+ * nothing, for the whole life of this file, and survived the 2026-09-10
+ * extraction as a delegating one-liner that still had no caller. Pass NULL
+ * and 0 for the second region. */
 uint32_t nw_crc32_split(const void *a, uint32_t na, const void *b, uint32_t nb);
 int nw_check(const void *blob, uint32_t len);
 

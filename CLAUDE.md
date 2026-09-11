@@ -167,10 +167,19 @@ rediscover them.
 make            # all binaries
 make stage      # stages to /tmp/nw-init-run
 make test       # stage + install-agents.sh --check + nw-check + tests/run.py
+make proof      # the CBMC proofs of the validator, and their controls
 ```
 
 `tests/run.py` boots via `unshare --pid --fork --mount-proc` so `nw-root` is
 genuine PID 1 and orphan reaping is actually exercised.
+
+`make proof` is minutes rather than seconds and needs `cbmc`, so it is not
+part of `make test`; when `cbmc` is absent it exits 3 and says SKIP rather
+than passing. **A proof kept outside the tree is a sentence** — that is the
+rule `proofs/` exists to enforce, and `HISTORY.md` §28 is why. Read
+`proofs/README.md` before quoting a result from it: every run there is
+bounded to a small number of units, and a bounded proof reported without its
+bound is a kind-1 statement that is not checkable.
 
 ## Dispatching agents
 

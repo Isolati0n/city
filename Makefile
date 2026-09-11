@@ -75,6 +75,14 @@ test: stage
 	NW_STAGE=$(STAGE) python3 tests/run.py
 	NW_STAGE=$(STAGE) sh tools/coverage-tcb.sh
 
+# The CBMC proofs of the validator, and the controls that must fail. Not in
+# `test`: it is minutes rather than seconds, and it needs cbmc, which is not
+# a build dependency of anything here. `run.sh` exits 3 and says SKIP rather
+# than passing when cbmc is absent -- a proof that could not run is not a
+# proof that passed, same rule as the suite's skips.
+proof:
+	sh proofs/run.sh
+
 clean:
 	rm -f lids.o nw-dawn nw-root nw-spawn nw-check nw-sup nw-rescue \
 	      unit-probe unit-boom unit-badcall unit-term unit-brick

@@ -2037,3 +2037,67 @@ different claims and conflating them is the move this project punishes.
 
 Dispatchable roster: nine down to six. The shape the evidence supports is
 read-only reviewers that fan out, plus rules that arrive when relevant.
+
+## 28. The proof that existed only in a scratch directory (2026-09-11)
+
+`docs/plans/02` recorded **Tier A — ACHIEVED** on 2026-09-11, present tense,
+with the run's output quoted and a table of assumptions. One line of it said
+the proof copy "is generated mechanically from `nwcheck.c`". There was no
+generator. There was a hand-edited copy of `nwcheck.c` in a session scratch
+directory, and `grep -rn cbmc Makefile tests/ tools/` returned nothing.
+
+`nwcheck.c` was then edited twice — the CRC and duplicate-table extraction,
+and the `NW_DUP_SLOTS` fix — and nothing re-ran. `tcb-review` found it by
+grepping for the tool, rebuilt the harness from scratch, and got the same
+result against the *current* tree, plus a control that fails on exactly the
+right assertion when `if (u[i]._pad != 0) return NW_E_RSV;` is deleted. So
+the claim was true. Nothing in the repository could have told anyone that.
+
+`proofs/` is the repair: four harnesses, a generator that fails loudly if a
+leaf is renamed or inlined, a vacuity control per proof that must fail, and
+`make proof`. `proofs/README.md` states the bounds — one unit at the caller,
+two names at `name_dup` — because a bounded proof reported without its bound
+is the same sentence-shaped defect in a more convincing font.
+
+The rule it earns: **a proof kept outside the tree is a sentence.** It has
+the failure mode of a comment and the authority of a test, which is the
+worst available combination.
+
+## 29. The duplicate-name table's second limit (2026-09-11)
+
+`name_dup`'s table was five bare `128`s with the safety condition in prose:
+"it cannot happen while the table is larger than `NW_MAX_UNITS`". Nothing
+enforced that. Raising `NW_MAX_UNITS` — the change invariant 3 explicitly
+anticipates — compiled with no warning and every existing `_Static_assert`
+passing, and duplicate detection silently stopped working above 129 units.
+
+The exact input, found by `fd-auditor` and reproduced independently:
+
+```
+n_units=129  dup pair (127,128) -> nw_check -> 6 (duplicate name)
+n_units=130  dup pair (128,129) -> nw_check -> 0 (ok)
+n_units=130  dup pair (127,129) -> nw_check -> 6 (duplicate name)
+n_units=200  dup pair (128,199) -> nw_check -> 0 (ok)
+```
+
+Note it degrades *partially*: a full table still scans its 128 residents, so
+some duplicates are caught and some are not. Correct at small N, silently
+wrong at large N, returns success — bugs 9 and 13 in a new costume, and the
+baker would have rejected every one of those blobs, so the TCB became the
+weaker of the two checkers.
+
+Fixed by giving the number one name (`NW_DUP_SLOTS` in `blob.h`) with
+`_Static_assert(NW_MAX_UNITS < NW_DUP_SLOTS)`, and `int slot[static
+NW_DUP_SLOTS]` so a short table is a diagnostic at the call site rather than
+an out-of-bounds read of `u[]` through a garbage index. Both were run as
+controls: the assert errors, the parameter warns.
+
+`NW_E_DUPNAME` had also never been produced by `nw-check` in the suite's
+history — the only duplicate test rejected at the baker. It is now reached
+by `test_dupname_refused` and proven by `proofs/leaf_name_dup.c`. The first
+draft of that test had two cases described as exercising two paths through
+the table; truncating the probe chain to one slot did not fail it, because
+64 short names in 128 slots do not collide. It now plants a pair that
+`nwcheck.c`'s own hash puts in the same slot, asked at run time through a
+throwaway that includes the translation unit, and truncating the chain fails
+it. A control that passes is not good news.

@@ -33,8 +33,9 @@ const char *nw_errstr(int e)
  * crc field zeroed followed by the body, and that is not one buffer.
  *
  * This is the ONLY implementation. nw_check carried a second, inlined copy
- * of the same loop until 2026-09-10 while nw_crc32 sat exported and called
- * by nothing -- two copies of an algorithm in a TCB file, which is what
+ * of the same loop until 2026-09-10 while a one-region nw_crc32 sat exported
+ * and called by nothing -- two copies of an algorithm in a TCB file, and one
+ * dead export beside them, which is what
  * invariant 3 exists to prevent, found by measuring coverage rather than by
  * reading. Extracting it also makes nw_check model-checkable: unrolling
  * ~2,100 symbolic iterations of this loop is what stopped CBMC dead, and a
@@ -57,11 +58,6 @@ uint32_t nw_crc32_split(const void *a, uint32_t na, const void *b, uint32_t nb)
             c = (c >> 1) ^ (0xedb88320u & (uint32_t)-(int)(c & 1u));
     }
     return c ^ 0xffffffffu;
-}
-
-uint32_t nw_crc32(const void *data, uint32_t len)
-{
-    return nw_crc32_split(data, len, (void *)0, 0);
 }
 
 static int name_ok(const char *s, int max)
@@ -125,8 +121,9 @@ static uint32_t hash_name(const char *s)
 
 /* Has u[i].name already appeared among u[0..i-1]?
  *
- * Open-addressed, 128 slots, carried across calls in slot[]. It replaced a
- * nested scan that took 15.26 s at 64k units; do not reintroduce one.
+ * Open-addressed, NW_DUP_SLOTS slots, carried across calls in slot[]. It
+ * replaced a nested scan that took 15.26 s at 64k units; do not reintroduce
+ * one.
  *
  * Extracted from nw_check on 2026-09-10 for the same two reasons as the CRC
  * above. It is the single largest obstruction to model-checking the caller
@@ -139,15 +136,23 @@ static uint32_t hash_name(const char *s)
  * proven and tested on its own.
  *
  * Returns 1 for a duplicate, 0 otherwise. A full table returns 0 -- the
- * behaviour the inline version had, preserved deliberately: it cannot
- * happen while the table is larger than NW_MAX_UNITS, and silently
- * changing it here would be a second meaning for a full table. */
-static int name_dup(int *slot, const struct nw_unit *u, uint32_t i)
+ * behaviour the inline version had, preserved deliberately: silently
+ * changing it here would be a second meaning for a full table. It is sound
+ * only because the table cannot fill, and that is now the _Static_assert in
+ * blob.h rather than this sentence. It was this sentence alone until
+ * 2026-09-11, and the sentence was not load-bearing enough: see NW_DUP_SLOTS.
+ *
+ * slot is [static NW_DUP_SLOTS] so the array and its bound cannot be
+ * separated by the extraction -- a caller passing a shorter one is a
+ * -Wstringop-overflow at the call site, not a silent out-of-bounds read of
+ * u[] through a garbage index. */
+static int name_dup(int slot[static NW_DUP_SLOTS], const struct nw_unit *u,
+                    uint32_t i)
 {
     uint32_t hv = hash_name(u[i].name);
-    int s = (int)(hv & 127u);
-    for (int p = 0; p < 128; p++) {
-        int k = (s + p) & 127;
+    int s = (int)(hv & (uint32_t)(NW_DUP_SLOTS - 1));
+    for (int p = 0; p < NW_DUP_SLOTS; p++) {
+        int k = (s + p) & (NW_DUP_SLOTS - 1);
         if (slot[k] < 0) { slot[k] = (int)i; return 0; }
         const char *a = u[slot[k]].name;
         const char *b = u[i].name;
@@ -196,8 +201,8 @@ int nw_check(const void *blob, uint32_t len)
 
     const struct nw_unit *u = nw_units(blob);
 
-    int slot[128];
-    for (int i = 0; i < 128; i++) slot[i] = -1;
+    int slot[NW_DUP_SLOTS];
+    for (int i = 0; i < NW_DUP_SLOTS; i++) slot[i] = -1;
 
     for (uint32_t i = 0; i < h->n_units; i++) {
         if (!name_ok(u[i].name, NW_NAME_LEN)) return NW_E_NAME;

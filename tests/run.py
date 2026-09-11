@@ -816,6 +816,221 @@ def test_landlock_confines():
     print(f"ok landlock-confines (ABI {abi})")
 
 
+def c_name_slots(names):
+    """Ask nwcheck.c itself which table slot each name hashes to.
+
+    hash_name is static, so a throwaway includes the translation unit rather
+    than linking it -- the pattern .claude/rules/plan.md uses for struct
+    sizes, for the same reason: the alternative is a second copy of a TCB
+    algorithm in Python, and a copy that drifts turns the collision test
+    below into a test of nothing while it still prints ok."""
+    slots = int(blob_h("NW_DUP_SLOTS"))
+    src = f"{WORK}/hashprobe.c"
+    with open(src, "w") as f:
+        f.write('#include "nwcheck.c"\n#include <stdio.h>\n'
+                'int main(void){\n')
+        for nm in names:
+            f.write(f'  printf("%u\\n", hash_name("{nm}") & '
+                    f'(unsigned)(NW_DUP_SLOTS - 1));\n')
+        f.write("  return 0;\n}\n")
+    exe = f"{WORK}/hashprobe"
+    c = run(["gcc", "-std=gnu11", f"-I{ROOT}", "-o", exe, src])
+    expect(c.returncode == 0, f"hash probe build\n{c.out}{c.err}")
+    p = run([exe])
+    expect(p.returncode == 0, f"hash probe\n{p.out}{p.err}")
+    got = [int(x) for x in p.out.split()]
+    expect(len(got) == len(names), f"hash probe output\n{p.out}")
+    expect(all(0 <= s < slots for s in got), f"slot out of range\n{p.out}")
+    return got
+
+
+def test_dupname_refused():
+    """Two houses under one name, refused by the TCB rather than the baker.
+
+    Until 2026-09-11 NW_E_DUPNAME had never been produced by nw-check in this
+    suite's whole history: the only duplicate-name test bakes, and the baker
+    rejects with a set comparison before the blob exists. So the checker's
+    open-addressed table -- the part that has to be right when a blob arrives
+    from somewhere other than the baker -- ran green every day without ever
+    returning its own error code.
+
+    Two crafted blobs, and the second is the one that pays. A plain duplicate
+    is found in the slot it hashes to and says nothing about probing: it
+    passes against a table truncated to one probe, which is how the first
+    version of this test was wrong. The collision case plants two names that
+    nwcheck.c's own hash puts in the same slot, so the second is displaced by
+    one, and duplicates *that* -- detection then requires stepping past an
+    occupied, non-matching slot. Truncating the chain fails it.
+
+    Nothing here can reach a full table: blob.h asserts NW_MAX_UNITS <
+    NW_DUP_SLOTS at compile time, which is the only place that case is
+    checkable, since a blob big enough to fill the table is rejected for its
+    unit count first."""
+    n = int(blob_h("NW_MAX_UNITS"))
+    expect(n >= 4, f"this test needs at least 4 units, blob.h says {n}")
+    NAME, PATH, BRICK = (int(blob_h(x)) for x in
+                         ("NW_NAME_LEN", "NW_PATH_LEN", "NW_BRICK_LEN"))
+    HDR = 20
+    USZ = NAME + PATH + BRICK + 6
+
+    city = f"{WORK}/dup.city"
+    open(city, "w").write("".join(
+        f"house u{i:02d} /bin/true kind=oneshot lids=none\n" for i in range(n)))
+    good = f"{WORK}/dup-ok.blob"
+    b = run(["python3", CC, "--city", city, "--out", good])
+    expect(b.returncode == 0, f"bake\n{b.out}{b.err}")
+    base = bytearray(open(good, "rb").read())
+    expect(len(base) == HDR + n * USZ,
+           f"layout: {len(base)} bytes for {n} units of {USZ}")
+
+    def put(d, idx, name):
+        off = HDR + idx * USZ
+        d[off:off + NAME] = name.encode().ljust(NAME, b"\0")
+
+    def seal(d, why):
+        d[16:20] = b"\x00\x00\x00\x00"
+        d[16:20] = struct.pack("<I", zlib.crc32(bytes(d)) & 0xFFFFFFFF)
+        path = f"{WORK}/dup-{why}.blob"
+        open(path, "wb").write(bytes(d))
+        return path
+
+    # Find a colliding pair by asking the C hash directly, in one batch.
+    cand = [f"c{i:05d}" for i in range(256)]
+    slots = c_name_slots(cand)
+    first, pair = {}, None
+    for nm, s in zip(cand, slots):
+        if s in first:
+            pair = (first[s], nm, s)
+            break
+        first[s] = nm
+    expect(pair is not None,
+           f"no collision among {len(cand)} names in "
+           f"{blob_h('NW_DUP_SLOTS')} slots -- widen the candidate set")
+    a, bb, slot = pair
+
+    cases = []
+    d = bytearray(base)
+    put(d, 1, f"u{0:02d}")
+    cases.append((seal(d, "plain"), "plain", "units 0 and 1 share a name"))
+
+    # a and bb hash to the same slot. Inserted first, a takes it and bb is
+    # displaced to the next one; the copy of bb at the end must probe past a.
+    d = bytearray(base)
+    put(d, 0, a)
+    put(d, 1, bb)
+    put(d, n - 1, bb)
+    cases.append((seal(d, "collision"), "collision",
+                  f"{a} and {bb} both hash to slot {slot}; "
+                  f"the duplicate of {bb} must probe past {a}"))
+
+    for path, why, what in cases:
+        r = run([f"{BIN}/nw-check", path])
+        expect(r.returncode != 0,
+               f"nw-check accepted a duplicate name ({what})\n{r.out}{r.err}")
+        expect("duplicate name" in (r.out + r.err),
+               f"{why}: wrong reason ({what})\n{r.out}{r.err}")
+
+        # Not merely a diagnostic: two houses under one name are
+        # indistinguishable in the log and to nw-sup, which takes the name as
+        # argv. The city must not open.
+        rc, out = boot(plan=path, hold=400)
+        expect("HALT" in out,
+               f"a duplicate plan must not open the city ({what})"
+               f"\n{out[-1500:]}")
+
+    # The pairing. Every assertion above is a rejection, and a checker that
+    # answers NW_E_DUPNAME to everything satisfies all of them: emptying the
+    # name comparison so `same` stays 1 leaves this test green without it.
+    # So the same two colliding names, distinct, must be accepted -- which is
+    # also the only assertion here that says the table tolerates a collision
+    # rather than merely detecting through one.
+    d = bytearray(base)
+    put(d, 0, a)
+    put(d, 1, bb)
+    okpath = seal(d, "collide-distinct")
+    r = run([f"{BIN}/nw-check", okpath])
+    expect(r.returncode == 0,
+           f"nw-check rejected {a} and {bb}, which collide on slot {slot} "
+           f"but are different names\n{r.out}{r.err}")
+
+    print(f"ok dupname-refused (plain, a real collision on slot {slot}, "
+          f"and the distinct pair accepted)")
+
+
+def test_checker_rejects_crafted_fields():
+    """The three field checks in nw_check no test had ever reached.
+
+    Coverage named them: NW_E_KIND, NW_E_LLBRICK and NW_E_LIDS were never
+    executed by the suite, because the baker refuses all three at bake time
+    and every blob the suite had came from the baker. That is the arrangement
+    plan.md forbids -- "any rule the runtime relies on must be in nwcheck.c
+    too... a blob can arrive from anywhere" -- and it had been true here the
+    whole time for these three, which is a check nobody has ever seen work.
+
+    Each case writes one byte into a sealed blob and repairs the CRC. The
+    reason string is asserted, not just the exit code: a checker that
+    rejected for a different reason would satisfy `returncode != 0`."""
+    NAME, PATH, BRICK = (int(blob_h(x)) for x in
+                         ("NW_NAME_LEN", "NW_PATH_LEN", "NW_BRICK_LEN"))
+    HDR = 20
+    KIND_OFF = HDR + NAME + PATH + BRICK      # kind, budget, window_s,
+    LIDS_OFF = KIND_OFF + 4                   # then lids, then _pad
+
+    city = f"{WORK}/crafted.city"
+    brick = f"{STAGE}/nw/bricks/deadbeef"
+    good = f"{WORK}/crafted-ok.blob"
+    open(city, "w").write(
+        f"house solo /bin/true kind=oneshot lids=newns,seccomp "
+        f"brick={brick}\n")
+    p = run(["python3", CC, "--city", city, "--out", good])
+    expect(p.returncode == 0, f"bake\n{p.out}{p.err}")
+    base = bytearray(open(good, "rb").read())
+    expect(base[KIND_OFF] == 0 and base[LIDS_OFF] == (1 | 4),
+           f"kind/lids are not where the layout says: "
+           f"{base[KIND_OFF]} {base[LIDS_OFF]}")
+
+    def craft(why, edits):
+        d = bytearray(base)
+        for off, val in edits:
+            d[off] = val
+        d[16:20] = b"\x00\x00\x00\x00"
+        d[16:20] = struct.pack("<I", zlib.crc32(bytes(d)) & 0xFFFFFFFF)
+        path = f"{WORK}/crafted-{why}.blob"
+        open(path, "wb").write(bytes(d))
+        return path
+
+    cases = [
+        ("kind", [(KIND_OFF, 2)], "kind",
+         "a kind outside the two the runtime knows"),
+        ("lids", [(LIDS_OFF, 1 | 4 | 0x10)], "lids",
+         "a lid bit outside the closed set"),
+        # Landlock grants read and execute beneath the house's root, which
+        # restricts nothing when the root is the machine's. Clear the brick
+        # and ask for the lid: NW_E_LLBRICK, not a house confined to /.
+        ("llbrick",
+         [(HDR + NAME + PATH + k, 0) for k in range(BRICK)]
+         + [(LIDS_OFF, 1 | 2)], "landlock without brick",
+         "landlock on a house with no brick"),
+    ]
+    for why, edits, reason, what in cases:
+        path = craft(why, edits)
+        r = run([f"{BIN}/nw-check", path])
+        expect(r.returncode != 0,
+               f"nw-check accepted {what}\n{r.out}{r.err}")
+        expect(reason in (r.out + r.err),
+               f"{why}: wrong reason for {what}\n{r.out}{r.err}")
+
+    # The pairing: the unmodified blob these were cut from must be accepted,
+    # or every assertion above is satisfied by a checker that rejects
+    # everything -- including one that rejects this shape for an unrelated
+    # reason and never reaches the three checks at all.
+    r = run([f"{BIN}/nw-check", good])
+    expect(r.returncode == 0,
+           f"the blob the crafted ones were cut from must pass"
+           f"\n{r.out}{r.err}")
+    print("ok checker-rejects-crafted (kind, lids, landlock-without-brick)")
+
+
 def test_non_provision_at_max():
     """Non-provision, asserted at NW_MAX_UNITS rather than at four.
 
@@ -1030,7 +1245,9 @@ def main():
         test_crash_does_not_halt, test_term_signal, test_dawn_real_boot,
         test_kind_required, test_kind_exit0, test_seccomp_kills,
         test_brick_is_a_root, test_brick_needs_newns,
-        test_path_traversal_refused, test_non_provision_at_max,
+        test_path_traversal_refused, test_dupname_refused,
+        test_checker_rejects_crafted_fields,
+        test_non_provision_at_max,
         test_landlock_confines,
     ]
     passed = []
