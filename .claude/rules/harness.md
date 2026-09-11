@@ -202,17 +202,64 @@ A test that needs one of those gifts must say so in the `ok` line or
 or a copied library to make the test green without recording that the
 machine will not have it.
 
-## Recorded gap: nothing tests scale
+## Scale: measured 2026-09-11, and the numbers are in the tool
 
-Scale testing was judged the highest-value suite in this project and that
-judgement stands. Bugs have been correct at 4 units and wrong at 4,000,
-invisible because every test used a small plan. The only test that ever ran
-at large N was `wire_order.py`, and it went out with the edges
-(`HISTORY.md` §17) because what it guarded was edge ordering. Nothing
-replaced it.
+The gap is closed by `tools/scale-probe.py`. It rebuilds the tree at a
+raised `NW_MAX_UNITS` — a four-place change, so far too slow for
+`make test` — bakes a city of N units, boots it under
+`unshare --pid --fork --mount-proc`, and checks that every unit ran,
+reported exactly once, held no ungranted descriptor, and was reaped.
 
-**This is a gap, not a decision.** If you are adding tests, a large-N boot is
-the most valuable thing you could write.
+**Where it breaks and why.** On this machine (`ulimit -n` 20000,
+`pid_max` 32768, 4 CPUs): clean at 8192 units; at 10240 PID 1 stops with
+`HALT: log pipe`, because it holds two log pipes per house and
+2·10240 + 8 = 20488 descriptors is past the limit. The predicted break is
+therefore n > (20000 − 8) / 2 ≈ 9996. Controlled by lowering the limit
+tenfold: at `ulimit -n 2000` the break moves to n = 1024 with the same
+message and 512 still passes. **It fails loudly** — a named halt, not a
+crash and not silent misrouting.
+
+**Boot cost is quadratic.** Time to every house having run: 0.46 s at
+256, 1.22 s at 512, 2.64 s at 1024, 12.4 s at 2048, 54.0 s at 4096,
+140 s at 8192. `close_others` reads `/proc/self/fd` in each spawned
+house and the spawner inherits PID 1's ~2n log pipes, so the sweep is
+n × 2n. Dividing the measured time by 2n² gives 1.26, 1.47 and 1.61 µs
+per swept descriptor at 1024/2048/4096 — consistent to within 30%, which
+a wrong model would not be.
+
+### Three traps this found, all in the probe rather than the code
+
+Worth reading before you write a large-N test, because each one produced
+a confident wrong answer first.
+
+- **Do not assert presence on the logger's prefix.** Requiring
+  `[uNNNN] house=uNNNN` reported 4 of 64 units missing on a correct
+  tree. The prefix marks a write *chunk*, not a line — the log-chunk
+  trap above, met head-on. Presence comes from the fixture's self-tag.
+- **A prefix that disagrees with the self-tag is not misrouting.**
+  `spawn_logger` emits three separate `write(2)` calls per chunk —
+  prefix, buffer, newline — and every logger shares fd 2, so another
+  logger can write between them. Measured over three runs each:
+  mismatches were [0,1,0] at n=16, [0,0,0] at n=64, [0,0,2] at n=128,
+  while missing and duplicate units were 0 everywhere. Nondeterministic,
+  which a routing defect is not. **The merged console therefore cannot
+  distinguish wrong routing from interleaving at any N**, so the bug
+  4/9/13 class is not observable on that channel — separating them needs
+  per-unit capture, which belongs to the logging pass. What *is* sound
+  is exactly-once: it catches loss and duplication and it is
+  deterministic.
+- **Time the city, not your own hold.** The first version passed
+  `--hold-ms 40n` and reported wall time, so n = 1024 showed a 41 s hold
+  as a 44 s "boot" — a tidy straight line of 43 ms per unit that was
+  entirely the harness measuring itself.
+
+The probe also carries its own warning when every rung passes, because a
+ladder that never breaks usually is not reaching anything.
+
+**Still open, and now with a number attached:** nothing in `make test`
+runs above `NW_MAX_UNITS`, because getting there costs a rebuild. The
+suite's contribution is exactly-once at 64 units, in
+`test_non_provision_at_max`; the ladder is a tool you run by hand.
 
 ## Definition of done
 

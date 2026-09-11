@@ -3102,3 +3102,88 @@ because `reboot()` in a pid namespace only tears the namespace down. The
 call matches systemd, busybox and util-linux. The absence of `sync(` in
 the C sources before this was verbatim; the consequence was, and remains,
 a hypothesis.
+
+## 39. Scale, measured at last: quadratic, and it breaks at ~9,996 (2026-09-11)
+
+`tools/scale-probe.py`. The gap `harness.md` had carried since it was
+written — nothing tests scale, bugs have been correct at 4 units and
+wrong at 4,000 — now has numbers. It was the only recorded gap with no
+owner and no date, and it went first because bricks phase 2 adds a loop
+device per house and that is a per-unit resource nothing had exercised
+near any limit.
+
+### Where it breaks, and why
+
+On this machine (`ulimit -n` 20000, `pid_max` 32768, 4 CPUs):
+
+| n | result |
+|---|---|
+| 64 … 8192 | clean: every unit ran, reported once, held no ungranted fd, was reaped |
+| 10240 | `[nw-root] HALT: log pipe` |
+
+PID 1 holds two log pipes per house, so 2·10240 + 8 = 20488 descriptors
+against a 20000 limit. Predicted break n > (20000 − 8)/2 ≈ 9996.
+
+**Controlled**, since the hard limit cannot be raised in this container:
+lower it tenfold instead. At `ulimit -n 2000` the break moves to n = 1024
+— same `HALT: log pipe` — and 512 still passes. A tenfold reduction in
+the limit moved the break tenfold, which is the attribution.
+
+It fails **loudly**: a named halt, not a crash, not a silent truncation.
+
+### Boot cost is quadratic, and the arithmetic says where
+
+Time until every house had run: 0.46 s @256, 1.22 s @512, 2.64 s @1024,
+12.4 s @2048, 54.0 s @4096, 140 s @8192.
+
+`close_others` (`nwspawn.c`) reads `/proc/self/fd` in every spawned
+house, and the spawner inherits PID 1's ~2n log pipes, so the sweep is
+n × 2n. Measured time ÷ 2n² is 1.26 / 1.47 / 1.61 µs per swept
+descriptor at 1024 / 2048 / 4096 — consistent within 30%, where a wrong
+model would swing. A bare `close()` on this machine is 0.132 µs, and the
+sweep does a `readdir`, an `atoi` and a `kept()` scan per entry as well.
+
+Not a defect today: 64 units is the declared maximum and boots in well
+under a second. Recorded because the cost is *structural* — it is the
+non-provision sweep, which is the mechanism invariant 5 rests on — and
+because anything that raises `NW_MAX_UNITS` pays it squared.
+
+### Three wrong answers the probe produced first
+
+Each is a harness defect, and each looked like a finding about the code.
+
+1. **Asserting presence on the logger's prefix** reported 4 of 64 units
+   missing on a correct tree. The prefix marks a write chunk, not a line
+   — `harness.md`'s log-chunk trap, walked straight into.
+2. **Reading a prefix/self-tag mismatch as misrouting.** It is not.
+   `spawn_logger` writes prefix, buffer and newline as three separate
+   `write(2)` calls onto a shared fd 2, so another logger interleaves.
+   Three runs each: [0,1,0] at n=16, [0,0,0] at n=64, [0,0,2] at n=128,
+   with zero missing and zero duplicate units throughout —
+   nondeterministic, which a routing defect would not be.
+3. **Timing the hold instead of the city.** `--hold-ms 40n` made n=1024
+   report a 41 s hold as a 44 s boot: a clean straight line of 43 ms per
+   unit that was the harness measuring itself. Fixed by polling for the
+   city to open and for every unit to report, then TERMing.
+
+And one in the rewriting: the baker declares all four limits in a single
+tuple, so a per-name regex matched at `MAX_FDS = 64, …` and rewrote
+`MAX_UNITS` with the fd value while leaving `MAX_FDS` alone. Sizes 256
+and 508 "passed" with the wrong constants set. The probe now rewrites the
+whole line and refuses to run if it does not match.
+
+### The finding that outlasts the numbers
+
+**The merged console cannot distinguish wrong routing from interleaving,
+at any N.** Every logger writes to the same fd 2 in three unsynchronised
+calls, so `[A] house=B` is produced by both a routing defect and by
+ordinary contention. Bugs 4, 9 and 13 were all silently wrong routing;
+this channel cannot see that class however large the city. What is sound
+is **exactly-once** — it catches loss and duplication and it is
+deterministic — and that is now asserted at 64 units in
+`test_non_provision_at_max`, where it costs nothing. Control: make one
+unit write its line twice and the test fails naming that unit.
+
+Separating routing from interleaving needs per-unit capture. That is the
+logging pass's problem, and it is the second thing that pass now has to
+answer for (the first is the group-TERM drain, §38).

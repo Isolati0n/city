@@ -2319,9 +2319,22 @@ def test_non_provision_at_max():
     expect(city_closed(rc, out), f"max-unit city rc={rc}\n{out[-3000:]}")
     expect(f"houses={n}" in out, f"expected {n} units\n{out[-3000:]}")
 
-    reported = dict(re.findall(r"house=(\S+) fds_ge3=(-?\d+)", out))
+    pairs = re.findall(r"house=(\S+) fds_ge3=(-?\d+)", out)
+    reported = dict(pairs)
     expect(len(reported) == n,
            f"only {len(reported)} of {n} units reported\n{out[-3000:]}")
+    # EXACTLY once each. A dict silently collapses duplicates, so the
+    # count above passes whether a unit reported once or five times --
+    # and output arriving twice is the bug 4/9/13 class (a house's
+    # channel carrying another house's data) seen from the receiving
+    # end. tools/scale-probe.py checks this up to 8192 units; here is
+    # where it costs nothing.
+    names = [h for h, _ in pairs]
+    dupes = sorted({h for h in names if names.count(h) > 1})
+    expect(not dupes,
+           f"{len(dupes)} units reported more than once (first: "
+           f"{dupes[:5]}) -- a unit's output arrived on more than one "
+           f"channel, which no count of distinct names can see")
     dirty = {h: v for h, v in reported.items() if v != "0"}
     expect(not dirty,
            f"units hold descriptors they were not granted: "
