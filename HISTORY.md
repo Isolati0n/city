@@ -3303,7 +3303,27 @@ which is the worst possible signal to hand a reader.
 
 ### Cost
 
-`test_specs_are_checked` adds ~20 s to a ~29 s suite, effectively all
-Alloy, and the must-fail probes add two more solver runs. Still a
-run-it-every-time number, and TLC costs under a second. Anyone tempted to
-raise `12 Int` should measure first: Alloy's cost scales badly with it.
+`test_specs_are_checked` adds **35.5 s to a 28.8 s suite** — 64.3 s
+against 28.8 s, three runs each, a 2.2x increase. It is the most
+expensive thing in `make test` by a wide margin, more than every boot
+combined, and effectively all of it is Alloy; TLC costs under a second.
+
+*That is remeasured. This section first said "~20 s to a ~29 s suite",
+which understated the increment by half even before a third probe was
+added — a number written once and not re-taken after the thing it
+measured grew. `control` caught it and I remeasured rather than adopting
+its figure.*
+
+`control`'s position is that 58 s was already over the line between
+"run after every edit" and "run before you push", and that an expensive
+test which also cries wolf gets routed around. The crying wolf is fixed
+(three false alarms, above). The cost is accepted rather than reduced:
+running the probes at a smaller scope saves about 30% per probe — 4.4 s
+against 6.3 s, measured — which does not change the picture, because the
+bulk is JVM startup and the main `plan.als` run. The lever if it becomes
+intolerable is to put the three Alloy probes behind a flag CI sets, with
+a named `skip()` so `main()` refuses a bare pass. Not taken: the probes
+are the only thing showing these checks can fail at all.
+
+Anyone tempted to raise `12 Int` should measure first — Alloy's cost
+scales badly with the bitwidth.

@@ -2048,10 +2048,21 @@ def test_specs_are_checked():
     # explores the state space and checks nothing. `control` deleted the
     # INVARIANTS block and this test still printed "invariant holds".
     cfg_text = open(cfg_path).read()
-    for inv in ("FdBudgetCovers", "FdNeedAgrees", "LargestCityFits"):
-        expect(inv in cfg_text,
-               f"{inv} is not in the generated Plan.cfg, so TLC checked "
-               f"it not at all:\n{cfg_text}")
+    # TypeOK was generated into the cfg and left out of this tuple, so
+    # deleting it from the generator passed -- and TypeOK is the only
+    # invariant that mentions `kind`, `BindNeed` or the range of `n`.
+    # `control`. Read the names out of the generated file's own
+    # INVARIANTS block instead of retyping them, and require the set.
+    inv_block = cfg_text.split("INVARIANTS", 1)
+    expect(len(inv_block) == 2,
+           f"the generated Plan.cfg has no INVARIANTS block, so TLC "
+           f"checks nothing:\n{cfg_text}")
+    named = {l.strip() for l in inv_block[1].splitlines() if l.strip()}
+    expect(named == {"FdBudgetCovers", "FdNeedAgrees", "LargestCityFits",
+                     "TypeOK"},
+           f"the generated Plan.cfg names invariants {sorted(named)}. "
+           f"TLC checks exactly what is listed there and nothing else, "
+           f"so one dropped from the generator is one checked never.")
 
     t = run(["java", "-cp", tla, "tlc2.TLC", "-config", "Plan.cfg",
              "Plan.tla"], cwd=lab)
@@ -2080,10 +2091,40 @@ def test_specs_are_checked():
     # scope problem. Measured: at NW_MAX_FDS 2048 both appear. That is
     # the wrong-diagnosis shape Plan.tla's ASSUME note is about, so catch
     # it here by name before Alloy gets the chance.
-    bits = re.findall(r"but (\d+) Int", open(f"{lab}/plan.als").read())
-    expect(bits and len(set(bits)) == 1,
-           f"plan.als's Alloy commands do not agree on an Int bitwidth: "
-           f"{bits}")
+    # COMMAND LINES ONLY. `re.findall` over the whole file also reads the
+    # PROSE: plan.als explains `but 12 Int` in a comment, so raising the
+    # bitwidth in the three commands -- which this assertion's own message
+    # tells you to do -- reported "commands do not agree: ['13','13','12',
+    # '13']" when they agreed perfectly. Worse in the other direction:
+    # deleting `but 12 Int` from the commands alone left the comment
+    # satisfying this guard while Alloy ran at its default 4-bit Int, and
+    # the failure arrived as "the spec disagrees with blob.h's limits" --
+    # the exact wrong-diagnosis this assertion exists to prevent,
+    # reproduced while it was in place and green. `control`.
+    cmds = [l for l in open(f"{lab}/plan.als").read().splitlines()
+            if l.lstrip().startswith(("check ", "run "))]
+    bits = [m.group(1) for m in
+            (re.search(r"but (\d+) Int", l) for l in cmds) if m]
+    scopes = [m.group(1) for m in
+              (re.search(r"\bfor (\d+)\b", l) for l in cmds) if m]
+    expect(len(bits) == len(cmds) and len(set(bits)) == 1,
+           f"plan.als's Alloy commands do not all fix the same Int "
+           f"bitwidth: {bits} over {len(cmds)} commands")
+    # THE SCOPE IS A LIMIT TOO, and it was pinned by nothing: `control`
+    # set every command to `for 1` and the test passed while three briefs
+    # and HISTORY 39/41 all say the results are bounded "at scope 8". The
+    # must-fail probes made it worse by hardcoding their own `for 8`, so
+    # they kept finding counterexamples at a scope the real checks had
+    # stopped using.
+    expect(len(scopes) == len(cmds) and len(set(scopes)) == 1,
+           f"plan.als's Alloy commands do not all use the same scope: "
+           f"{scopes} over {len(cmds)} commands")
+    scope = int(scopes[0])
+    expect(scope == 8,
+           f"plan.als runs Alloy at scope {scope}; three briefs and "
+           f"HISTORY 39/41 state the bound as 8. Change them together or "
+           f"not at all -- a bound stated in prose and set in a command "
+           f"is two places.")
     have = int(bits[0])
     need = 2
     while (1 << (need - 1)) - 1 < vals["nwMaxFds"]:
@@ -2134,6 +2175,13 @@ def test_specs_are_checked():
                f"spec disagrees with blob.h's limits ({vals}).\n{aout[-1500:]}")
     # For the `run`, UNSAT means no instance exists: the facts contradict
     # each other and every check above passed vacuously.
+    expect({n for n, _ in runs} == {"sealed"},
+           f"plan.als ran {sorted(n for n, _ in runs)}, expected the "
+           f"`sealed` witness. `control` swapped it for `run anything "
+           f"{{ some House }}` and the count guard did not notice -- at "
+           f"which point the vacuity check establishes only that SOME "
+           f"instance exists, not one satisfying the predicate the "
+           f"checks are about.")
     for name, verdict in runs:
         expect(verdict == "SAT",
                f"Alloy found NO instance of {name}: plan.als's facts admit "
@@ -2158,29 +2206,51 @@ def test_specs_are_checked():
     # project already asks for by hand, run every time instead. The
     # vacuous Sealed stayed UNSAT under a too-small budget, so this is
     # the probe that catches it.
-    for name, mutate, what in (
-            ("Sealed", ("limits", f"fun nwMaxFds[]: Int {{ {vals['nwMaxFds']} }}",
-                        "fun nwMaxFds[]: Int { 16 }"),
-             "a budget too small for the scope"),
-            ("FdArithmetic", ("plan", "plus[nwReserved[], 2.mul[#House]]",
-                              "nwReserved[] + 2.mul[#House]"),
-             "the `+` set-union form of fdNeed"),
+    # Each probe rewrites the DEFINITION it is about, located by its
+    # header, rather than replacing a literal string anywhere in the
+    # file. Matching text bit `control` twice: a comment above fdNeed
+    # quoting its own body -- the comment HISTORY 39 all but asks for --
+    # absorbed the replacement, so fdNeed was untouched, the check
+    # correctly held, and the probe reported it as vacuous. And a
+    # semantically identical rewrite (`mul[2, #House]`) failed with
+    # "cannot find", a red suite caused by a correct edit. Both are
+    # edits a competent agent makes, and a probe that cries wolf on
+    # them is a probe someone deletes.
+    # Three probes, not two. `Sealed` is a conjunction and the budget
+    # probe only exercises the fd half: at scope 8 `#binds` cannot exceed
+    # 64 while nwMaxBinds is 128, so the bind conjunct admits no
+    # counterexample at any legal header value. `control` deleted that
+    # conjunct from `sealed` outright -- half the predicate the check is
+    # named for -- and the test passed. Lowering nwMaxBinds below what
+    # the scope can reach is what makes the other half fail.
+    for name, kind, what in (
+            ("Sealed", "budget", "a budget too small for the scope"),
+            ("Sealed", "binds", "a bind table smaller than the scope"),
+            ("FdArithmetic", "union", "the `+` set-union form of fdNeed"),
     ):
-        which, old, new_txt = mutate
-        d = f"{lab}/mustfail-{name}"
+        d = f"{lab}/mustfail-{name}-{kind}"
         os.makedirs(d, exist_ok=True)
         pl = open(f"{lab}/plan.als").read()
         lm = open(f"{lab}/limits.als").read()
-        if which == "limits":
-            expect(old in lm, f"cannot find {old!r} in the generated limits")
-            lm = lm.replace(old, new_txt, 1)
+        if kind == "budget":
+            lm, nsub = re.subn(r"fun nwMaxFds\[\]: Int \{[^}]*\}",
+                               "fun nwMaxFds[]: Int { 16 }", lm)
+        elif kind == "binds":
+            lm, nsub = re.subn(r"fun nwMaxBinds\[\]: Int \{[^}]*\}",
+                               "fun nwMaxBinds[]: Int { 1 }", lm)
         else:
-            expect(old in pl, f"cannot find {old!r} in plan.als")
-            pl = pl.replace(old, new_txt, 1)
-        # Only this assertion's check, so one run answers one question.
+            pl, nsub = re.subn(
+                r"fun fdNeed\[\]: Int \{[^}]*\}",
+                "fun fdNeed[]: Int { nwReserved[] + 2.mul[#House] }", pl)
+        expect(nsub == 1,
+               f"the {name} probe rewrote {nsub} definitions, expected "
+               f"exactly one. It locates the definition by its header, so "
+               f"this means the header changed shape -- fix the pattern; "
+               f"do not delete the probe, it is the only thing showing "
+               f"this check can fail.")
         pl = "\n".join(l for l in pl.splitlines()
-                        if not l.startswith(("check ", "run ")))
-        pl += f"\ncheck {name} for 8 but {have} Int\n"
+                        if not l.lstrip().startswith(("check ", "run ")))
+        pl += f"\ncheck {name} for {scope} but {have} Int\n"
         open(f"{d}/plan.als", "w").write(pl)
         open(f"{d}/limits.als", "w").write(lm)
         v = run(["java", "-Xss512m", "-jar", alloy, "exec", "-f",
@@ -2197,8 +2267,8 @@ def test_specs_are_checked():
                f"antecedent is unsatisfiable in scope reads exactly like "
                f"one that holds.\n{vout[-800:]}")
 
-    print(f"ok specs-are-checked (TLC: {vals['nwMaxUnits']} states, 4 "
-          f"invariants incl. the boundary; Alloy: {len(checks)} checks "
+    print(f"ok specs-are-checked (TLC: {vals['nwMaxUnits']} states, "
+          f"{len(named)} invariants incl. the boundary; Alloy: {len(checks)} checks "
           f"clean at {have}-bit Int, each shown failing when its "
           f"subject is broken; "
           f"limits generated from blob.h)")

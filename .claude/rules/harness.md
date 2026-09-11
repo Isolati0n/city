@@ -256,6 +256,14 @@ a confident wrong answer first.
 The probe also carries its own warning when every rung passes, because a
 ladder that never breaks usually is not reaching anything.
 
+**What the ladder does NOT exercise.** Every city it bakes is
+`kind=oneshot lids=none` with no brick and no bind. `HISTORY.md` §40
+gives the reason scale went first as bricks phase 2 adding a loop device
+per house — a per-unit resource nothing had exercised near a limit — and
+the probe still does not exercise it. The numbers say nothing about
+per-unit loop devices, namespaces or seccomp filters at scale. `control`
+caught the mismatch between the tool and the sentence justifying it.
+
 **Still open, and now with a number attached:** nothing in `make test`
 runs above `NW_MAX_UNITS`, because getting there costs a rebuild. The
 suite's contribution is exactly-once at `NW_MAX_UNITS` (read from the

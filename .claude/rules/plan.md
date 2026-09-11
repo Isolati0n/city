@@ -112,9 +112,20 @@ the fd budget. `HISTORY.md` §39.
 
 **What is still not checked, so do not cite it:**
 
-- `BindNeed` is reachable only through `TypeOK`, and `Init` gives every
-  house an empty bind set, so the value evaluated is always 0. The bind
-  half of invariant 3 is pinned by `nwcheck.c` and the suite, not here.
+- **TLC's `BindNeed` is only ever evaluated at 0.** It is reachable only
+  through `TypeOK`, and `Init` gives every house an empty bind set.
+  Measured: adding `BindNeed = 0` as a `TypeOK` conjunct holds in all 64
+  states, and `BindNeed # 0` is violated in the initial state. Replacing
+  the whole recursion with `BindNeed == 0` runs clean.
+
+  *This was written as a TLA+ limitation, and it was not: `control`
+  deleted the bind conjunct from Alloy's `pred sealed` -- half the
+  predicate the check is named for -- and the suite passed, because at
+  scope 8 `#binds` cannot exceed 64 while `nwMaxBinds` is 128, so no
+  counterexample exists at any legal header value.* The Alloy half is
+  pinned now, by a third must-fail probe that lowers `nwMaxBinds` below
+  what the scope can reach. The TLA+ half is still unpinned; exercising
+  it needs an `Init` that ranges over bind sets.
 - `plan.als`'s three cross-field facts (`brickNeedsNewNS`,
   `bindsNeedBrick`, `landlockNeedsBrick`) are facts, not assertions, so
   they constrain instances rather than being tested. `control` inverted

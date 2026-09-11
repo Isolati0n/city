@@ -42,7 +42,25 @@ import tempfile
 import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-FD_RESERVED = 8
+
+
+def _blob_int(name, src=None):
+    """Read a #define out of blob.h. This tool rewrites two of the four
+    places a limit lives, so it must not hold a third copy of one --
+    `FD_RESERVED = 8` was a module constant here, used for the fd
+    arithmetic AND substituted into the baker's limit tuple, while
+    blob.h's NW_FD_RESERVED was never read. Setting it to 10 in blob.h
+    gave a clean build with the C code reserving 10 and the baker
+    checking against 8: the baker accepts a city the C budget cannot
+    hold, silently, on every rung. Invariant 3's drift class,
+    reintroduced by the tool whose job is changing that limit.
+    `control`."""
+    src = src or open(os.path.join(ROOT, "blob.h")).read()
+    m = re.search(rf"^[ \t]*#[ \t]*define[ \t]+{name}[ \t]+(\S+)[ \t]*$",
+                  src, re.M)
+    if not m:
+        raise SystemExit(f"scale-probe: {name} not found in blob.h")
+    return int(re.sub(r"[uUlL]+$", "", m.group(1)), 0)
 
 
 def _children(pid):
@@ -88,8 +106,9 @@ def build_at(n_units, work):
     # blob.h's own assert: reserved + 2 per unit must fit the fd budget.
     # Raise the budget only as far as N actually needs, so the probe does
     # not quietly hide the limit it is supposed to be measuring.
-    need = FD_RESERVED + 2 * n_units
     blob = open(os.path.join(tree, "blob.h")).read()
+    reserved = _blob_int("NW_FD_RESERVED", blob)
+    need = reserved + 2 * n_units
     cur_fds = int(re.search(r"#define NW_MAX_FDS\s+(\d+)", blob).group(1))
     new_fds = max(cur_fds, need)
     blob = re.sub(r"(#define NW_MAX_UNITS\s+)\d+", rf"\g<1>{n_units}", blob)
@@ -123,7 +142,7 @@ def build_at(n_units, work):
             "count.")
     src = re.sub(pat,
                  f"MAX_UNITS, MAX_BINDS, FD_RESERVED, MAX_FDS = "
-                 f"{n_units}, {m.group(1)}, {FD_RESERVED}, {new_fds}",
+                 f"{n_units}, {m.group(1)}, {reserved}, {new_fds}",
                  src, count=1, flags=re.M)
     open(cc, "w").write(src)
     # And check the build actually got the numbers, rather than trusting
@@ -148,8 +167,16 @@ def probe(n_units, work, hold_ms=None):
     city = os.path.join(work, f"c{n_units}.city")
     # Names are fixed-width and unique; the router has to keep 4-digit
     # indices apart, which a 4-unit city never asks of it.
+    # Width from n, not fixed at 4. `{:04d}` pads and does not truncate,
+    # so at n >= 10000 the names go to five digits while the readers
+    # below matched `\d{4}` exactly -- every unit from index 10000 up
+    # would be counted as never reported. The direction is safe (a false
+    # FAIL) but the documented break is n ~ 9996 and the next rung after
+    # 8192 is 10240, so the format breaks inside the interval this tool
+    # exists to characterise. `control`.
+    w = max(4, len(str(n_units - 1)))
     open(city, "w").write("".join(
-        f"house u{i:04d} {probe_bin} kind=oneshot lids=none\n"
+        f"house u{i:0{w}d} {probe_bin} kind=oneshot lids=none\n"
         for i in range(n_units)))
     blob = os.path.join(work, f"c{n_units}.blob")
     rc, out, err = sh(["python3", os.path.join(tree, "bakery", "nw-cc.py"),
@@ -197,6 +224,7 @@ def probe(n_units, work, hold_ms=None):
                         len(set(re.findall(r"house=(u\d{4})", seen))) == n_units:
                     break
                 time.sleep(0.05)
+            timed_out = time.time() >= deadline and t_open is None
             work_s = time.time() - t1
             # The city may already be gone -- at sizes past a real limit
             # it dies on its own, and reading /proc for a pid that has
@@ -230,6 +258,20 @@ def probe(n_units, work, hold_ms=None):
                work_s=round(work_s, 2),
                total_s=round(time.time() - t0, 1), rc=rc)
 
+    # A deadline expiry used to fall straight through to the content
+    # checks with a partial log, so a city that was merely SLOW reported
+    # as "N units never reported" -- indistinguishable from real loss,
+    # and "slow" is the expected behaviour near the break given this
+    # tool's own quadratic finding. `control`, from reading.
+    if timed_out:
+        res.update(ok=False,
+                   why=f"the city did not open within "
+                       f"{max(120, 0.5 * n_units):.0f}s. This is a "
+                       f"TIMEOUT, not a content failure -- the log is "
+                       f"partial and the counts below would be about "
+                       f"nothing.")
+        return res
+
     if f"houses={n_units}" not in o:
         res.update(ok=False, why=f"city did not open with {n_units} houses; "
                                  f"last: {o.strip().splitlines()[-1][:160] if o.strip() else '(no output)'}")
@@ -258,10 +300,11 @@ def probe(n_units, work, hold_ms=None):
     # which is the logging pass's problem. What this probe can assert
     # soundly is that every unit's output arrives EXACTLY ONCE: that
     # catches loss and duplication, and it is deterministic.
-    reports = re.findall(r"house=(u\d{4}) fds_ge3=(-?\d+)", o)
-    prefixed = re.findall(r"\[(u\d{4})\] house=(u\d{4})", o)
+    reports = re.findall(rf"house=(u\d{{{w}}}) fds_ge3=(-?\d+)", o)
+    prefixed = re.findall(rf"\[(u\d{{{w}}})\] house=(u\d{{{w}}})", o)
     named = [h for h, _ in reports]
-    missing = [f"u{i:04d}" for i in range(n_units) if f"u{i:04d}" not in set(named)]
+    missing = [f"u{i:0{w}d}" for i in range(n_units)
+               if f"u{i:0{w}d}" not in set(named)]
     dupes = sorted({h for h in named if named.count(h) > 1})
     interleaved = [(p, h) for p, h in prefixed if p != h]
     dirty = [(h, v) for h, v in reports if v != "0"]
