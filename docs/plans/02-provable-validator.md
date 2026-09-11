@@ -137,7 +137,77 @@ model-checkable. **This is the item that needs a decision**, because it edits
 `nwcheck.c`. It is a small change with an unusually good ratio, and the gate
 requires `tcb-review` before it is pushed.
 
-## Tier A — prove `nwcheck.c` (CBMC)
+## Tier A — ACHIEVED for one unit, 2026-09-11
+
+```
+VERIFICATION SUCCESSFUL
+SUCCESS: 247  FAILURE: 0
+
+[main.assertion.1] accepted: unit name is NUL-terminated:      SUCCESS
+[main.assertion.2] accepted: exec_path is absolute:            SUCCESS
+[main.assertion.3] accepted: spare byte is zero:               SUCCESS
+[main.assertion.4] accepted: a brick implies the NEWNS lid:    SUCCESS
+[main.assertion.5] accepted: landlock implies a brick:         SUCCESS
+```
+
+For **every one of the 2^(8×282) possible blobs** of that length: no
+out-of-bounds read, no invalid pointer, no signed overflow, no undefined
+shift, and — whenever `nw_check` answers `NW_OK` — the five properties the
+runtime then relies on without re-checking.
+
+**Non-vacuous, controlled.** A proof whose assumptions contradict each other
+proves everything. Asserting `_pad == 1`, the opposite of what the code
+enforces, gives `VERIFICATION FAILED` and names that assertion. So the
+harness can fail, and the passes mean something.
+
+### Exactly what was assumed, and why each is earned
+
+| assumption | why it is sound |
+|---|---|
+| `name_ok` accepts ⟹ name is NUL-terminated, non-empty | proven separately, 0 of 32 |
+| `path_ok_len` accepts ⟹ absolute, NUL-terminated | proven separately, 0 of 68 |
+| `hash_name`, `name_dup`, `nw_crc32_split` unconstrained | **nothing** assumed — the result holds for any hash, any duplicate verdict, any checksum, which is stronger than proving it against the real ones |
+| `n_units == 1`, `n_binds == 0` | the `len != need` size check rejects every other shape at this length *before* the unit loop and before anything asserted, so no input that could falsify a post-condition is excluded |
+| unit loop unwound to 2 | `--unwinding-assertions` stayed on and passed, so CBMC confirmed 2 suffices rather than being told to assume it |
+
+The proof copy is generated mechanically from `nwcheck.c` — five `static`
+definitions replaced by `extern`, nothing rewritten — so what is proven is
+what ships.
+
+### What is NOT proven, stated because the gap is the interesting part
+
+- **Anything with more than one unit.** Cross-unit interaction happens only
+  through the duplicate-name table, and that is precisely what is stubbed.
+  `n_units > 1` is untouched.
+- **Anything with binds.** `n_binds == 0` throughout.
+- **That duplicate detection works.** `name_dup` has no contract; nothing
+  here claims it detects duplicates. It is now a function and can be proven
+  on its own — that is the obvious next step, and it is also the code
+  `NW_E_DUPNAME` shows no test has ever reached.
+- **The runtime.** Unchanged and unreachable by this method.
+
+### What it cost, including the wrong turns
+
+Eight runs. Three diagnoses were wrong before measurement settled it:
+
+1. the CRC alone — extracting it was necessary and not sufficient;
+2. the duplicate-name table alone — likewise;
+3. `n_units` being free — `__CPROVER_assume` constrains the *solver*, not
+   the *unroller*, so pinning the shape moved the cost 6,402 → 5,742 and
+   almost nothing else.
+
+What actually settled it was reading the unwinding profile instead of
+theorising: `nw_check.3` was line 137, the 96-iteration brick scan,
+multiplied by a unit loop the unroller still expanded to the global bound.
+`--unwindset` on that loop took it from 5,742 unwindings to 192 — two times
+ninety-six, exactly what one unit should cost — and the unwinding phase
+from never-finishing to twenty-six seconds.
+
+The extractions were still required: the probe loop went from 10,265
+unwindings to absent. But the route to that conclusion was three guesses and
+one measurement, and the measurement should have come first.
+
+## Tier A — the original plan (superseded by the result above)
 
 The harness makes the whole blob nondeterministic and calls `nw_check`, so
 the solver considers every possible input of that length rather than a
