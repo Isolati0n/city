@@ -152,6 +152,20 @@ test: stage
 	NW_STAGE=$(STAGE) python3 tests/run.py
 	NW_STAGE=$(STAGE) sh tools/coverage-tcb.sh
 
+# The pre-report shape checker, over the diff you are about to report on.
+# BASE= selects what to diff against; it defaults to the upstream branch,
+# the same default tools/review-pack.sh uses, so the two see one change.
+#
+# Not part of `test`, and not because it is slow -- it is instant. It
+# EXITS 0 ALWAYS, deliberately: a heuristic wired into a build gets routed
+# around within a week, and then the signal is gone rather than merely
+# ignored. There IS a target so that it is discoverable and so the answer
+# to "when did it last fire" is not "never" -- which is the finding
+# `tcb-review` raised against it arriving wired to nothing at all.
+PREREPORT_BASE ?= $(shell git rev-parse --verify --quiet '@{u}'                     || git rev-parse --verify --quiet origin/main                     || echo HEAD)
+prereport:
+	@git diff $(PREREPORT_BASE) | python3 tools/prereport.py --diff -
+
 # The CBMC proofs of the validator, and the controls that must fail. Not in
 # `test`: it is minutes rather than seconds, and it needs cbmc, which is not
 # a build dependency of anything here. `run.sh` exits 3 and says SKIP rather

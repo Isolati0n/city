@@ -397,9 +397,11 @@ static inline const struct nw_bind *nw_binds(const void *blob)
  *
  * In blob.h rather than nwcheck.c because nwspawn.c needs it too and does
  * not link the checker's non-inline half. It is a loop and a return, and
- * it removes every open-coded copy but the deliberate one in the proof --
- * which is open-coded precisely so it is an independent oracle, and says
- * so there. */
+ * it removes the open-coded copies everywhere except proofs/, which keeps
+ * its own -- deliberately, so the proof is an independent oracle rather
+ * than an identity, and it says so at each one. Do not "tidy" those into
+ * a call to this function: `control` measured that doing so made a
+ * mutation of this very helper invisible to the proof. */
 static inline int nw_unit_has_brick(const struct nw_unit *u)
 {
     int any = 0;

@@ -112,6 +112,12 @@ echo "Read your brief in \`.claude/agents/\` and apply it to the diff above."
 echo "Do not re-derive the repository; everything you need to review is here."
 echo "Every finding must carry the command that shows it and that command's"
 echo "verbatim output, or be labelled HYPOTHESIS."
+echo
+echo "\`make prereport\` runs the shape checker over this same diff. It is a"
+echo "heuristic and exits 0 always; its output is a list of questions, not"
+echo "findings. Acknowledged items are in \`.prereport-ack\` with a reason"
+echo "each -- an ack is a claim that someone looked, not that it was fixed,"
+echo "so an ack you disagree with is itself worth reporting."
 
 if [ -n "$OUT" ]; then
     exec 1>&3 3>&-

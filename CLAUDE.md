@@ -376,6 +376,24 @@ count. Record a completed review with `--record <agent>`.
 | a limit or the blob layout changed | `drift` | invariant 3 otherwise depends on someone remembering |
 | a brief, this file, or an environment claim changed | `claims` | kind-1 statements rot silently |
 | a speed or scale claim was made | `measurement` | never report a single sample |
+| any diff, before writing the report | `make prereport` | not an agent; five shapes that have each cost a round |
+
+**Run `make prereport` before you write the report.** It reads the diff
+you are about to report on and asks five questions that have each cost a
+review round here: a comment claiming a mechanism is load-bearing, an
+absence assertion with no paired positive, a count in prose, a capability
+inferred from an installed tool, and a new test with no control language
+beside it. It **exits 0 always** — a heuristic wired into a build gets
+routed around within a week, and then the signal is gone rather than
+merely ignored. Acks live in `.prereport-ack` with a reason each, and an
+ack is a claim that someone looked, not that anything was fixed.
+
+It is a heuristic and it is wrong sometimes; its value is that being wrong
+is cheap and being silent is not. On its first run here it found a TCB
+comment still carrying a claim a reviewer had falsified — corrected in one
+file and not the other, which is this repository's most common defect —
+and it found a false-positive class in its own source that its handover
+note described as already fixed.
 
 **Always build the packet first: `sh tools/review-pack.sh`.** It writes a
 file and prints the path; the dispatch prompt tells the reviewer to read that

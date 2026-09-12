@@ -2186,10 +2186,17 @@ def test_brick_hash_revalidated_at_the_supervisor():
     expect("open brick image" in out,
            f"a well-formed hash did not reach the open; the rejections "
            f"above may be an nw-sup that refuses everything\n{out}")
-    print(f"ok brick-hash-revalidated (a traversal, a path, a bad alphabet "
-          f"and both off-by-ones refused at nw-sup, which reads NW_BRICK "
-          f"from the environment and not from the sealed blob; a "
-          f"well-formed hash reaches the open under {_brick_dir()})")
+    # NOT the composed path: nwsup.c's die() prints `FAIL <what> errno=<n>`
+    # and no path, so this pair shows the guard was REACHED AND PASSED and
+    # says nothing about what was composed afterwards. The ok line below
+    # claimed the path; `tcb-review` ran the binary and it does not print
+    # one. The composition is covered by the brick tests that actually
+    # mount an image.
+    print("ok brick-hash-revalidated (a traversal, a path, a bad alphabet "
+          "and both off-by-ones refused at nw-sup, which reads NW_BRICK "
+          "from the environment and not from the sealed blob; a "
+          "well-formed hash gets past the guard and fails at the open "
+          "instead -- the path itself is not visible here, see the note)")
 
 
 def test_leading_zero_hash_is_a_brick():
@@ -2203,7 +2210,7 @@ def test_leading_zero_hash_is_a_brick():
     machine would not boot until the brick's CONTENTS changed.
 
     Phase 3 converted the unit loop in that function and left the bind loop
-    28 lines below it reading brick[0]. The CBMC caller proof asserted
+    in the same function reading brick[0]. The CBMC caller proof asserted
     brick[0] as well, so it PINNED the defect: fixing the checker turned
     `make proof` red. Both found by `tcb-review`. Every site now goes
     through nw_unit_has_brick() in blob.h, which is why the fix is one
@@ -2215,14 +2222,30 @@ def test_leading_zero_hash_is_a_brick():
     brickless unit must still be REFUSED, which is the third case here.
     All three run through the real baker; nothing is hand-crafted, because
     the defect was reachable from a plan anyone could write."""
-    hex_de = "de" * 32
-    hex_00 = "00" + "de" * 31
-    cases = [
-        (hex_de, 0, "a hash with no zero byte first"),
-        (hex_00, 0, "a hash beginning with a zero byte"),
-    ]
+    NB = int(blob_h("NW_BRICK_HASH"))
+    # ONE ACCEPTANCE CASE PER BYTE POSITION, and it has to be ACCEPTANCE.
+    #
+    # The crafted-blob enumeration in test_checker_rejects_crafted_fields
+    # pins the UNIT loop and cannot reach the bind loop at all: those cases
+    # clear NEWNS to force a rejection, so nw_check returns NW_E_BRICKNS
+    # from the unit loop and never gets as far as the binds. The round-1
+    # HIGH was in the BIND loop and it made the checker over-REJECT --
+    # which no rejection test can see, and no acceptance POSTCONDITION
+    # either, so the CBMC harness is blind to it by construction
+    # (proofs/README.md). A legal plan that must be ACCEPTED is the only
+    # shape that catches it.
+    #
+    # `tcb-review` measured the gap left after the first fix: a bind-site
+    # reader of brick[31] left the whole suite AND the proof green -- one
+    # image in 256 again, same message naming a correct bind table. The two
+    # hashes here were de*32 and 00+de*31, 31 nonzero bytes each, so even
+    # the case named for byte 0 survived a reader that skipped byte 0.
+    # Enumerated now, so there is no position left to be the unpinned one.
+    cases = [("de" * NB, 0, "a dense hash with no zero byte")]
+    cases += [("00" * k + "01" + "00" * (NB - k - 1), 0,
+               f"a hash nonzero only at byte {k}") for k in range(NB)]
     for brick, want, what in cases:
-        city = f"{WORK}/lz-{brick[:2]}.city"
+        city = f"{WORK}/lz-{brick}.city"
         open(city, "w").write(
             f"house lz /bin/true kind=oneshot lids=newns,seccomp "
             f"brick={brick} bind=/etc\n")
@@ -2263,9 +2286,10 @@ def test_leading_zero_hash_is_a_brick():
     expect(b.returncode != 0, "an all-zero brick hash should fail the bake")
     expect("all zeros" in (b.out + b.err) and "machine root" in (b.out + b.err),
            f"wrong reason for an all-zero brick hash\n{b.out}{b.err}")
-    print("ok leading-zero-hash-is-a-brick (accepted with a bind, both "
-          "hashes; a bind with no brick refused, and the all-zero hash "
-          "refused at the baker for saying it is a brick)")
+    print(f"ok leading-zero-hash-is-a-brick (accepted with a bind at every "
+          f"one of the {NB} byte positions plus a dense hash -- the bind "
+          f"loop over-rejects, which only acceptance can see; a bind with "
+          f"no brick refused, and the all-zero hash refused at the baker)")
 
 
 def test_brick_needs_newns():

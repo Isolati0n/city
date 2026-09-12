@@ -136,8 +136,8 @@ int main(void)
              * would have satisfied both assertions vacuously while
              * nwcheck.c rejected them, so the proof would have gone on
              * SUCCEEDING against a checker mutated to scan brick[0] alone.
-             * The same mutant is pinned in the suite by the
-             * `hash-tail-only` case in test_checker_rejects_crafted_fields.
+             * The same mutant is pinned in the suite by the per-position
+             * cases in test_checker_rejects_crafted_fields.
              *
              * The companion assertion here -- "a blank brick is zero to
              * the field width" -- is DELETED rather than repaired, and

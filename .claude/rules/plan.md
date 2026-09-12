@@ -58,9 +58,14 @@ The boundary that does matter here is not between files, it is **trust**:
   `nwcheck.c` and left the BIND loop reading `brick[0]`, and the CBMC
   caller proof too, so one plan in 256 was refused as `bind unit index` and
   would not boot until the brick's *contents* changed. Three reviewers
-  found it independently. `test_leading_zero_hash_is_a_brick` and the
-  `hash-tail-only` case in `test_checker_rejects_crafted_fields` pin both
-  ends of the field. *(This paragraph said "`nwcheck.c` ORs the whole
+  found it independently. Pinned at EVERY byte position, from both
+  directions, because pinning one end is what produced the bug twice:
+  `test_checker_rejects_crafted_fields` crafts a blob per position and
+  requires a REJECTION, and `test_leading_zero_hash_is_a_brick` bakes a
+  plan per position and requires an ACCEPTANCE. Both are needed and
+  neither substitutes: the unit loop over-accepts when it is wrong, the
+  bind loop over-REJECTS, and no rejection test and no acceptance
+  postcondition (so no CBMC assertion either) can see an over-rejection. *(This paragraph said "`nwcheck.c` ORs the whole
   field" while one of its two sites did not — a present-tense rule stating
   as done the thing that was half-done, in the file the hook hands the next
   agent to edit that file.)*

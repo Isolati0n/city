@@ -250,11 +250,23 @@ expect() {       # expect PASS|FAIL NAME cbmc-args...  -> $OUT/NAME.txt
     {
         echo "### proofs/run.sh: $name"
         echo "### tree:    $(cd "$ROOT" && pwd -P)"
+        # EVERY FILE CBMC IS HANDED, not a hand-written two. It cksummed
+        # nwcheck.c and blob.h only, so a mutated proofs/caller_nw_check.c
+        # -- exactly the mutation `control` performs -- produced a stamp
+        # byte-identical to an honest run. A hand-listed pair beside a
+        # generated one is the drift class, in the provenance line.
         echo "### sources: $(cat "$ROOT/nwcheck.c" "$ROOT/blob.h" \
+                             "$ROOT"/proofs/*.c "$ROOT"/proofs/*.py \
+                             "$ROOT/proofs/run.sh" \
                              | cksum | tr -s ' ' | cut -d' ' -f1,2)"
+        # AGAINST HEAD, not the index. `git diff --quiet` compares the
+        # worktree to the INDEX, so `git add` made a mutant read clean --
+        # the guard worked for the careless case and not the tidy one,
+        # which is the wrong way round.
         echo "### git:     $(cd "$ROOT" && git rev-parse --short HEAD \
                              2>/dev/null || echo none)$(cd "$ROOT" \
-                             && git diff --quiet 2>/dev/null || echo '+dirty')"
+                             && git diff HEAD --quiet 2>/dev/null \
+                             || echo '+dirty')"
         echo "### when:    $(date -u +%Y-%m-%dT%H:%M:%SZ)"
     } > "$OUT/$name.txt"
     if cbmc "$@" $CHECKS -I"$ROOT" -I"$OUT" >> "$OUT/$name.txt" 2>&1
