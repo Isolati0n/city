@@ -118,17 +118,24 @@ def parse_diff(text):
         if raw.startswith("-") or raw.startswith("--- "): continue
         ln+=1
     return added
-def scan(added,self_path=None):
+def scan(added,self_path=None,ack_path=None):
     findings=[]; self_touched={}
     byfile={}
     for f,ln,t in added: byfile.setdefault(f,[]).append((ln,t))
-    selfbase=os.path.basename(self_path) if self_path else None
+    # THE ACK FILE EXCLUDES ITSELF TOO, and for a stronger reason than the
+    # source does. An ack line CONTAINS the text it acknowledges, and the
+    # reason beside it discusses that text, so scanning the ack file
+    # re-reports every acked finding under a new key that the ack cannot
+    # match. Measured: acking fourteen findings produced thirteen fresh
+    # ones on the next run, all of them the ack file quoting itself.
+    # Excluded the same way the source is, and the same note is printed,
+    # so the exclusion stays visible rather than becoming a silent hole.
+    skip={os.path.basename(p) for p in (self_path,ack_path) if p}
     def _is_self(f):
-        if not f or not selfbase: return False
-        return os.path.basename(f)==selfbase
-    if self_path:
-        for f,lines in byfile.items():
-            if _is_self(f): self_touched[f]=len(lines)
+        if not f or not skip: return False
+        return os.path.basename(f) in skip
+    for f,lines in byfile.items():
+        if _is_self(f): self_touched[f]=len(lines)
     for name,question,fn in SHAPES:
         if name=="test-without-control": continue
         for f,ln,t in added:
@@ -193,7 +200,8 @@ def main(argv=None):
     except OSError as e:
         print(f"cannot read diff: {e}",file=sys.stderr); return 2
     added=parse_diff(text)
-    findings,self_touched=scan(added,self_path=os.path.abspath(__file__))
+    findings,self_touched=scan(added,self_path=os.path.abspath(__file__),
+                               ack_path=a.ack_file)
     report(findings,load_acks(a.ack_file),sys.stdout,self_touched)
     return 0
 
