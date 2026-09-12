@@ -387,8 +387,8 @@ costs a rebuild" until 2026-09-11. Both halves went stale in one edit:
 the rebuild reason was corrected ninety lines above and left standing
 here, and the number it pointed at was removed by the same edit. A
 correction applied to the top of a section and not its foot is the
-survived-by-not-being-moved shape, which this repository has now
-produced in five separate files. `claims`.*
+survived-by-not-being-moved shape, which this repository keeps
+producing in new files. `claims`.*
 
 ## A capability guard belongs in the helper, not at each call site
 

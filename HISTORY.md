@@ -6035,9 +6035,13 @@ one to act on:
 ## 64. Closing the prose work: four lines, and why stopping is a finding (2026-09-12)
 
 The operator verified `PREREPORT_BASE` takes a range at `Makefile:183`
-and the line counts behind §63's blindness measurement (971 non-blank
-in `CLAUDE.md`, 111 beginning with a list marker — so the miss really
-is wrapped prose rather than bullet syntax), and closed the prose work.
+and the line counts behind §63's blindness measurement — **at
+`0ef347c`**, 971 non-blank lines in `CLAUDE.md` against 111 beginning
+with a list marker, so the miss really is wrapped prose rather than
+bullet syntax — and closed the prose work. (The base is named because
+this commit changed both numbers, and this file's own rule is that a
+measurement with no commit attached is read against whichever tree the
+reader is holding.)
 
 Four lines went into `CLAUDE.md` and nothing else. Each is deliberately
 one line with its reasoning here rather than beside it, because
@@ -6082,3 +6086,56 @@ stopped doing that. **Deleting rather than explaining is the move that
 breaks the loop, and it is the finding rather than a concession to
 fatigue.** The rules are shorter than they were three rounds ago and
 say more.
+
+### §64 addendum: the closing rule was falsified inside its own bullet
+
+`claims`, on the closing diff. The new line —
+
+> A number saying how many instances of something exist is a claim about
+> how hard someone looked, not about the tree — the only honest forms are
+> a named list or nothing.
+
+was inserted **directly in front of** "A count is a hostage to the next
+commit and has been wrong three separate times in one day", in the same
+bullet, with no list naming those three occasions anywhere in the tree.
+It also contradicted two exemptions the same file argues for: the
+`prereport` calibration and a count inside a test assertion.
+
+The rule and its violation in one bullet, which is tighter than one
+sentence and tighter than one diff. And `prose-count` could not see it:
+the count sits on a wrapped continuation line, which is §63's blindness
+measurement arriving on the line that condemns counts.
+
+Fixed by deletion, and by running the sweep the rule implies, which
+nobody had:
+
+- `CLAUDE.md` — "wrong three separate times in one day", gone.
+- `CLAUDE.md` and `runtime.md` — "the rule was attempted and wrong three
+  times" (freeze detection, in both copies), now "wrong every time".
+- `harness.md` — "produced in five separate files", now "keeps producing
+  in new files".
+- `plan.md` — "how the last six of these went wrong", now "how every one
+  of these went wrong".
+
+Every one of those was an unverifiable instance-count: the tree records
+neither which occasions nor how many. **The replacement in each case is
+a quantifier, not a smaller number** — "every time", "keeps producing" —
+because the claim being made was never about a quantity.
+
+The rule itself is narrower now: it names the two kept counts rather
+than asserting an absolute, and it says a number *beside named
+instances* is fine, since the names are what make it checkable.
+
+Three smaller ones from the same review, all fixed: the sweep's
+alternation stops at twelve and now says so; "one shipped here had never
+been run" was a claim about process rather than about the tree, so the
+line now asserts only the reachable half (that it cannot work); and §64
+named no commit for its two measured numbers, which the same commit
+changed — the base `0ef347c` is named now, per this file's own rule that
+a measurement with no commit attached is read against whichever tree the
+reader is holding.
+
+Checked and clean in the same pass: the trimmed heading exemption and
+its sweep (four hits, all exempt), the historical claim about the
+defective sweep in both directions, and the ordinal-across-documents
+description.

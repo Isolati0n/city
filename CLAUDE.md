@@ -388,7 +388,7 @@ where the work would land so it cannot be undone by someone being helpful.
 
 - **Freeze detection.** A house that goes silent but never exits is undetected
   by anything. Every form of detection needs a guessed constant, and the rule
-  was attempted and wrong three times. See the Liveness section of
+  has been attempted and wrong every time. See the Liveness section of
   `.claude/rules/runtime.md`, which carries the full reasoning. (It was
   `.claude/agents/` until the territories became rules; the path here
   went stale in the same move.) (It was in
@@ -720,13 +720,25 @@ written so a reader can tell which without checking:
 Two habits follow from this:
 
 - **Never put a count in a brief.** Not the number of checks, tests, difftest
-  inputs, or bugs. **A number saying how many instances of something exist
-  is a claim about how hard someone looked, not about the tree** — the only
-  honest forms are a named list or nothing. A count is a hostage to the next commit and has been wrong
-  three separate times in one day. Point at the code or quote the suite's own
-  output. A bug *identifier* (bug 5, bug 13) is a name, not a count, and is
-  fine. The one place a count belongs is inside a test assertion, where being
-  wrong makes something fail instead of quietly misleading a reader.
+  inputs, or bugs. A count is a hostage to the next commit, and this file's
+  record is mostly counts that went stale. Point at the code or quote the
+  suite's own output. A bug *identifier* (bug 5, bug 13) is a name, not a
+  count, and is fine.
+
+  **A number saying how many instances of something exist is worse: it is a
+  claim about how hard someone looked, not about the tree.** Name them and
+  the number beside them is redundant but checkable, which is fine. Without
+  names, give no number. Two counts are kept anyway and argued for where they
+  live — the `prereport` calibration, which a run prints beside itself, and
+  a count inside a test assertion, where being wrong makes something fail.
+  Neither is an instance-count.
+
+  *(The sentence above was first written as "the only honest forms are a
+  named list or nothing", inserted directly in front of "has been wrong
+  three separate times in one day" — an unnamed instance-count, in the same
+  bullet, which the tree cannot verify. It also contradicted both stated
+  exemptions. `claims`. The unverifiable count is gone; so are the others
+  the rule implies, which nobody had swept for.)*
 
   **And a count survives review in a way a wrong fact does not.** On
   2026-09-12 a report listed three annotatable invariants correctly and
@@ -765,7 +777,8 @@ Two habits follow from this:
   naming a split that already happened, so `plan.md`'s "Why this is one
   territory and not three" and `runtime.md`'s "and not two" stay.
   `HISTORY.md` is exempt throughout as a record. The sweep must be
-  case-insensitive and spell the words out:
+  case-insensitive and spell the words out; its alternation stops at
+  twelve, so extend it if a heading ever needs more:
 
       grep -niE "^#{1,6} .*\b(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|[0-9]+)\b" CLAUDE.md .claude/rules/*.md
 
@@ -1074,10 +1087,10 @@ shape this file names as the durable kind.)
   probes at `MaxFds = 16`), a proof kept where it cannot be re-run, a
   control that passes. **Every one of those reads as working.**
 
-  **A prescription is a mechanism too, and one shipped here had never
-  been run**: a sweep command written into a rule, with a literal `…`
-  and no `-i`, which could not find the heading the rule was derived
-  from. `HISTORY.md` §63.
+  **A prescription is a mechanism too**, and one shipped here could not
+  find the heading the rule was derived from — a sweep command with a
+  literal `…` and no `-i`. Whether it was ever run is not a fact the
+  tree holds; that it cannot work is. `HISTORY.md` §63.
 
   So the question to ask of any mechanism is not "does it pass?" but
   **"when did it last fire, and what made it fire?"** If the answer is

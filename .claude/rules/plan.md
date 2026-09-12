@@ -239,7 +239,7 @@ own work disproved three lines later in `plan.als`; then "one
 hand-written number remains", which `claims` disproved by pointing at
 `for 8`; then "one that must track the header", which `claims` disproved
 again by pointing at the multiplier. Correcting a sentence into an
-absolute is how the last six of these went wrong, and the pattern is
+absolute is how every one of these went wrong, and the pattern is
 now the most reliable thing in this file: **if a sentence here counts
 something, it is probably wrong.**)
 

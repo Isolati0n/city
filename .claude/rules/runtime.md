@@ -325,7 +325,7 @@ a deadline. `grep` for `clock_gettime`, `now_ms`, `alarm` or `nanosleep` in `nws
 one.
 
 **Why refused:** every form of detection needs a guessed constant, and the
-rule was attempted and wrong three times. A watchdog that fires on a
+rule has been attempted and wrong every time. A watchdog that fires on a
 correctly-slow house is worse than no watchdog, because it converts a
 performance problem into a restart loop, and the restart loop is the failure
 mode this project has already paid for twice.
