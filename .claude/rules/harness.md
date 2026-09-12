@@ -326,10 +326,13 @@ exit hides it.
 
 ### The traps this found, all in the probe rather than the code
 
-*(This heading counted them. It heads a bullet list, in the file whose
-own rule now says not to put a number in a heading, 311 lines below the
-heading that rule was derived from — and it was not stale yet, which is
-the point: a heading count is a violation before it is an error.)*
+*(This heading counted the bullets beneath it. It was not stale, which
+is the point — a heading count is a violation before it is an error —
+and it sat far enough below the heading `CLAUDE.md`'s rule was derived
+from that nobody rereading one would see the other. The rule is in
+`CLAUDE.md`, not here; the distance was a positional count until
+`claims` pointed out that a positional count is the shape the same
+round had just condemned.)*
 
 Worth reading before you write a large-N test, because each one produced
 a confident wrong answer first.

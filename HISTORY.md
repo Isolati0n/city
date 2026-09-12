@@ -5885,3 +5885,149 @@ a prose-only diff is the highest-risk kind — which is where that
 instruction belongs, rather than as a third copy of a trigger in prose
 four hundred lines away, in the file that says a second copy of a
 roster rots the way a second copy of a limit does.
+
+## 63. The same error twice in the sentence diagnosing it, and a survey that kept growing (2026-09-12)
+
+§62 corrected §61. `claims` then found thirteen things wrong with §62,
+and the first is the one that matters: **the correction committed the
+exact error it was written to diagnose.**
+
+### `make prereport` can address a historical commit; it just needs the range
+
+§61 said `4e22204` predates the `prereport` target so the calibration
+could not be cheaply re-measured. §62 corrected that to: the target
+"diffs the working tree against a base, so it cannot address a
+historical commit — but the script reads a diff on stdin and the target
+is only a pipe", and diagnosed §61's error as *reasoning from what a
+`make` target cannot do to what the program behind it cannot do*.
+
+Then it did the same thing. `PREREPORT_BASE` is `?=` and substituted
+unquoted, so it takes a range:
+
+```
+$ grep -n "PREREPORT_BASE" Makefile
+181:PREREPORT_BASE ?= $(shell git rev-parse --verify --quiet '@{u}' || ... || echo HEAD)
+183:	@git diff $(PREREPORT_BASE) | python3 tools/prereport.py --diff -
+
+$ make prereport PREREPORT_BASE="4e22204^ 4e22204" | head -1
+pre-report: 4 to look at. These are heuristics, not errors.
+```
+
+Byte-identical to the stdin route. Two rounds, two sentences about
+what the target cannot do, neither of them run. **The diagnosis was
+right and did not transfer to the sentence replacing it** — which is
+worth more than the fix: naming a failure mode in a correction does
+not inoculate the correction against it, and the author writing the
+name is in exactly the state the name describes.
+
+### The blindness is bigger than "bullets"
+
+§62 said `prose-count` misses `- **bullet**` lines, "the dominant form
+in this file". Measured:
+
+```
+CLAUDE.md non-blank: 971  examined by prose-count: 78
+```
+
+`- **bullet**` lines are a small minority of what is missed; the bulk
+is ordinary wrapped continuation prose. The shape examines a small
+fraction of the file and the rest is invisible, which is a larger and
+plainer statement than the one §62 reached for. Also `COMMENT_MARK`
+uses `.search`, so a `//` anywhere on a line makes it a comment:
+
+```
+is_comment("- three files, see https://x/y"): True
+```
+
+so "never examined at all" was not even absolute. No such line exists
+in the governed files today.
+
+### The ordinal survey grew every time someone widened the grep
+
+§62 claimed two series. `claims` found a third — `harness.md`'s
+"**Third time. Do not put one here.**", which `HISTORY.md` counts from
+as *the fourth*, so the ordinal lives in a rules file the hook delivers
+while its series is numbered in a different document. Plus at least two
+single-member chains ("Third time the no-counts rule has been broken",
+"the second time this exact invariant has been falsified").
+
+And §62's "no first through fifth recorded anywhere" was wrong for the
+reason it had just warned about: the survey grepped one spelling.
+`survived by being moved` and `survived by not being moved` — spaced —
+find section headings recording earlier instances. The bullet's own
+prescription, grep the pattern name rather than the ordinal, was
+applied to a single spelling of the name.
+
+`CLAUDE.md` now gives **no total** and says why: two successive surveys
+each found more by widening the spelling, so any number is a claim
+about how hard someone looked.
+
+### A prescribed check that could not find its own motivating case
+
+§62 wrote a sweep command into `CLAUDE.md`:
+
+```
+grep -nE "^#{1,6} .*\b(one|two|…|[0-9]+)\b" CLAUDE.md .claude/rules/*.md
+```
+
+The `…` is a literal ellipsis character, not an abbreviation, and there
+is no `-i`. Run verbatim against the tree it was written for, it
+returns one line — and **not** `### Three traps this found`, the
+heading the rule was derived from. The working form spells the words
+out and is case-insensitive; it is in `CLAUDE.md` now, with the reason.
+
+A check that cannot fire for the case that motivated it is this
+project's silence failure, arriving this time as a *prescription* — the
+first version of a rule shipping a command nobody ran.
+
+### And the exemption's stated test was false
+
+"A number naming a closed historical fact … counts nothing beneath
+them" — but `plan.md`'s "one territory and not three" is followed
+immediately by "It was three — a validator agent, a baker agent and a
+spec agent". It counts exactly what is beneath it. The conclusion
+(they stay) is right; the test given for it was not. The test is
+whether **the thing counted can grow**, and a closed history cannot.
+
+### Everything else, briefly
+
+- §62 said the bare heading rule "condemned two headings that are
+  fine". It condemned four — two dates and two territory headings —
+  and named only one file.
+- §62's own quoted outputs did not reproduce: a `...` inside an ERE
+  matched every heading (32 lines printed, one shown); a `head -3`
+  shown with two lines; and a line number stale in the commit that
+  wrote it, because the same commit inserted lines above it. In the
+  section whose value is verbatim reproduction.
+- Positional counts were introduced by the corrections — "311 lines
+  below", "nine lines under" — one round after `runtime.md`'s "TWO
+  SECTIONS DOWN" was removed for being exactly that.
+- "It is the sharpest" replaced one superlative with a ranked one and
+  nothing established the ranking; "the HIGHEST-risk kind" moved the
+  same unmeasured ranking into the dispatch table. Both are gone: a
+  diff of pure prose is not a safe diff, and no ranking is offered.
+- The `five shapes` exemption was granted by analogy to the
+  calibration, which has a property `five shapes` lacks — **a run
+  prints the calibration and no run prints `len(SHAPES)`**, so being
+  wrong there is silent. Stated as the weaker of the two now.
+- §61 still says `CLAUDE.md` "asks for the date of first firing to be
+  noted for every mechanism", which `e36cf30` deleted; §60 still gives
+  the wrong cause for the `hit` gap. Both left standing as record, and
+  both now have this section as the pointer.
+
+### What this round is evidence for
+
+Four consecutive rounds of prose-only changes, each correcting the
+last, each reviewed, each coming back with findings. The findings get
+smaller and they do not stop. Two things follow, and the second is the
+one to act on:
+
+1. **A correction is not a smaller change than the thing it corrects.**
+   It is written faster, with more confidence, and by someone holding
+   the defect in mind rather than the subject.
+2. **The remedy is less prose, not more.** Most of what `claims` found
+   in §62 lived in explanatory parentheticals added to defend earlier
+   sentences. This round's fix was mostly deletion: the rules are
+   shorter, the reasons moved here, and the self-commentary cut. A
+   brief that argues with itself gives the next reviewer more surface
+   and the next agent less signal.

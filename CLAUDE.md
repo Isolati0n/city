@@ -586,7 +586,7 @@ count. Record a completed review with `--record <agent>`.
 | a TCB file changed | `tcb-review` + `fd-auditor`, in parallel | read-only, independent, cannot break anything |
 | a test was added or changed | `control` | the negative controls, run mechanically instead of by hand |
 | a limit or the blob layout changed | `drift` | invariant 3 otherwise depends on someone remembering |
-| a brief, this file, `.claude/rules/*.md`, `HISTORY.md`, or an environment claim changed | `claims` | kind-1 statements rot silently; a prose-only diff is the HIGHEST-risk kind, not the lowest |
+| a brief, this file, `.claude/rules/*.md`, `HISTORY.md`, or an environment claim changed | `claims` | kind-1 statements rot silently, and a diff of pure prose is not a safe diff — every such round here has come back with findings |
 | a speed or scale claim was made | `measurement` | never report a single sample |
 | any diff, before writing the report | `make prereport` | not an agent; five shapes that have each cost a round |
 | a numbered invariant here changed | `make checkbrief` | not an agent; verifies the annotations, and exits 1 when the tree contradicts one |
@@ -597,43 +597,38 @@ without a stated expectation is unfalsifiable in use — you cannot tell a
 clean run from a broken matcher. The `which`-matches-English false
 positive that shipped in the first version was found *only* because the
 expected count was four and the run said seven; three rounds of using it
-had not surfaced it. A calibration is a count kept on purpose, for the
-same reason a count inside a test assertion is: being wrong makes a run
-visibly inexplicable rather than quietly misleading. It is not the only
-one here — the `five shapes` in the table above and in the paragraph
-below are `len(SHAPES)`, equally deliberate and equally hostages. (This
-said it was the only one, nine lines under one of the others.)
+had not surfaced it. A calibration is a count kept on purpose; so is
+the `five shapes` in the table above. Neither is exempt for being
+special — they are the ones worth the hostage, and `five shapes` is the
+weaker, because **no run prints it**, so being wrong there is silent. A
+calibration is falsifiable only because a run prints the number beside
+it.
 
-**Re-measuring it is one command**, and the `make` target is not it:
+**Re-measure it with the target, giving it the range:**
 
-    git diff 4e22204^ 4e22204 | python3 tools/prereport.py --diff -
+    make prereport PREREPORT_BASE="4e22204^ 4e22204"
 
-which reproduces `4` on today's tool. `make prereport` diffs the working
-tree against a base, so it cannot address a historical commit — but the
-script reads a diff on stdin and the target is only a pipe. This
-paragraph claimed the opposite, that `4e22204` predates the target and
-so the number "cannot be cheaply re-measured", and built a whole
-procedure on the blocker. `claims` ran the command.
+which reproduces `4`. Two rounds got this wrong the same way — first
+"`4e22204` predates the target so the number cannot be re-measured",
+then "the target diffs the working tree so it cannot address a
+historical commit, but the script can". `PREREPORT_BASE` is `?=` and
+substituted unquoted, so it takes a range. The second version diagnosed
+the first as reasoning about a target without running it, and then
+reasoned about the target without running it. `HISTORY.md` §63.
 
-**The known gap in `prose-count` is much bigger than the missing word,
-and the word is not the cause.** `COUNTED` has no `hit`, which is what
-this paragraph blamed for "exactly one hit" passing the checker in a
-bullet ending "rather than counting the hits" (`HISTORY.md` §60).
-Control: add `hit` to `COUNTED` and re-run on the diff that shipped
-that sentence — it still does not fire. The real gate is upstream,
-`_is_comment()`: the shape only inspects lines whose first non-space
-character is `#` or `*` (or a C comment marker). So in a markdown
-brief it sees headings and `**bold-lead**` lines, and **a `- **bullet**`
-line — the dominant form in this file — is never examined at all.**
-Whether a count here is caught depends on where the line wraps.
+**`prose-count` is nearly blind on markdown, and the missing word is
+not why.** Adding `hit` to `COUNTED` changes nothing — control run.
+The gate is `_is_comment()`, which passes only lines whose first
+non-space character is `#` or `*`, plus anything containing a C comment
+marker anywhere. Most of this file is ordinary wrapped prose and is
+never examined; the measured proportion is in `HISTORY.md` §63, not
+here. Whether a count in a brief is caught depends on where the line
+wraps.
 
-That is a mechanism reading as working, which is the failure this file
-spends a section on, in the tool bought to catch this file's failures.
-Not fixed in the round that found it, because a matcher change is its
-own change and inherits the same standard; the honest sequence is
-widen the gate, re-measure `4e22204` with the command above, write the
-new number down, dispatch a reviewer. Not a one-word fix, for a
-different reason than the one first given here.
+A mechanism reading as working, in the tool bought to catch those. Not
+fixed in the round that found it — a matcher change is its own change.
+The sequence: widen the gate, re-measure with the command above, write
+the new number down, dispatch a reviewer.
 
 **Run `make prereport` before you write the report.** It reads the diff
 you are about to report on and asks five questions that have each cost a
@@ -744,45 +739,39 @@ Two habits follow from this:
   somebody re-running something; this one round-tripped through a
   reviewer whose job was to catch it.
 
-  **An ORDINAL is worse than a count, and `HISTORY.md` proved it on
-  itself — twice, in two separate series.** "Fourth instance" and
-  "Sixth instance" of *a rule is at its weakest in the change that
-  introduces it*, with no fifth recorded under that name; and a "Sixth
-  instance of survived-by-not-being-moved" with no first through fifth
-  recorded anywhere, which also disagrees with `harness.md`'s "five
-  separate files" for the same pattern. An ordinal is a count that
-  *also* asserts an ordering, so it can be wrong in two ways, and
-  neither is checkable without re-reading everything it counts — which
-  is precisely the work nobody does. Name the instance; do not number
-  it. (This said the ordinals were "written in sections about counts in
-  prose", which they are not — they are in the Landlock and truncate
-  sections — and it knew of only one series. `claims` found the second,
-  which is the stronger example, by grepping for the *pattern name*
-  rather than for the word "instance".)
+  **An ORDINAL is worse than a count.** It asserts an ordering as well
+  as a number, so it can be wrong in two ways, and neither is checkable
+  without re-reading everything it counts — which is the work nobody
+  does. `HISTORY.md` runs several such series and they have drifted;
+  `HISTORY.md` §62 and §63 hold the survey, including one that lives in
+  a rules file the hook delivers. **Name the instance; do not number
+  it**, and when you go looking for a series, grep for the *pattern
+  name* in every spelling it has been written in — two successive
+  surveys here found more each time by widening the spelling, which is
+  why no total is given.
 
-  **A HEADING is one of the shapes where the count and the thing that
-  invalidates it are FAR APART**, and it is the sharpest: "Two traps
-  that have already caught someone" got a third trap added directly
-  beneath it, by the same diff that acked a count elsewhere in that
-  section as harmless English. A heading sits *above* the addition and
-  has scrolled out of view by the time it is written, so the author
-  never re-reads the sentence they are falsifying. **Do not put a
-  number in a heading when it counts something the document below it
-  contains.** A date is not that. Neither is a number naming a closed
-  historical fact — `plan.md`'s "Why this is one territory and not
-  three" and `runtime.md`'s "and not two" describe a split that already
-  happened and count nothing beneath them, so they stay. And
-  `HISTORY.md` is exempt throughout, as a record. The sweep is
-  `grep -nE "^#{1,6} .*\b(one|two|…|[0-9]+)\b"` over `CLAUDE.md` and
-  `.claude/rules/*.md`; run it, then read each hit for which kind it
-  is, because the grep cannot tell them apart.
+  **Counts and their invalidators can be FAR APART**, and the distance
+  is what defeats re-reading. Three shapes, none of them the only one:
+  a heading, above an addition and out of view by the time it is
+  written; an ordinal series spanning sections, where the missing
+  member is adjacent to nothing; and a correction applied to the top of
+  a section and not its foot.
 
-  *(This said "every other count in prose sits adjacent to the thing
-  that invalidates it", which the bullet directly above it disproves:
-  an ordinal series spans sections, and the missing fifth is adjacent
-  to nothing. `harness.md`'s "a correction applied to the top of a
-  section and not its foot" is a third such shape. A superlative
-  written one paragraph after its own counterexample.)
+  **Do not put a number in a heading that can change.** A date cannot.
+  Neither can a number naming a split that already happened —
+  `plan.md`'s "Why this is one territory and not three" and
+  `runtime.md`'s "and not two" enumerate a closed history, and they
+  stay. (The first version of this exemption said they "count nothing
+  beneath them", which the line under each heading disproves. The test
+  is whether the thing counted can grow.) `HISTORY.md` is exempt
+  throughout as a record. The sweep must be case-insensitive and must
+  spell the words out — the first version written here used a literal
+  `…` and no `-i`, and so could not find the heading it was derived
+  from:
+
+      grep -niE "^#{1,6} .*\b(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|[0-9]+)\b" CLAUDE.md .claude/rules/*.md
+
+  Read each hit for which kind it is; the grep cannot tell them apart.
 - **When something is removed, re-file the rule rather than deleting it.**
   Move it to kind 2 or kind 3 with the reasoning intact. A rule deleted is a
   rule someone re-derives badly later.
@@ -1036,15 +1025,16 @@ shape this file names as the durable kind.)
   round after that was a diff whose entire content was rules about
   writing prose, and `claims` found it broke those rules repeatedly,
   including inside the sentences stating them; the round after *that*
-  did it again. `HISTORY.md` §60 and §62 carry the tallies, where a
-  count belongs because those episodes are closed and dated. The
-  reading to take is not a measured quantity — nothing computes a
-  density and the word was doing rhetorical work. It is this: **the
-  same defects spread across a month read as carelessness, and in one
-  diff about carefulness they cannot.** So treat a prose-only or
-  rules-only change as the *highest*-risk kind rather than the lowest —
-  the dispatch table's `claims` row names those files for exactly this
-  reason.
+  did it again, and again. `HISTORY.md` §60, §62 and §63 carry the
+  tallies, where a count belongs because those episodes are closed and
+  dated. The reading to take is not a measured quantity — nothing
+  computes a density and the word was doing rhetorical work. It is
+  this: **the same defects spread across a month read as carelessness,
+  and in one diff about carefulness they cannot.** So a diff of pure
+  prose is not a safe diff; the dispatch table's `claims` row names
+  those files for exactly this reason. (No ranking against other kinds
+  of change is offered, because none has been measured — two attempts
+  to state one were superlatives with nothing behind them.)
 
   **And look at how they are caught.** Every one was found **by running
   something, never by reading** — including the times the author had
@@ -1087,7 +1077,7 @@ shape this file names as the durable kind.)
   "never", that is the finding — not the reassurance it resembles.
 
   **And FIRING is not the same as being obeyed, which `tools/review-gate.sh`
-  demonstrated from both sides in two days.** On 2026-09-11 it showed a
+  demonstrated from both sides in successive days.** On 2026-09-11 it showed a
   review owed and three commits were pushed anyway — a stop hook asking
   for a push, an ephemeral container, and neither is what the rule is
   about (`HISTORY.md` §31). That is its first firing, and it is a case
@@ -1097,14 +1087,15 @@ shape this file names as the durable kind.)
   **held unpushed** because of it, and the review it forced came back
   non-empty.
 
-  So the question has three answers, not two. Never fired: the guard is
-  decorative. Fired and was routed around: worse, because the record
-  now shows a guard that was consulted. **Fired and changed what
-  happened: that is the only one where the value is measured rather
-  than assumed**, and it is worth dating. (This paragraph called
-  2026-09-12 the first firing, which `claims` disproved from §31 — the
-  version that only counted firings could not tell the middle case from
-  the good one, in a bullet about mechanisms that read as working.)
+  So the question has more answers than "does it fire". Never fired:
+  the guard is decorative. Fired and was routed around: worse, because
+  the record now shows a guard that was consulted. **Fired and changed
+  what happened: that is where the value is measured rather than
+  assumed**, and that is the event worth dating — not the firing.
+  (This paragraph called 2026-09-12 the first firing, which `claims`
+  disproved from §31. And "first" here can only ever mean first
+  *recorded*: the gate writes no log, so nothing in the tree evidences
+  a firing that nobody wrote down.)
 
 ## The rule that matters most
 

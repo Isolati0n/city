@@ -81,3 +81,5 @@ unpaired-absence	CLAUDE.md	invariant 6; `claims` grepped and the string is not i
 # false positive: prose naming a gap in prereport's own matcher; verified by
 # reading COUNTED in tools/prereport.py, which has no `hit`
 unpaired-absence	HISTORY.md	`make prereport` does not catch it — `hit` is not in its `COUNTED`
+# false positive: a synthetic probe string quoted as command output, not a claim
+prose-count	HISTORY.md	is_comment("- three files, see https://x/y"): True
