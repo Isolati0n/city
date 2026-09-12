@@ -65,11 +65,20 @@ NW_MAX_UNITS                    64
 
 **`max_loop` is not a ceiling and must not be read as one.** It is the
 count of devices created when the module loads; `LOOP_CTL_GET_FREE`
-allocates past it. Measured: 80 devices over 80 files, and 64 distinct
-devices over a single image, up to `/dev/loop63`. So the "what would make
-this the wrong plan" condition below — `max_loop` binding under
-`NW_MAX_UNITS` — is **not met**, and the number that looks like it says
-otherwise is answering a different question.
+allocates past it, and `devtmpfs` creates each node as it goes. Measured
+2026-09-11: 80 devices over 80 files, and 64 distinct devices over a single
+image. Re-measured 2026-09-12 by binding rather than by reading the
+parameter: **4096 devices attached on this same kernel reporting
+`max_loop=8`, up to `/dev/loop4095`, with no failure** — the probe stopped
+at its own loop bound, not at a ceiling. So the ceiling is **≥ 4096 and was
+not found**, which is ≥ 64× `NW_MAX_UNITS`.
+
+*This has now been reported as a hard ceiling once, after the paragraph
+above was written.* Phase 2 was described as blocked by `max_loop=8`. It is
+not blocked, and the correction is the same one this paragraph already
+made: **bind devices to measure the limit; do not read the parameter.** A
+report that phase 2 is walled needs a failed `LOOP_CTL_GET_FREE` or a
+failed `LOOP_SET_FD` behind it, with the count at which it failed.
 
 One trap in measuring it: `mount -o loop` (util-linux) reuses a device
 already backing the same file, so 64 mounts of one image consumed **one**
@@ -166,10 +175,25 @@ Costs to state plainly rather than discover:
   `NW_ROOT_FSTYPE`, so a type in the TCB is not a new precedent.
 - **One loop device per house.** Two houses sharing a brick hash get two
   devices, because each mounts inside its own namespace after `unshare`.
-  Wasteful and simple. `/dev/loop-control` allocates dynamically, so the
-  binding limit is `max_loop`, and **that is a limit that must be derived and
-  checked against `NW_MAX_UNITS`, not discovered at 64 houses** — invariant 3.
-  Measure it before phase 2 is called done.
+  Wasteful and simple. The loop pool is the one resource in this phase that
+  is **not** namespaced — `LOOP_CTL_GET_FREE` draws from a global kernel
+  pool, and a mount namespace does not partition it.
+
+  **The invariant-3 derivation, settled 2026-09-12.** The requirement is one
+  device per brick house, so `NW_MAX_UNITS` devices in the worst case. The
+  measured ceiling is ≥ 4096 and was not reached, against an `NW_MAX_UNITS`
+  of 64 — so there is no measured number to derive *against*, and a
+  hand-written loop limit would be a second copy of a constraint that does
+  not bind. **Nothing is added to `blob.h` for this.** What is recorded
+  instead is the check: if a raised `NW_MAX_UNITS` ever approaches the
+  measured ceiling, re-measure by binding, and only then consider a derived
+  limit.
+
+  This is not the resource that runs out first, and the scale ladder already
+  says which is: PID 1 holds two log pipes per house, so the descriptor
+  budget breaks at n > (`ulimit -n` − reserved) / 2 — about 9,996 on the
+  machine in `tools/HANDOFF-scale.md`. That is ~2.4× below the loop figure
+  measured here and it binds first.
 - Everything on the failure path is `die()`, per invariant 6: a declared lid
   or a declared brick that cannot be applied stops that house.
 
@@ -216,15 +240,73 @@ detect an unsealed brick. Use it.
 it leaks the device (`losetup -a` shows it still attached after the house
 exits), where the full sequence leaves none. Keep that one.
 
-**The mountpoint is a decision this plan does not name.** An image cannot be
-mounted onto itself the way a directory brick is bind-mounted onto itself,
-so phase 2 needs a mount point that `lid_brick()` does not have today. Two
-strategies were prototyped and both reach the house: an existing empty
-directory on the machine root, or a small `tmpfs` mounted inside the house's
-own namespace with the mountpoint created in it — which writes nothing to
-any disk and bakes nothing into any brick, at the cost of still needing one
-existing directory to put the tmpfs on. Decide it before writing the code,
-not during.
+## The mountpoint — DECIDED 2026-09-12: an existing empty directory
+
+An image cannot be mounted onto itself the way a directory brick is
+bind-mounted onto itself, so phase 2 needs a mount point `lid_brick()` does
+not have today. **It is an empty directory on the machine root, created by
+`dawn` alongside `/nw/bricks` and `/nw/stores` — `/nw/mnt`. Not a tmpfs.**
+
+This is a **production** decision, not a harness one: `lid_brick()` runs in
+the TCB on every house at every boot, so whatever is chosen ships and the
+tests follow it. That is why this plan says decide before writing the code.
+
+**The cost comparison.** The directory costs one `mkdir` in `dawn`, once,
+ever. The tmpfs costs a mount syscall per house per boot plus a tmpfs
+instance the kernel tracks for the life of every house. What the tmpfs buys
+is that nothing is written to disk at the mountpoint — but nothing is
+written there anyway: it is an empty directory, covered by `pivot_root` a
+moment later. And a tmpfs still needs an existing directory to mount *on*,
+so it does not remove the requirement that the layout guarantee a path. It
+inherits that requirement and adds a layer.
+
+### The fact it rests on, verified in the code rather than assumed
+
+Two houses cannot collide on one mountpoint, because `nw-sup` unshares its
+mount namespace before `lid_brick()` runs, so each house's mount of
+`/nw/mnt` is invisible to every other. **Checked, and it holds in both
+halves — the unshare and the propagation:**
+
+1. `nwsup.c`, in the parent before the fork loop: `if (brick) { … if
+   (!(lids & NW_LID_NEWNS)) die("brick without newns"); }`. A brick house
+   whose plan omits `newns` never reaches a fork. `die()` ends in
+   `_exit(72)`, so this is not advisory.
+2. In the child, in this order: `if (lids & NW_LID_NEWNS) lid_newns();`
+   then `if (brick) lid_brick(…);`. Given (1), `brick` implies `NEWNS`, so
+   `lid_newns()` — which is `unshare(CLONE_NEWNS)` or `die` — **always**
+   precedes `lid_brick()`. There is no path to `lid_brick()` without a
+   preceding unshare.
+3. `unshare(CLONE_NEWNS)` alone would not be enough: it copies the mount
+   table, and a new mount still propagates to a shared peer group. The
+   first statement of `lid_brick()` is
+   `mount(NULL, "/", NULL, MS_REC | MS_PRIVATE, NULL)` or `die`, before any
+   bind. So nothing propagates back.
+4. `nwcheck.c` returns `NW_E_BRICKNS` independently, so a sealed plan
+   cannot express the case at all.
+
+Both halves matter and (3) is the one that would have been easy to miss:
+the unshare alone is the half people quote, and it is not sufficient.
+
+### Where the one line goes, and who writes it
+
+`dawn.c` already does `mkpath(NW_ROOT_MNT "/nw/bricks")` and
+`mkpath(NW_ROOT_MNT "/nw/stores")` on consecutive lines. `/nw/mnt` is one
+more `mkpath` beside them, which is what "one mkdir, once, ever" means
+literally rather than as an estimate. **Not written here:** this plan
+decides, it does not implement, and `dawn.c` belongs to whoever holds the
+boot chain that week — see the ownership note in `CLAUDE.md`.
+
+Two things for whoever lands it. The directory must exist **before** any
+house is spawned, which `dawn` satisfies by construction since it runs
+before PID 1 execs. And a house whose brick is a *directory* does not touch
+`/nw/mnt` at all — the bind-onto-itself path is unchanged — so the
+mountpoint is dead weight for directory bricks and that is the correct
+trade: one empty directory, versus a per-house mount syscall to avoid it.
+
+**What is NOT namespaced, and is the real shared resource in this phase:**
+the loop device pool. `LOOP_CTL_GET_FREE` allocates from a global kernel
+pool; a mount namespace does not partition it. The mountpoint decision does
+not touch that, and nothing below should be read as saying it does.
 
 ## Phase 3 — the plan carries a hash, not a path
 
