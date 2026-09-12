@@ -216,8 +216,15 @@ make proof      # the CBMC proofs of the validator, and their controls
 `tests/run.py` boots via `unshare --pid --fork --mount-proc` so `nw-root` is
 genuine PID 1 and orphan reaping is actually exercised.
 
-`make proof` is minutes rather than seconds and needs `cbmc`, so it is not
-part of `make test`. When `cbmc` is absent, **`proofs/run.sh` exits 3** and
+`make proof` needs `cbmc` and is **tens of minutes**, dominated by
+`leaf_name_dup`, so it is not part of `make test`. Do not budget for it
+from this line — read the per-proof seconds the script prints — and do not
+run it beside `make test`: CBMC is killed under CPU or memory pressure,
+and a full run contending with the suite aborted in that same proof on this
+machine. `proofs/run.sh` refuses a run that produced no result line rather
+than reading it as a pass, so a `NO RESULT LINE` means it did not finish,
+not that a property failed. (This said "minutes rather than seconds", which
+reads like two or three; `claims` and `fd-auditor` both timed it.) When `cbmc` is absent, **`proofs/run.sh` exits 3** and
 says SKIP rather than passing — `make proof` reports that as `Error 3` and
 exits 2, so a caller that needs to tell SKIP from FAIL must run the script,
 not the target. (This paragraph said `make proof` exits 3 until 2026-09-11;
