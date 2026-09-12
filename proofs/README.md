@@ -71,6 +71,17 @@ a checker that answers `NW_E_DUPNAME` to everything satisfies the first one.
   than count as coverage. Do not cite a green `caller_nw_check_bind` as
   evidence that a rejection rule is pinned.
 
+- **A result file is stamped; an unstamped one is from before 2026-09-12
+  and says nothing about any particular tree.** Each `.txt` opens with the
+  tree path, a cksum of `nwcheck.c` + `blob.h`, the git hash with a `+dirty`
+  marker, and the time. The output directory is derived from the tree path
+  rather than shared, because it was a fixed machine-global
+  `/var/tmp/nw-proofs` and `fd-auditor` ran mutant proofs from a scratch
+  copy straight over this tree's artifacts — leaving `VERIFICATION FAILED`
+  output, produced from a deliberately broken `nwcheck.c`, sitting where
+  the next reader would take it for a result about the real tree. Same
+  shape as the suite's shared stage path, answered the same way.
+
 - **Do not run this beside `make test`.** `leaf_name_dup` is the long one
   and CBMC is killed under memory or CPU pressure; `run.sh` refuses a run
   that produced no result line rather than reading it as a pass, which is

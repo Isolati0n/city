@@ -29,7 +29,15 @@ ROOT=$(pwd)
 # directory return different file sets in this sandbox with no run in
 # between, which produced a spurious `make proof` failure. Override with
 # NW_PROOF_OUT.
-OUT=${NW_PROOF_OUT:-/var/tmp/nw-proofs}
+# PER TREE, because the directory was a fixed machine-global path and two
+# agents on one machine wrote to it. `fd-auditor` ran mutant proofs from a
+# scratch copy and overwrote this tree's artifacts with VERIFICATION FAILED
+# output from a deliberately broken nwcheck.c -- and nothing in the files
+# said which tree produced them, so the next reader of the .txt draws a
+# wrong conclusion about a correct tree. Same shape as the suite's stage
+# path, answered the same way: derive it, do not share it.
+OUT=${NW_PROOF_OUT:-/var/tmp/nw-proofs-$(printf %s "$(cd "$ROOT" && pwd -P)" \
+        | cksum | cut -d' ' -f1)}
 rm -rf "$OUT"; mkdir -p "$OUT"
 
 command -v cbmc >/dev/null 2>&1 || {
@@ -235,7 +243,21 @@ expect() {       # expect PASS|FAIL NAME cbmc-args...  -> $OUT/NAME.txt
     check_unwindset "$@" || exit 1
     printf '  %-26s ' "$name"
     start=$(date +%s)
-    if cbmc "$@" $CHECKS -I"$ROOT" -I"$OUT" > "$OUT/$name.txt" 2>&1
+    # STAMPED, so a result file says which tree and which TCB bytes it was
+    # produced from. A .txt with no provenance is a proof kept where it
+    # cannot be re-run, in miniature: it reads as a result about whatever
+    # tree the reader happens to be in.
+    {
+        echo "### proofs/run.sh: $name"
+        echo "### tree:    $(cd "$ROOT" && pwd -P)"
+        echo "### sources: $(cat "$ROOT/nwcheck.c" "$ROOT/blob.h" \
+                             | cksum | tr -s ' ' | cut -d' ' -f1,2)"
+        echo "### git:     $(cd "$ROOT" && git rev-parse --short HEAD \
+                             2>/dev/null || echo none)$(cd "$ROOT" \
+                             && git diff --quiet 2>/dev/null || echo '+dirty')"
+        echo "### when:    $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    } > "$OUT/$name.txt"
+    if cbmc "$@" $CHECKS -I"$ROOT" -I"$OUT" >> "$OUT/$name.txt" 2>&1
     then got=PASS; else got=FAIL; fi
     end=$(date +%s)
     props=$(grep -oE '^\*\* [0-9]+ of [0-9]+ failed' "$OUT/$name.txt" | head -1)
