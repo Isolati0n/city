@@ -25,7 +25,8 @@ remembering. You are the version that does not depend on that.
 | units | `NW_MAX_UNITS` | `MAX_UNITS` | scope / `fdNeed` | `MaxUnits` |
 | descriptors | `NW_MAX_FDS`, `NW_FD_RESERVED` | `MAX_FDS`, `FD_RESERVED` | `fdNeed` | `FdNeed`, `Reserved` |
 | binds | `NW_MAX_BINDS` | `MAX_BINDS` | `bindNeed` | `MaxBinds` |
-| name / path / brick lengths | `NW_NAME_LEN`, `NW_PATH_LEN`, `NW_BRICK_LEN` | `NAME_LEN`, `PATH_LEN`, `BRICK_LEN` | — | — |
+| name / path lengths | `NW_NAME_LEN`, `NW_PATH_LEN` | `NAME_LEN`, `PATH_LEN` | — | — |
+| brick | `NW_BRICK_HASH`, `NW_BRICK_HEX`, `NW_BRICK_DIR`, `NW_BRICK_SUFFIX` | `BRICK_HASH`, `BRICK_HEX` | — | — |
 
 **The `plan.als` and `Plan.tla` columns are GENERATED as of 2026-09-11**,
 with one exception named below. `MaxUnits`, `MaxFds`, `Reserved` and

@@ -4277,10 +4277,20 @@ taken a device. Nothing sleeps — losing means another house won that index,
 which is progress.
 
 Control: restore the single unretried attempt and the eight-house test goes
-red naming the shortfall, `N of 8 brick houses never ran`. `N` is **not** a
-fixed number and this is a race, so the figure to carry is the range across
-runs — 5 to 6 of 8 ever ran — not whichever line one run printed. With the
-retry: 64 of 64 at `NW_MAX_UNITS`, zero `EBUSY`, zero restarts.
+red naming the shortfall, `N of 8 brick houses never ran`. With the retry:
+64 of 64 at `NW_MAX_UNITS`, zero `EBUSY`, zero restarts.
+
+**No figure for `N`, and that is the fourth time this repository has had to
+learn it.** The first telling quoted one run's line as though it were the
+result. The correction replaced it with a range across runs — 5 to 6 of 8
+ever ran — and `claims` re-ran the same control on the same machine and got
+**7, 7, 6**, under different CPU load, which is what changes a race. So the
+correction was the same mistake wearing a wider hat, in the paragraph that
+had just said `N` is not a fixed number. `harness.md` already carries this
+lesson from the scale ladder ("**Third time. Do not put one here.**"); this
+is the fourth, and it is the first one in `HISTORY.md`. The durable claim is
+the one the control makes: **the test goes red and names the shortfall**.
+Anyone who wants a distribution runs it and quotes their own load.
 
 Two fixes were rejected and the reasons belong here. An index derived from
 the unit's table position (`BASE + i` on a device number) is bugs 9 and 13
@@ -4446,8 +4456,12 @@ of `(offset, byte)`.
 NUL-terminated path — `brick[0] == 0` *was* "blank" — and became wrong the
 moment the field became a hash, in the same silent direction: one hash in
 256 satisfies it vacuously, so the proof would have gone on SUCCEEDING
-against the mutant the suite now catches. Both brick assertions there scan
-the full 32 bytes.
+against the mutant the suite now catches. Every brick assertion there goes
+through the shared predicate now.
+
+*This sentence said "Both brick assertions" and there were three — the
+third is the bind one that §52 is about, and the count was wrong in the
+paragraph correcting a defect that a count would have caught. `claims`.*
 
 `proofs/run.sh` ran `leaf_path_ok` at two widths because `nw_check` called
 `path_ok_len` at two, and running it at one had previously let a
@@ -4469,3 +4483,165 @@ like work that was skipped.
 The fd arithmetic did not move either, and could not: it depends on unit
 count, not field widths. Invariant 3's four-place change reached `blob.h`
 and `bakery/nw-cc.py` and stopped there for this change specifically.
+
+## 52. Five reviewers on phase 3: the sweep reached two of five sites (2026-09-12)
+
+`tcb-review`, `fd-auditor`, `drift`, `control` and `claims` against
+`3646f1c`, dispatched before the push. **Three of them found the same HIGH
+independently, none looking for it**, which is the same signature the
+`LOOP_CTL_GET_FREE` race had one round earlier.
+
+### The HIGH: phase 3 converted one of `nwcheck.c`'s two `brick[0]` sites
+
+```c
+/* A bind only means anything for a house that has its own root. */
+if (!u[b[i].unit].brick[0]) return NW_E_BINDIDX;
+```
+
+The unit loop 28 lines above was correctly converted to scan all 32 bytes.
+The bind loop was not — in the same function, in the same commit, in the
+change whose entire subject was that a hash has no distinguished first
+byte.
+
+Reproduced by baking two plans that differ **only in the first hex pair**:
+
+```
+brick=dede…de bind=/etc   OK units=1 binds=1 crc=0xce0dea89
+brick=00de…de bind=/etc   REJECT bind unit index (13)
+```
+
+One image in 256 has a sha256 beginning `0x00`. So one brick house in 256
+that also declares a bind refused to boot — `nw-check reject: bind unit
+index` / `HALT: plan` — naming the bind table for a plan whose bind table
+is correct. An operator edits the binds; nothing changes. Rebuild the
+brick's *contents* and it boots.
+
+It fails closed, so it is not an escape. It is the characteristic failure
+with a reboot attached: a true-looking rejection whose stated reason is
+false.
+
+### Why nothing caught it, which is worth more than the bug
+
+- **The suite could not.** No test named `NW_E_BINDIDX`. The two bricks
+  that carry binds draw their first byte from the compiler's output, so it
+  was a ~0.4% flake *seeded by the build* — the same run passes or fails
+  forever until the tree changes.
+- **The proof pinned it.** `proofs/caller_nw_check.c` asserted
+  `u[bd[k].unit].brick[0] != 0` — character-for-character the predicate the
+  checker enforced. Fixing `nwcheck.c` alone turned `make proof` **red**,
+  so the correct fix looked wrong. `tcb-review` measured that.
+- **And a corrected assertion would not have caught it either.** `claims`
+  ran the other control: fix only the proof, leave the checker broken, and
+  `caller_nw_check_bind` still PASSES. The reason is structural — every
+  assertion in that harness sits inside `if (r == NW_OK)`, so the file can
+  only say *accepted implies P*, and **no over-rejection can violate an
+  acceptance postcondition.** `proofs/` cannot express "refuses a plan it
+  should accept" at all, however the assertion is written. Recorded in
+  `proofs/README.md` under what is not proven; closing it needs a
+  completeness direction and is unbuilt.
+- **Line coverage said 99%.** That line was *executed* by every plan with a
+  bind. A covered line with a defect in it, at the floor, found by three
+  readers and by no number.
+
+### The fix is one function, because five copies was the actual defect
+
+`nw_unit_has_brick()` is a `static inline` in `blob.h`, beside the field,
+and every site calls it: both in `nwcheck.c`, `nwspawn.c`, and both in the
+caller proof. The open-coded predicate had five copies at the moment the
+bug was found, and a rule that says "scan every byte" is a rule somebody
+has to remember at each new site — invariant 3's drift class arriving in a
+predicate instead of a number. `test_leading_zero_hash_is_a_brick` bakes
+the two plans above through the real baker and pins both, with the
+brickless-unit case as the pairing so the acceptances cannot be satisfied
+by a checker that stopped enforcing the rule.
+
+### The bigger finding: the phase-3 argument rested on an untested guard
+
+`claims` deleted the length check and the hex loop from `nwsup.c` — the
+re-validation of `NW_BRICK` — and **the entire suite stayed green.**
+
+That is the load-bearing step of everything §51 argues. The case for
+deleting the brick half of `test_path_traversal_refused` is that a hash
+cannot express a traversal; but the hash becomes **text** exactly once, in
+the `NW_BRICK` handoff, and `nw-sup` reads its unit from the environment
+rather than from the sealed blob — so neither the baker nor `nw-check`
+stands behind that value. The guard was the whole argument and nothing
+exercised it.
+
+`test_brick_hash_revalidated_at_the_supervisor` drives `nw-sup` directly,
+because a plan cannot carry these values and the point is that the guard
+must hold for values no plan produced: a traversal, a path, a wrong
+alphabet, and both off-by-ones. Paired — a well-formed hash must get *past*
+the guard and fail later at `open brick image` on the path `nw-sup`
+composed itself, or the rejections would be satisfied by a supervisor that
+refuses everything. Control: delete the guard and it goes red, with
+`../../etc` reaching the open.
+
+**A deleted check is only as good as the mechanism that replaced it, and
+the replacement needs its own test.** §51 recorded why the check went. It
+did not test the thing that made going acceptable.
+
+### And the all-zero hash
+
+`blob.h` claimed "every one of the 2^256 values names a file under one
+directory". One does not: all-zero is how the blob spells *no brick*. The
+baker accepted `brick=000…0`, the checker read it as brickless, and the
+city booted a house on the machine root with no `lid brick` line and every
+reader reporting success — invariant 6's "the plan lying", through the one
+value the argument did not cover.
+
+Refused in the baker, with its own message. It **can only** live there:
+once the blob exists, 32 zero bytes *is* the no-brick encoding and nothing
+in the TCB can tell a plan that meant it from one that did not. The
+representation is the enforcement, and the baker is the last place the
+intent still exists. That is the honest exception to `plan.md`'s "any rule
+the runtime relies on must be in `nwcheck.c` too". Folding it into
+`_is_hex64` was tried first and produced `brick= must be 64 hex characters
+… not a path` for a value that is exactly 64 hex characters — a true
+rejection under a false reason, which is this project's characteristic
+failure wearing the fix's clothes.
+
+### Drift that had no behaviour yet
+
+- **`NW_BRICK_DIR` was declared with two hand-written copies left.**
+  `bakery/mkbrick.py` — the only tool that writes an image for a real
+  machine — defaulted its output directory to a literal, so changing the
+  `#define` moved `nw-sup` and left the packer behind: clean compile, no
+  assert, green suite, because the suite's own `make_brick` reads the
+  header and follows `nw-sup` wherever it goes. On hardware that is every
+  brick house dying at `open brick image`. It reads the header now.
+  `dawn.c:158` still has the same literal two lines from a `mkpath` that
+  uses its constant; it is in another agent's file and the trunk boots, so
+  it is **flagged, not fixed**, per the narrow rule.
+- **The `blob.h` comment that introduced the constant enumerated three
+  readers and was wrong about two of them on the day it was written.** It
+  names the rule now and counts nothing.
+- **The stage-length guard's fallback was wrong in the direction its own
+  comment promised it could not be.** `16` stood in for the longest fixture
+  name under the sentence "errs toward refusing a stage that would have
+  worked"; the longest is `unit-lastwordsmany`, so it was two characters
+  too generous and a stage that passed built an over-long `exec_path`. It
+  reads the Makefile's own `cp` list now and refuses rather than guessing.
+  The guard's *message* still named `brick[]`, a field that has held no
+  path since phase 3 — the docstring above it was rewritten and the string
+  under it was not.
+- **Three briefs instructed against `NW_BRICK_LEN`,** a constant this phase
+  deleted, and `control.md` carried two counts (a limit of "20 characters"
+  that is five times that, and a `mktemp -d` prohibition of "21 characters
+  and one over" that is 19 and under). `install-agents.sh --check` passed
+  throughout: it verifies the briefs match its heredocs, not that they are
+  true.
+
+### The figure that would not reproduce, for the fourth time
+
+§50 first quoted one run's control line, was corrected to a range across
+runs — "5 to 6 of 8 ever ran" — and `claims` re-ran the same control on the
+same machine under different load and got **7, 7, 6**. So the correction
+was the same mistake wearing a wider hat, written into the paragraph that
+had just said the number is not fixed. `harness.md` carries this lesson
+from the scale ladder and says *"Third time. Do not put one here."*
+
+No figure now, in `HISTORY.md`, `CLAUDE.md` or `nwsup.c`. The durable claim
+is what the control demonstrates: **the test goes red and names the
+shortfall.** Anyone who wants a distribution runs it and quotes their own
+load.

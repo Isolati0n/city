@@ -167,6 +167,18 @@ of them real.
 path). `NW_E_BINDPATH` is replaced by `NW_E_BINDKIND`. The enum and `errs[]`
 must move together, as always.
 
+> **LANDED 2026-09-12, and the first sentence is what actually happened,
+> inverted.** `NW_E_BRICK` was **retired**, not repurposed: there is no
+> invalid value of 32 raw bytes to report, so "not-64-hex" is not a check
+> that exists in the blob — the hex spelling only exists in the `NW_BRICK`
+> environment handoff, where `nw-sup` validates it and `die()`s rather than
+> returning a plan error. A code kept alive under a new meaning is the
+> version-namespace defect the `NWPLAN06` → `07` bump exists to avoid.
+> `NW_E_BINDPATH` still exists and is unchanged: binds are still paths.
+> `HISTORY.md` §51. (`docs/plans/01` got this correction on the day and
+> this file did not, which is the same prediction surviving in the copy
+> nobody edited. `drift` and `tcb-review`.)
+
 **`nw-sup`.** Gains the two constructors and loses the concatenation at
 `nwsup.c:91`. Smaller, not larger — the string handling in the TCB goes down.
 

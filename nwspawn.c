@@ -31,14 +31,6 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
-/* All-zero means no brick. Every byte, because a hash has no terminator. */
-static int has_brick(const struct nw_unit *u)
-{
-    int any = 0;
-    for (int k = 0; k < NW_BRICK_HASH; k++) any |= u->brick[k];
-    return any;
-}
-
 static void die(const char *s)
 {
     char b[160];
@@ -209,7 +201,7 @@ int main(int argc, char **argv)
             char hex[NW_BRICK_HEX + 1];
             for (int k = 0; k < NW_BRICK_HASH; k++)
                 snprintf(hex + 2 * k, 3, "%02x", u[i].brick[k]);
-            setenv("NW_BRICK", has_brick(&u[i]) ? hex : "", 1);
+            setenv("NW_BRICK", nw_unit_has_brick(&u[i]) ? hex : "", 1);
             int nb = 0;
             for (uint32_t b = 0; b < h->n_binds; b++) {
                 if (bd[b].unit != (uint16_t)i) continue;

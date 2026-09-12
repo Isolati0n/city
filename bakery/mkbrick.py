@@ -77,6 +77,19 @@ def sha256_file(path: str) -> str:
     return h.hexdigest()
 
 
+def brick_dir() -> str:
+    """NW_BRICK_DIR from blob.h -- where nw-sup will look for the image.
+
+    Read, not spelled. This was `default="/nw/bricks"`, a literal, in the
+    one tool that writes images for a real machine, while blob.h's comment
+    claimed the constant had three readers each reading it. Changing the
+    #define moved nw-sup and left mkbrick behind, with a clean compile, no
+    assert and a green suite -- the suite follows the header because
+    make_brick reads it. On hardware every brick house dies at
+    `open brick image`. Found by `tcb-review` and `fd-auditor`."""
+    return _define("NW_BRICK_DIR")
+
+
 def brick_suffix() -> str:
     """NW_BRICK_SUFFIX from blob.h. Read, not spelled: nw-sup composes the
     image path from NW_BRICK_DIR, the hex hash and this suffix, so a second
@@ -84,12 +97,20 @@ def brick_suffix() -> str:
     LENGTH constraint -- phase 3 replaced brick[NW_BRICK_LEN] with a
     32-byte hash, so the suffix costs no room in the blob -- and
     tests/run.py's stage limit now derives from NW_PATH_LEN."""
+    return _define("NW_BRICK_SUFFIX")
+
+
+def _define(name: str) -> str:
+    """One string #define out of blob.h. One parser, not one per constant:
+    the suffix had its own open-coded loop and the directory had no reader
+    at all, which is how they came to disagree with the header in different
+    ways."""
     here = os.path.dirname(os.path.abspath(__file__))
     for line in open(os.path.join(here, "..", "blob.h")):
         f = line.split()
-        if len(f) >= 3 and f[0] == "#define" and f[1] == "NW_BRICK_SUFFIX":
+        if len(f) >= 3 and f[0] == "#define" and f[1] == name:
             return f[2].strip('"')
-    raise SystemExit("mkbrick: blob.h has no NW_BRICK_SUFFIX")
+    raise SystemExit(f"mkbrick: blob.h has no {name}")
 
 
 def pack(tree: str, out_dir: str, flags=None, quiet: bool = False) -> tuple:
@@ -155,7 +176,7 @@ def pack(tree: str, out_dir: str, flags=None, quiet: bool = False) -> tuple:
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("tree")
-    ap.add_argument("--out-dir", default="/nw/bricks")
+    ap.add_argument("--out-dir", default=brick_dir())
     ap.add_argument("--quiet", action="store_true")
     a = ap.parse_args()
     digest, _ = pack(a.tree, a.out_dir, quiet=a.quiet)

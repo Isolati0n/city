@@ -41,15 +41,20 @@ make STAGE="$S" test              # NW_STAGE follows STAGE; the suite runs
                                   # what keeps you out of a parallel run
 ```
 
-**`STAGE` has a hard length limit and it is short** — `NW_BRICK_LEN` minus
-the production brick path, currently 20 characters. `make_brick` builds
-`{STAGE}/nw/bricks/{64 hex}` into a `brick[]` field sized for
-`"/nw/bricks/" + 64 hex + NUL`, so a longer stage overflows it. Do **not**
-put the stage inside `$(mktemp -d)`: that is 21 characters and one over.
-This brief said to do exactly that until 2026-09-10, and the recipe could
-not run the suite. `tests/run.py` now refuses an over-long `NW_STAGE` at
-startup rather than failing on the third test with `brick= too long`, which
-names the plan and not the stage.
+**`STAGE` has a length limit.** `tests/run.py` refuses an over-long
+`NW_STAGE` at startup rather than failing mid-run at bake time. Do not copy
+the number here — run `python3 -c` against `_stage_limit()`, or just read
+the refusal, which prints the limit and where it comes from. It is bounded
+by `exec_path[NW_PATH_LEN]`, which the suite fills with
+`{STAGE}/nw/bin/<fixture>`.
+
+*This paragraph carried a number and four wrong clauses for two days: it
+named `NW_BRICK_LEN` (deleted by phase 3), said the limit was 20 (it is
+five times that), said `make_brick` builds under `{STAGE}` (it builds on
+the machine root), and forbade `$(mktemp -d)` as "21 characters and one
+over" (it is 19, and comfortably under). Found by `drift`, `fd-auditor`
+and `claims`, separately. A count in a brief is a hostage — and this one
+was an operational instruction, so believing it cost a working recipe.*
 
 For each test added or changed in the diff:
 

@@ -41,6 +41,25 @@ a checker that answers `NW_E_DUPNAME` to everything satisfies the first one.
 
 ## What is *not* proven, stated plainly
 
+- **Only one direction is.** Every assertion in `caller_nw_check.c` lives
+  inside `if (r == NW_OK) { ... }`, so the whole harness expresses
+  *accepted implies P* and nothing else. **No defect that makes `nw_check`
+  refuse a plan it should accept is expressible here**, however it is
+  written, because a rejection cannot violate an acceptance postcondition.
+
+  Measured 2026-09-12, not reasoned: `nwcheck.c`'s bind loop tested
+  `brick[0]` instead of scanning the hash, refusing one legal plan in 256.
+  With the proof's matching `brick[0]` assertion **corrected** and the
+  checker left broken, `caller_nw_check_bind` still PASSES. `claims`. (The
+  same defect did turn the proof red when the *checker* was fixed and the
+  assertion was not — the proof pinned the old behaviour. Being pinned to
+  the code and being able to catch it are different properties, and this
+  file had the first.)
+
+  `PROOF_VACUITY` shows that *some* blob is accepted. Nothing asserts that
+  a *particular* well-formed blob is. Closing it means constructing a legal
+  blob in the harness and asserting `NW_OK`, and it is unbuilt.
+
 - **N is bounded.** The caller runs at one unit and no binds; `name_dup` at
   two names. Raise them with `PROOF_UNITS` / `PROOF_BINDS`, and the cost
   climbs steeply — `leaf_name_dup` at two names is already 88 s, because the

@@ -118,8 +118,11 @@ static void lid_brick(const char *brick, char *const *binds, int nbinds)
      * Measured 2026-09-12, and it was already firing in the committed suite:
      * two brick houses produced one `FAIL loop configure errno=16` on every
      * run, hidden because the default budget absorbed the restart. At 8
-     * houses only 5-6 of 8 ever ran; at 64 -- NW_MAX_UNITS -- 6 to 15 of 64
-     * attached on the first attempt. The city still printed
+     * houses several never ran, and at NW_MAX_UNITS most never attached --
+     * no figures, because it is a race and the ones written here first did
+     * not reproduce under different load (HISTORY.md section 50; `claims`
+     * re-ran the 8-house control and got a different spread). What is
+     * stable is the SHAPE. The city still printed
      * `closed houses_reaped=N orphans=0`, so half a city could be missing
      * and the close line looked healthy. Found by `tcb-review` and
      * `fd-auditor` independently.

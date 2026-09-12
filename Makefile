@@ -91,7 +91,10 @@ unit-orphanslow: houses/orphan.c
 
 stage: all
 	rm -rf $(STAGE)
-	mkdir -p $(STAGE)/nw/bin $(STAGE)/nw/bricks $(STAGE)/nw/stores
+	# No $(STAGE)/nw/bricks: phase 3 made nw-sup compose an ABSOLUTE
+	# NW_BRICK_DIR path, so make_brick writes the image to the machine
+	# root and this directory was created empty and used by nothing.
+	mkdir -p $(STAGE)/nw/bin $(STAGE)/nw/stores
 	# NW_BRICK_MNT ON THE HOST ROOT, and it is deliberate. nw-sup mounts a
 	# brick image on an ABSOLUTE path -- /nw/mnt -- because in production
 	# dawn has pivoted and the machine root IS the staged tree. The suite

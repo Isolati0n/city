@@ -382,6 +382,14 @@ the length it needs: the check went because a hash cannot express a
 traversal, and the new one is that "no brick" is all-zero and must be
 scanned for to the last byte.
 
+**And §52 is the review round that found the sweep had reached two of five
+sites.** `nwcheck.c`'s bind loop still read `brick[0]`, so one legal plan
+in 256 would not boot; the CBMC proof asserted the same thing and pinned
+it; and the `nw-sup` re-validation that the whole traversal argument rests
+on had no test, so deleting it left the suite green. All three are fixed
+and all three are pinned. Read §52 before quoting §51's argument: the
+argument was right, and it was resting on an untested guard.
+
 ### The original text of this phase
 
 

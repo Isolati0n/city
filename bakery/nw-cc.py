@@ -25,7 +25,12 @@ import struct
 import sys
 import zlib
 
-NAME_LEN, PATH_LEN, BRICK_HASH, BRICK_HEX = 32, 128, 32, 64
+NAME_LEN, PATH_LEN, BRICK_HASH = 32, 128, 32
+# Derived, the way blob.h derives NW_BRICK_HEX: the hex spelling is the same
+# hash, so a literal 64 beside a literal 32 is the second copy the header's
+# own comment argues against, on the one side its _Static_asserts cannot
+# reach. `drift`.
+BRICK_HEX = BRICK_HASH * 2
 MAX_UNITS, MAX_BINDS, FD_RESERVED, MAX_FDS = 64, 128, 8, 1024
 KIND_ONESHOT, KIND_LONGRUN = 0, 1
 KINDS = {"oneshot": KIND_ONESHOT, "longrun": KIND_LONGRUN}
@@ -95,6 +100,30 @@ def check(houses, binds):
                     f"characters (the sha256 of the image, as mkbrick "
                     f"prints it), not a path. Phase 3 moved the plan from "
                     f"a path to a hash; nw-sup composes the path itself.")
+            if h["brick"] == "0" * BRICK_HEX:
+                # ALL-ZERO IS THE ONE VALUE THAT IS NOT A HASH. blob.h spends
+                # the field's all-zero state on "no brick", so this plan
+                # declares a brick and gets a house on the machine root: the
+                # baker accepted it, the checker read it as brickless, and
+                # the city booted with no `lid brick` line while every reader
+                # reported success. Invariant 6's "the plan lying", reached
+                # through the one value the 2^256 argument does not cover.
+                # Found by `tcb-review`.
+                #
+                # THIS CAN ONLY LIVE HERE, and it is the exception that shows
+                # what plan.md's "any rule the runtime relies on must be in
+                # nwcheck.c too" is actually about. By the time the blob
+                # exists the distinction is GONE -- 32 zero bytes IS the
+                # no-brick encoding, and no checker can tell a plan that
+                # meant it from one that did not. The representation is the
+                # enforcement; the baker is the last place the intent still
+                # exists.
+                raise SystemExit(
+                    f"house {h['name']}: brick= is all zeros, which is how "
+                    f"the blob spells NO brick -- so this plan would boot a "
+                    f"house on the machine root while saying it is in a "
+                    f"brick. No image hashes to zero; mkbrick never prints "
+                    f"this.")
             if not (h["lids"] & LID_NEWNS):
                 raise SystemExit(
                     f"house {h['name']}: brick= needs lids=...,newns; a brick "
@@ -141,11 +170,18 @@ def bake(path, houses):
 
 
 def _is_hex64(v):
-    """Exactly BRICK_HEX lowercase hex characters. Closed alphabet and fixed
-    length, so no separator and no relative component can appear -- that is
-    the whole phase-3 argument, and it is checked here as well as in
-    nwcheck.c because the baker is not in the TCB and a blob can arrive from
-    anywhere."""
+    """Exactly BRICK_HEX lowercase hex characters. A SHAPE check only.
+
+    Closed alphabet and fixed length, so no separator and no relative
+    component can appear -- that is the whole phase-3 argument, and it is
+    checked here as well as in nwcheck.c because the baker is not in the TCB
+    and a blob can arrive from anywhere.
+
+    All-zero passes this and is refused separately at the call site, with
+    its own reason. Folding it in here was tried first and produced
+    `brick= must be 64 hex characters ... not a path` for a value that IS 64
+    hex characters -- a true rejection under a false reason, which is this
+    project's characteristic failure wearing the fix's clothes."""
     return (isinstance(v, str) and len(v) == BRICK_HEX
             and all(c in "0123456789abcdef" for c in v))
 

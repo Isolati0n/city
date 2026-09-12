@@ -29,15 +29,40 @@
    traversed out with `..` baked clean, passed nw-check, booted, and logged
    `lid brick` while rooted on the machine (CLAUDE.md, the characteristic
    failure). A fixed-width hash CANNOT EXPRESS a traversal: there is no
-   separator, no relative component, and every one of the 2^256 values names
-   a file under one directory. The check is not removed, the input class it
-   defended against is.
+   separator and no relative component, so every value that names anything
+   names a file under one directory. The check is not removed, the input
+   class it defended against is.
 
-   The directory and suffix are declared, not described. nw-sup composes the
-   path, tests/run.py derives its stage limit, and bakery/mkbrick.py names
-   the file it writes -- three readers, one constant each, because prose
-   went stale here once already and the suite re-derived a wrong number from
-   it. */
+   ONE VALUE NAMES NOTHING, and this sentence said "every one of the 2^256
+   values" until `tcb-review` pointed at the line three above it: all-zero
+   is spent on "no brick". A plan writing 64 zeros therefore declares a
+   brick and gets a house on the machine root, with no `lid brick` line and
+   every reader reporting success. Refused in bakery/nw-cc.py, which is the
+   ONLY place it can be refused -- once the blob exists, 32 zero bytes is
+   the no-brick encoding and nothing here can tell the two apart.
+
+   The directory and suffix are declared, not described, because the program
+   that WRITES an image and the program that MOUNTS it must agree on where
+   it lives, and a path written in both places is the drift class invariant
+   3 is about -- the same argument NW_BRICK_MNT makes below.
+
+   Do not enumerate the readers here. This comment listed three and was
+   wrong about two of them on the day it was written: tests/run.py derives
+   its stage limit from NW_PATH_LEN and not from these at all, and
+   bakery/mkbrick.py -- the only tool that writes an image for a real
+   machine -- defaulted its output directory to a LITERAL "/nw/bricks".
+   Changing the #define moved nw-sup and left the packer behind, with a
+   clean compile, no assert, and a green suite, because the suite's own
+   make_brick reads the header and follows nw-sup wherever it goes. On
+   hardware that is every brick house dying at `open brick image`. Found by
+   `tcb-review` and `fd-auditor` independently; mkbrick reads it now.
+
+   KNOWN UNCONVERTED as of 2026-09-12: dawn.c:158 creates the directory with
+   `mkpath(NW_ROOT_MNT "/nw/bricks")`, a literal, two lines from a mkpath
+   that does use its constant. It is in another agent's file and the trunk
+   boots, so it is flagged rather than fixed here -- but it is the same
+   class, in the TCB, and it is the reason this paragraph stops counting
+   readers and starts naming the rule. */
 #define NW_BRICK_DIR    "/nw/bricks"
 #define NW_BRICK_SUFFIX ".img"
 #define NW_BRICK_HASH   32    /* raw sha256, not hex */
@@ -349,6 +374,35 @@ static inline const struct nw_bind *nw_binds(const void *blob)
     const struct nw_hdr *h = nw_hdr(blob);
     return (const struct nw_bind *)((const char *)blob + sizeof(struct nw_hdr)
                                     + h->n_units * sizeof(struct nw_unit));
+}
+
+/* "DOES THIS UNIT HAVE A BRICK?" -- the only legal interrogation of the
+ * field, and it lives here so that there is exactly one of it.
+ *
+ * All-zero means no brick. A hash has no terminator, so `brick[0]` answers
+ * a different question: it reads one image in 256 -- every hash beginning
+ * with a zero byte -- as having no brick. That is not a hypothetical. Phase
+ * 3 converted the unit loop in nwcheck.c to scan all 32 bytes and left the
+ * BIND loop 28 lines below it reading brick[0], and the CBMC caller proof
+ * asserting brick[0] too, so the proof pinned the defect in place and would
+ * have turned red on the fix. Both found by `tcb-review`; reproduced by
+ * baking two plans differing only in the first hex pair, one accepted and
+ * one refused as `bind unit index`.
+ *
+ * The open-coded predicate had FIVE copies at that point. A rule that says
+ * "scan every byte" is a rule someone has to remember at each new site,
+ * which is the drift class invariant 3 is about, arriving in a predicate
+ * instead of a number. So: one function, beside the field it reads, and no
+ * site left that could disagree with another.
+ *
+ * In blob.h rather than nwcheck.c because nwspawn.c needs it too and does
+ * not link the checker's non-inline half. It costs the TCB three lines and
+ * removes four copies. */
+static inline int nw_unit_has_brick(const struct nw_unit *u)
+{
+    int any = 0;
+    for (int k = 0; k < NW_BRICK_HASH; k++) any |= u->brick[k];
+    return any;
 }
 
 #endif

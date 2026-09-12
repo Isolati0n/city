@@ -57,7 +57,22 @@ def _stage_limit():
 
     (The old derivation also subtracted the hash and not ".img", coming out
     four characters too generous until 2026-09-12. Both the arithmetic and
-    the field it was about are gone; this is a different bound.)"""
+    the field it was about are gone; this is a different bound.)
+
+    THE FALLBACK WAS THE SAME DEFECT AGAIN, in the replacement. When the
+    stage does not exist yet there is nothing to list, and a literal 16
+    stood in under a comment saying it "is longer than any fixture name in
+    the tree today, so it errs toward refusing a stage that would have
+    worked". The longest is `unit-lastwordsmany`, 18 -- so it was two
+    characters too GENEROUS, in the direction the sentence promised it
+    could not be, and a 103-character stage passed the guard and then built
+    a 129-byte exec_path against NW_PATH_LEN 128: the exact bake-time
+    failure the guard exists to pre-empt. `fd-auditor` and `tcb-review`.
+
+    So the names come from the Makefile's own `cp` list, which is what
+    `make stage` copies -- one source of truth, staged or not. It refuses
+    rather than guessing if that list cannot be read, because a guess here
+    is what produced two wrong bounds in a row."""
     plen = None
     for line in open(os.path.join(ROOT, "blob.h")):
         f = line.split()
@@ -66,22 +81,44 @@ def _stage_limit():
     if plen is None:
         raise SystemExit("blob.h has no NW_PATH_LEN")
     # BIN is defined below this guard, so the path is spelled out here.
-    # On a tree that has never been staged the directory is absent; 16 is
-    # the fallback and is longer than any fixture name in the tree today,
-    # so it errs toward refusing a stage that would have worked rather
-    # than accepting one that would not.
     binp = os.path.join(STAGE, "nw", "bin")
-    longest = (max((len(n) for n in os.listdir(binp)), default=16)
-               if os.path.isdir(binp) else 16)
+    if os.path.isdir(binp) and os.listdir(binp):
+        longest = max(len(n) for n in os.listdir(binp))
+    else:
+        longest = _staged_names_from_makefile()
     return plen - len("/nw/bin/") - longest - 1
+
+
+def _staged_names_from_makefile():
+    """Length of the longest name `make stage` copies into nw/bin.
+
+    Read off the Makefile's `cp -f ... $(STAGE)/nw/bin/` continuation, so a
+    fixture added there raises the bound automatically and cannot be missed
+    by someone editing a number here."""
+    src = open(os.path.join(ROOT, "Makefile")).read()
+    m = re.search(r"\n\tcp -f((?:[^\n]*\\\n)*[^\n]*)\$\(STAGE\)/nw/bin/",
+                  src)
+    if not m:
+        raise SystemExit(
+            "tests/run.py: cannot find the Makefile's nw/bin cp list, which "
+            "is where the stage-length bound comes from. Do not replace this "
+            "with a literal -- the two literals that stood here before were "
+            "each wrong in the generous direction.")
+    names = [t for t in m.group(1).replace("\\", " ").split() if t]
+    if not names:
+        raise SystemExit("tests/run.py: the Makefile nw/bin cp list is empty")
+    return max(len(n) for n in names)
 
 
 if len(STAGE) > _stage_limit():
     raise SystemExit(
         f"NW_STAGE is {len(STAGE)} characters and the limit is "
         f"{_stage_limit()} (derived from NW_PATH_LEN in blob.h): {STAGE}\n"
-        f"A longer stage makes every brick path overflow brick[] and the "
-        f"suite fails at bake time naming brick=, not the stage.")
+        f"A longer stage makes every staged exec_path overflow "
+        f"exec_path[NW_PATH_LEN], and the suite fails at bake time naming "
+        f"exec path, not the stage. (This message named brick[] until "
+        f"2026-09-12, a field that has held no path since phase 3 -- the "
+        f"docstring above was rewritten and the string under it was not.)")
 # The staged tree mirrors the production layout and differs only in prefix:
 # BIN is /nw/bin on a real machine, SLOTS is /efi/slots. Scratch files that
 # have no production counterpart live in WORK.
@@ -1589,10 +1626,23 @@ def test_seccomp_kills():
 
 
 def make_brick(ident, mirrors=()):
-    """Build a content-addressed brick under {STAGE}/nw/bricks and return its
-    path. The name is the sha256 of the tree's contents, so two bricks that
-    differ only in the text of /id land at different paths on their own --
-    nothing assigns them.
+    """Build a content-addressed brick and return its HASH. The name is the
+    sha256 of the tree's contents, so two bricks that differ only in the
+    text of /id land at different paths on their own -- nothing assigns
+    them.
+
+    THE IMAGE LANDS ON THE MACHINE ROOT, not in the stage, and that is
+    forced: phase 3 has nw-sup compose NW_BRICK_DIR/<hex> itself and
+    NW_BRICK_DIR is absolute. Two consequences worth knowing before you
+    debug them. Distinct stage paths no longer isolate brick tests from
+    each other -- the filename is the content hash, so two runs of the same
+    tree target the identical file and one run's `rm -f` can land under the
+    other's open(). And the directory is created here rather than by `make
+    stage`, so on a machine where the suite cannot write the machine root
+    this raises, and it is turned into a named skip below rather than a
+    crash. `fd-auditor`. (The docstring said "under {STAGE}/nw/bricks" and
+    "return its path" until 2026-09-12; phase 3 falsified both clauses of
+    the first sentence of the function the brick tests all start at.)
 
     `mirrors` are machine paths the brick must have mount points for. nw-sup
     will not mkdir into a brick, so the empty directories have to be baked in
@@ -1639,7 +1689,19 @@ def make_brick(ident, mirrors=()):
     # the lab, and NW_BRICK_DIR is absolute.
     hexd = h.hexdigest()
     brick = f"{_brick_dir()}/{hexd}{_brick_suffix()}"
-    os.makedirs(_brick_dir(), exist_ok=True)
+    # A named skip, not a traceback: not being able to write the machine
+    # root is an ENVIRONMENT difference, and harness.md's rule is that one
+    # is announced by name rather than presenting as a code failure. It
+    # reached main()'s unhandled-exception path as `FAIL: ... raised an
+    # unhandled exception` before this -- loud, which is right, and
+    # attributed to the wrong thing, which is not.
+    try:
+        os.makedirs(_brick_dir(), exist_ok=True)
+    except OSError as e:
+        raise Unavailable(
+            f"cannot create {_brick_dir()} ({e.strerror}); nw-sup composes "
+            f"an absolute brick path, so the image must land on the machine "
+            f"root and this suite cannot write there")
     subprocess.run(["rm", "-f", brick], check=False)
     r = run(["mkfs.erofs", "-zlz4", brick, tmp])
     expect(r.returncode == 0 and os.path.exists(brick),
@@ -2052,6 +2114,145 @@ def test_many_brick_houses_all_start():
            f"each run once.\n{out[-2000:]}")
     print(f"ok many-brick-houses-all-start ({n} concurrent brick houses, "
           f"all ran, zero loop-device contention, zero restarts)")
+
+
+def test_brick_hash_revalidated_at_the_supervisor():
+    """nw-sup re-validates the hash before it composes a path.
+
+    THIS IS THE LOAD-BEARING STEP OF THE WHOLE PHASE-3 ARGUMENT and it had
+    no test. The argument for deleting the brick case of
+    test_path_traversal_refused is that a hash cannot express a traversal --
+    but the hash becomes TEXT exactly once, in the NW_BRICK handoff from
+    nw-spawn to nw-sup, and text is what the traversal class needs. nw-sup
+    reads its unit from the environment, not from the sealed blob, so the
+    baker and nw-check do not stand behind this value at all.
+
+    `claims` deleted the length check and the hex loop from nwsup.c and the
+    entire suite stayed green -- 36 ok lines, exit 0. A deleted security
+    check whose replacement argument rests on an untested guard is the
+    argument being a hypothesis, which is the one thing CLAUDE.md says a
+    sentence is worth nothing without.
+
+    Driven directly rather than through a plan, deliberately: a plan cannot
+    carry these values (the baker refuses them and the blob has no room for
+    them), and the point is that this guard must hold for a value no plan
+    produced.
+
+    PAIRED. The rejections alone are satisfied by an nw-sup that refuses
+    every brick, or that never reaches this code -- so a well-formed hash
+    must get PAST the guard, which is asserted by it failing later and
+    elsewhere, at `open brick image` on the composed path."""
+    hexok = "de" * int(blob_h("NW_BRICK_HASH"))
+    bad = [
+        ("../../etc", "brick hash length", "a traversal, which is what the "
+         "deleted brick case of path-traversal-refused used to cover"),
+        ("/nw/bricks/x.img", "brick hash length", "a path"),
+        ("z" * len(hexok), "brick hash not hex", "the right length, wrong "
+         "alphabet"),
+        (hexok[:-1], "brick hash length", "one hex digit short"),
+        (hexok + "d", "brick hash length", "one hex digit long"),
+        (hexok[:-1] + "A", "brick hash not hex", "uppercase, which mkbrick "
+         "never prints"),
+    ]
+    for val, reason, what in bad:
+        r = run([f"{BIN}/nw-sup", f"{BIN}/unit-probe", "probe"],
+                env=dict(os.environ, NW_BRICK=val, NW_LIDS="4", NW_KIND="0"))
+        out = r.out + r.err
+        expect(reason in out,
+               f"nw-sup did not refuse {what} with `{reason}`\n{out}")
+
+    # The pairing, and the positive evidence that the guard was reached and
+    # passed rather than skipped: a well-formed hash gets through, and the
+    # next thing that fails names the path nw-sup composed ITSELF, under
+    # NW_BRICK_DIR, which is the property the argument actually needs.
+    r = run([f"{BIN}/nw-sup", f"{BIN}/unit-probe", "probe"],
+            env=dict(os.environ, NW_BRICK=hexok, NW_LIDS="4", NW_KIND="0"))
+    out = r.out + r.err
+    expect("brick hash" not in out,
+           f"a well-formed hash was refused by the hash guard\n{out}")
+    expect("open brick image" in out,
+           f"a well-formed hash did not reach the open; the rejections "
+           f"above may be an nw-sup that refuses everything\n{out}")
+    print(f"ok brick-hash-revalidated (a traversal, a path, a bad alphabet "
+          f"and both off-by-ones refused at nw-sup, which reads NW_BRICK "
+          f"from the environment and not from the sealed blob; a "
+          f"well-formed hash reaches the open under {_brick_dir()})")
+
+
+def test_leading_zero_hash_is_a_brick():
+    """A hash that begins with a zero byte is still a brick.
+
+    "No brick" is ALL-ZERO, so every reader of the field must scan all 32
+    bytes. One image in 256 has a sha256 beginning 0x00, and a reader that
+    tests brick[0] sees those as brickless -- which is not a relaxation, it
+    is the opposite: nwcheck.c's BIND loop refused them as NW_E_BINDIDX,
+    naming the bind table for a plan whose bind table was correct, so the
+    machine would not boot until the brick's CONTENTS changed.
+
+    Phase 3 converted the unit loop in that function and left the bind loop
+    28 lines below it reading brick[0]. The CBMC caller proof asserted
+    brick[0] as well, so it PINNED the defect: fixing the checker turned
+    `make proof` red. Both found by `tcb-review`. Every site now goes
+    through nw_unit_has_brick() in blob.h, which is why the fix is one
+    function rather than a rule to remember at each new reader.
+
+    THE PAIRING: the all-0xde plan must be accepted too. Alone, "the 00..
+    plan is accepted" is satisfied by a checker that accepts everything and
+    by one that never reached the bind rule -- so the same plan with a
+    brickless unit must still be REFUSED, which is the third case here.
+    All three run through the real baker; nothing is hand-crafted, because
+    the defect was reachable from a plan anyone could write."""
+    hex_de = "de" * 32
+    hex_00 = "00" + "de" * 31
+    cases = [
+        (hex_de, 0, "a hash with no zero byte first"),
+        (hex_00, 0, "a hash beginning with a zero byte"),
+    ]
+    for brick, want, what in cases:
+        city = f"{WORK}/lz-{brick[:2]}.city"
+        open(city, "w").write(
+            f"house lz /bin/true kind=oneshot lids=newns,seccomp "
+            f"brick={brick} bind=/etc\n")
+        b = run(["python3", CC, "--city", city, "--out", f"{WORK}/lz.blob"])
+        expect(b.returncode == 0, f"bake {what}\n{b.out}{b.err}")
+        r = run([f"{BIN}/nw-check", f"{WORK}/lz.blob"])
+        expect(r.returncode == want,
+               f"nw-check rejected {what}: every reader of brick[] must "
+               f"scan all {int(blob_h('NW_BRICK_HASH'))} bytes\n{r.out}{r.err}")
+
+    # The other side of the rule, so the two acceptances above cannot be
+    # satisfied by a checker that stopped enforcing it. The baker refuses
+    # first, which is where this one is pinned.
+    city = f"{WORK}/lz-none.city"
+    open(city, "w").write(
+        "house lz /bin/true kind=oneshot lids=seccomp bind=/etc\n")
+    b = run(["python3", CC, "--city", city, "--out", f"{WORK}/lz-none.blob"])
+    expect(b.returncode != 0, "a bind with no brick should fail the bake")
+    expect("bind= without brick=" in (b.out + b.err),
+           f"wrong reason for a bind without a brick\n{b.out}{b.err}")
+    # THE OTHER END OF THE FIELD, and the one value the "2^256 values all
+    # name a file" argument does not cover: all-zero is how the blob spells
+    # NO brick, so a plan that writes 64 zeros declares a brick and gets a
+    # house on the machine root. It baked, validated `OK units=1`, and booted
+    # with no `lid brick` line -- invariant 6's "the plan lying". `tcb-review`.
+    #
+    # Pinned at the BAKER because nothing else can pin it: by the time the
+    # blob exists, 32 zero bytes IS the no-brick encoding and no checker can
+    # tell the two apart. The reason string is asserted, not just the exit
+    # code -- folding this into the shape check produced `must be 64 hex
+    # characters ... not a path` for a value that is exactly that, which is
+    # a true rejection under a false reason.
+    city = f"{WORK}/lz-zero.city"
+    open(city, "w").write(
+        f"house lz /bin/true kind=oneshot lids=newns,seccomp "
+        f"brick={'0' * int(blob_h('NW_BRICK_HASH')) * 2}\n")
+    b = run(["python3", CC, "--city", city, "--out", f"{WORK}/lz-zero.blob"])
+    expect(b.returncode != 0, "an all-zero brick hash should fail the bake")
+    expect("all zeros" in (b.out + b.err) and "machine root" in (b.out + b.err),
+           f"wrong reason for an all-zero brick hash\n{b.out}{b.err}")
+    print("ok leading-zero-hash-is-a-brick (accepted with a bind, both "
+          "hashes; a bind with no brick refused, and the all-zero hash "
+          "refused at the baker for saying it is a brick)")
 
 
 def test_brick_needs_newns():
@@ -3762,6 +3963,8 @@ def main():
         test_kind_required, test_kind_exit0, test_seccomp_kills,
         test_brick_is_a_root, test_brick_image_is_sealed,
         test_many_brick_houses_all_start, test_brick_needs_newns,
+        test_leading_zero_hash_is_a_brick,
+        test_brick_hash_revalidated_at_the_supervisor,
         test_path_traversal_refused, test_dupname_refused,
         test_blob_size_ceiling,
         test_checker_rejects_crafted_fields,

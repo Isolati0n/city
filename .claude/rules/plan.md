@@ -40,19 +40,30 @@ The boundary that does matter here is not between files, it is **trust**:
   its NUL, and every byte of it is verified zero, for the same reason
   `_pad` is: an unvalidated field cannot be given meaning later, because an
   old blob carrying garbage would be accepted by a new checker that reads
-  it. `name` and `exec_path` are the fields this is about.
+  it. Every field that goes through `name_ok` or `path_ok_len` — do not
+  enumerate them here, read the calls; the enumeration written on this line
+  omitted bind paths within a day of being written.
 
-  **`brick` is NOT one of them, since phase 3.** It is a 32-byte sha256,
-  every bit significant, with no tail and no terminator — a nonzero byte
-  after the first does not mean "blank with garbage", it means a different
-  hash. The rule was lifted off it because its subject went, and
-  `HISTORY.md` §51 says so at length; what replaced it is sharper and is
-  the thing to preserve: **"no brick" is ALL-ZERO, so the checker must scan
-  every byte.** Reading `brick[0]` alone silently accepts one hash in 256
-  as "no brick" and starts a house on the machine root that the plan says
-  is in a brick. `nwcheck.c` ORs the whole field; the `hash-tail-only` case
-  in `test_checker_rejects_crafted_fields` sets only byte 31, and the
-  caller proof scans all 32.
+  **`brick` is NOT one of them, since phase 3.** It is a raw sha256, every
+  bit significant, with no tail and no terminator — a nonzero byte after
+  the first does not mean "blank with garbage", it means a different hash.
+  The rule was lifted off it because its subject went, and `HISTORY.md` §51
+  says so at length.
+
+  **What replaced it is sharper: "no brick" is ALL-ZERO, so every reader of
+  the field must scan all of it.** Reading `brick[0]` alone silently takes
+  one hash in 256 for "no brick". There is exactly one legal way to ask —
+  `nw_unit_has_brick()` in `blob.h`, beside the field — and no site may
+  open-code it. That is not style: phase 3 converted the unit loop in
+  `nwcheck.c` and left the BIND loop reading `brick[0]`, and the CBMC
+  caller proof too, so one plan in 256 was refused as `bind unit index` and
+  would not boot until the brick's *contents* changed. Three reviewers
+  found it independently. `test_leading_zero_hash_is_a_brick` and the
+  `hash-tail-only` case in `test_checker_rejects_crafted_fields` pin both
+  ends of the field. *(This paragraph said "`nwcheck.c` ORs the whole
+  field" while one of its two sites did not — a present-tense rule stating
+  as done the thing that was half-done, in the file the hook hands the next
+  agent to edit that file.)*
 - **Prefer rejecting at bake time — but any rule the runtime relies on must
   be in `nwcheck.c` too.** The baker is not in the TCB and a blob can
   arrive from anywhere. The cross-field rules — a brick forces

@@ -93,13 +93,19 @@ static int path_ok_len(const char *s, int max)
      * filesystem this process does not control, and nw-sup hands these
      * strings straight to mount(2) and open(2) -- so a traversal here is a
      * house rooted outside its brick, reported as success. Checked at the
-     * one site every path in a plan passes through: exec_path, brick and
-     * every bind.
+     * one site every path in a plan passes through: exec_path and every
+     * bind. NOT the brick -- phase 3 made that 32 raw bytes of hash, which
+     * does not reach this function at all.
      *
-     * This closes traversal and does NOT close symlinks: a brick whose name
-     * resolves through a link escapes just as cleanly, and both mount and
-     * pivot_root follow links. It is a guard, not the fix. The fix is to
-     * stop carrying free-form paths -- docs/options/07. */
+     * This closes traversal and does NOT close symlinks: an exec_path or a
+     * bind whose name resolves through a link escapes just as cleanly, and
+     * both mount and open follow links. It is a guard, not the fix. The fix
+     * is to stop carrying free-form paths -- docs/options/07, which the
+     * brick has now done and these two have not.
+     *
+     * (Both paragraphs named the brick until 2026-09-12, in the function
+     * whose one-width-instead-of-two proof run is a consequence of the
+     * brick leaving. `claims`.) */
     for (int i = 0; i < n; i++) {
         if (s[i] != '/') continue;
         if (s[i + 1] == '.' && s[i + 2] == '.'
@@ -224,10 +230,14 @@ int nw_check(const void *blob, uint32_t len)
         if (!path_ok(u[i].exec_path)) return NW_E_PATH;
         if (u[i].kind != NW_KIND_ONESHOT && u[i].kind != NW_KIND_LONGRUN)
             return NW_E_KIND;
-        /* brick is optional; when present it must be a well-formed absolute
-         * path, and it forces NEWNS -- a house cannot pivot into its own root
-         * without a private mount namespace, and nw-sup must not quietly
-         * supply the lid the plan failed to declare. */
+        /* brick is optional; when present it forces NEWNS -- a house cannot
+         * pivot into its own root without a private mount namespace, and
+         * nw-sup must not quietly supply the lid the plan failed to
+         * declare. (This said "it must be a well-formed absolute path"
+         * until 2026-09-12, sitting directly above the code phase 3
+         * replaced: there is no path and no well-formedness check. The
+         * comment survived the edit to the lines beneath it, which is this
+         * project's characteristic failure in its smallest form. `claims`.) */
         /* Landlock grants read and execute beneath the house's root. That is
          * a restriction only when the root is a brick; on the machine root it
          * confines nothing, which is a lid that decides nothing while
@@ -236,9 +246,7 @@ int nw_check(const void *blob, uint32_t len)
          * hash is not NUL-terminated, so brick[0] alone means nothing.
          * Compared without branching on content: any nonzero byte is a
          * brick. */
-        int has_brick = 0;
-        for (int k = 0; k < NW_BRICK_HASH; k++)
-            has_brick |= u[i].brick[k];
+        int has_brick = nw_unit_has_brick(&u[i]);
         if ((u[i].lids & NW_LID_LANDLOCK) && !has_brick)
             return NW_E_LLBRICK;
         if (has_brick && !(u[i].lids & NW_LID_NEWNS))
@@ -265,8 +273,15 @@ int nw_check(const void *blob, uint32_t len)
     for (uint32_t i = 0; i < h->n_binds; i++) {
         if (b[i].unit >= h->n_units) return NW_E_BINDIDX;
         if (!path_ok(b[i].path)) return NW_E_BINDPATH;
-        /* A bind only means anything for a house that has its own root. */
-        if (!u[b[i].unit].brick[0]) return NW_E_BINDIDX;
+        /* A bind only means anything for a house that has its own root.
+         * THROUGH THE SHARED PREDICATE, because this line read
+         * `!u[...].brick[0]` until 2026-09-12 and the unit loop above did
+         * not: phase 3 converted one of the two sites in this function.
+         * Every image whose sha256 began with a zero byte -- one in 256 --
+         * then had its bind refused as NW_E_BINDIDX, a message naming the
+         * bind table for a plan whose bind table was correct, and the
+         * machine would not boot until the brick's CONTENTS changed. */
+        if (!nw_unit_has_brick(&u[b[i].unit])) return NW_E_BINDIDX;
     }
 
     /* The runtime fd-budget check was retired on 2026-09-10. With edges gone

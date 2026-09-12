@@ -145,9 +145,7 @@ int main(void)
              * its NUL and a hash has none, so the input class the check
              * existed for is gone. Its subject, not the check, is what
              * disappeared. */
-            int has_brick = 0;
-            for (int i = 0; i < NW_BRICK_HASH; i++)
-                has_brick |= u[k].brick[i];
+            int has_brick = nw_unit_has_brick(&u[k]);
             __CPROVER_assert(!has_brick || (u[k].lids & NW_LID_NEWNS),
                              "accepted: a brick implies the NEWNS lid");
             __CPROVER_assert(!(u[k].lids & NW_LID_LANDLOCK) || has_brick,
@@ -175,7 +173,26 @@ int main(void)
 #endif
             __CPROVER_assert(bd[k].unit < PROOF_UNITS,
                              "accepted: bind names a unit that exists");
-            __CPROVER_assert(u[bd[k].unit].brick[0] != 0,
+            /* Through the shared predicate. This read `brick[0] != 0`
+             * until 2026-09-12 and PINNED the matching defect in
+             * nwcheck.c's bind loop: fixing the checker turned this proof
+             * red, so the fix looked wrong. `tcb-review` measured that.
+             *
+             * AND FIXING THIS LINE ALONE WOULD NOT HAVE CAUGHT IT, which
+             * is the larger finding and is structural. Every assertion in
+             * this harness sits inside `if (r == NW_OK)`, so it can only
+             * express "accepted IMPLIES P". The bind-loop defect made
+             * nw_check over-REJECT, and no acceptance postcondition can be
+             * violated by a rejection. `claims` ran it: with this line
+             * corrected and nwcheck.c left broken, the proof still PASSES.
+             *
+             * So this file cannot see any "refuses a plan it should
+             * accept" defect at all. PROOF_VACUITY shows that SOME blob is
+             * accepted; nothing asserts that a PARTICULAR well-formed blob
+             * is. Closing that needs a completeness direction -- construct
+             * a legal blob and assert NW_OK -- and it is unbuilt.
+             * proofs/README.md. */
+            __CPROVER_assert(nw_unit_has_brick(&u[bd[k].unit]),
                              "accepted: a bind implies the unit has a brick");
         }
 #endif

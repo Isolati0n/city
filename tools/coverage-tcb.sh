@@ -36,11 +36,17 @@ set -eu
 #
 # READ THE NUMBER HONESTLY. This is LINE coverage, and a line that is both
 # a condition and its consequence counts as covered when the condition runs
-# -- `if (u[i].brick[k] != 0) return NW_E_BRICK;` is marked executed by
-# every unit with a blank brick, with the return never taken. So 99% does
-# not mean every rejection path has fired. tcb-review deleted that whole
-# check and the suite, this floor AND the CBMC caller proof all stayed
-# green. The uncovered LIST is still what finds things; the percentage only
+# -- `if (u[i]._pad != 0) return NW_E_RSV;` is marked executed by every
+# unit with a clean spare byte, with the return never taken. So 99% does
+# not mean every rejection path has fired. The worked example used to be
+# the brick path check; phase 3 deleted that line, and tcb-review had
+# already shown that removing it left the suite, this floor AND the CBMC
+# caller proof all green.
+#
+# 2026-09-12 sharpens it: nwcheck.c's bind loop tested `brick[0]` instead
+# of scanning the hash, refusing one legal plan in 256 -- a fully covered
+# line, at 99%, with a defect in it that three reviewers found by reading
+# and no coverage number could have. The uncovered LIST is still what finds things; the percentage only
 # stops it sliding. A branch-coverage pass (gcov -b) would say more and has
 # not been done.
 FLOOR=${1:-99}

@@ -391,11 +391,30 @@ one place, and make not-asking impossible rather than remembered.
 
 ## A note for reviewers working read-only
 
-`make STAGE=<path> test` needs a **short** stage path: `tests/run.py`
-caps `NW_STAGE` at the slack left by `NW_BRICK_LEN`, and a session
-scratchpad path is far longer. Pick something short under `/tmp`, and
-pick it distinctly — two agents sharing `/tmp/nwc` will silently fight
-over one stage. `tcb-review` hit this and it cost a round trip.
+`tests/run.py` refuses an over-long `NW_STAGE` at startup. The bound comes
+from `exec_path[NW_PATH_LEN]`, which the suite fills with
+`{STAGE}/nw/bin/<fixture>`; a session scratchpad path can exceed it. Do not
+copy the number out of here — the refusal prints it, and two written-down
+values have been wrong already, each in the generous direction (it was the
+slack left in `NW_BRICK_LEN`, a constant phase 3 deleted, and the fallback
+that replaced it was a literal shorter than the longest fixture name).
+Pick something short under `/tmp`, and pick it **distinctly** — two agents
+sharing `/tmp/nwc` will silently fight over one stage. `tcb-review` hit
+that and it cost a round trip.
+
+**And a distinct stage no longer isolates the BRICK tests.** Phase 3 has
+`nw-sup` compose an absolute `NW_BRICK_DIR` path, so `make_brick` writes
+its image to the machine root rather than into the stage — and the filename
+is the sha256 of the tree's *contents*, so two runs of the same tree target
+the identical file. `make_brick` does `rm -f` then `mkfs.erofs`; a
+concurrent run opening that path inside the window gets `ENOENT` and the
+house dies at `open brick image`, which reads as a code defect and is not
+one. There is no fix here to apply — the absolute path is the point of
+phase 3 — so it is written down instead. If you are running a suite beside
+another agent's, expect it, and do not chase it as a regression.
+
+The images are also never cleaned: `make stage` only removes `$(STAGE)`.
+They accumulate under `NW_BRICK_DIR` on the machine. `fd-auditor`.
 
 ## Definition of done
 

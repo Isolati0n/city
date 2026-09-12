@@ -510,9 +510,14 @@ It does not, so concurrent brick houses collided and all but one got `EBUSY`.
 The restart budget then did its job: the loser restarted and succeeded. Two
 houses produced one failure on *every* run of the suite and the suite printed
 `ok`, because the test asserted the end state and the end state was correct.
-At eight houses the budget ran out and houses vanished; at `NW_MAX_UNITS`,
-6 to 15 of 64 ever attached — and the city still printed
-`closed houses_reaped=64 orphans=0`.
+At eight houses the budget ran out and houses vanished; at `NW_MAX_UNITS`
+most never attached — and the city still printed its close line saying
+every house was reaped and nothing was orphaned.
+
+*No figures, deliberately. The ones that were here did not reproduce: a
+race measured under one load is not a measurement, and `claims` re-ran the
+eight-house control and got a different spread from the one the correction
+had put here. `HISTORY.md` §50.*
 
 Nothing lied. The budget is a hard total and behaved like one; the test
 asserted what it said it asserted. The defect lived in the gap between them.
@@ -525,12 +530,13 @@ merely that every house ran. The second-order cost is the reason it matters:
 a budget spent on a transient race is a hard total a longrun house no longer
 has for a real crash.
 
-Two corollaries, both earned the expensive way:
+Corollaries, earned the expensive way:
 
 - **Put the test at the scale where the defect is visible, not the smallest
   scale that reproduces the mechanism.** Two houses collide, but the budget
-  hides it; eight is where it shows. A test at two would have gone green
-  against the broken tree. Second time this has paid.
+  hides it; the test is pinned where it shows instead — read the number off
+  `test_many_brick_houses_all_start`, not off this line. A test at two would
+  have gone green against the broken tree.
 - **Refuse a proposed check that cannot fail for the reason it names.** A
   reviewer suggested an fd census would catch a dropped `O_CLOEXEC`. Both
   controls were run: dropping `O_CLOEXEC` passes, dropping the `close()`
