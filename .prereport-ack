@@ -83,3 +83,5 @@ unpaired-absence	CLAUDE.md	invariant 6; `claims` grepped and the string is not i
 unpaired-absence	HISTORY.md	`make prereport` does not catch it — `hit` is not in its `COUNTED`
 # false positive: a synthetic probe string quoted as command output, not a claim
 prose-count	HISTORY.md	is_comment("- three files, see https://x/y"): True
+# HISTORY.md is exempt as a record, and the heading names a closed dated episode
+prose-count	HISTORY.md	## 64. Closing the prose work: four lines, and why stopping is a finding (2026-09-12)

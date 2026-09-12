@@ -6031,3 +6031,54 @@ one to act on:
    shorter, the reasons moved here, and the self-commentary cut. A
    brief that argues with itself gives the next reviewer more surface
    and the next agent less signal.
+
+## 64. Closing the prose work: four lines, and why stopping is a finding (2026-09-12)
+
+The operator verified `PREREPORT_BASE` takes a range at `Makefile:183`
+and the line counts behind §63's blindness measurement (971 non-blank
+in `CLAUDE.md`, 111 beginning with a list marker — so the miss really
+is wrapped prose rather than bullet syntax), and closed the prose work.
+
+Four lines went into `CLAUDE.md` and nothing else. Each is deliberately
+one line with its reasoning here rather than beside it, because
+elaborating in place is what the previous round did wrong.
+
+- **Naming a failure mode in a correction does not inoculate the
+  correction against it**, because the author writing the name is in
+  exactly the state the name describes. This is the weakest-rule
+  pattern with the rule and its violation in the *same sentence*
+  rather than the same diff — the tightest form it has taken. Written
+  without an ordinal, per §63.
+- **A number saying how many instances of something exist is a claim
+  about how hard someone looked, not about the tree.** The only honest
+  forms are a named list or nothing. This generalises past counts: it
+  is why `CLAUDE.md` gives no total for the ordinal series, and the
+  reason is not that the number would go stale but that it was never
+  a fact about the repository in the first place.
+- **A prescription is a mechanism too.** The sweep command written
+  into a rule had never been run and could not find the heading the
+  rule was derived from. Filed under the silence rule, where it
+  belongs: a check that cannot fire reads exactly like one that passes.
+- **An ordinal numbered from a series in a different document** — the
+  count-in-prose failure with an extra hop, and the one instance that
+  lives in a file `tools/rules-hook.sh` delivers.
+
+The heading exemption was also cut back to its working test — whether
+the thing counted can grow — with the disproved version's argument
+dropped rather than preserved beside it.
+
+### Why the loop stopped, stated precisely
+
+"Diminishing returns" undersells it, and the yield was not the reason:
+four rounds each found real defects and a fifth very likely would too.
+What changed is **where the findings lived**. Most of what round four
+found was inside explanatory parentheticals added to defend round
+three's sentences — the corrections were manufacturing their own
+surface.
+
+A process whose output is the input to the next round of itself
+converges only if each pass removes more than it adds. These had
+stopped doing that. **Deleting rather than explaining is the move that
+breaks the loop, and it is the finding rather than a concession to
+fatigue.** The rules are shorter than they were three rounds ago and
+say more.

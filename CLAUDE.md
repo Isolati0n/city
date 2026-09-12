@@ -720,7 +720,9 @@ written so a reader can tell which without checking:
 Two habits follow from this:
 
 - **Never put a count in a brief.** Not the number of checks, tests, difftest
-  inputs, or bugs. A count is a hostage to the next commit and has been wrong
+  inputs, or bugs. **A number saying how many instances of something exist
+  is a claim about how hard someone looked, not about the tree** — the only
+  honest forms are a named list or nothing. A count is a hostage to the next commit and has been wrong
   three separate times in one day. Point at the code or quote the suite's own
   output. A bug *identifier* (bug 5, bug 13) is a name, not a count, and is
   fine. The one place a count belongs is inside a test assertion, where being
@@ -744,7 +746,8 @@ Two habits follow from this:
   without re-reading everything it counts — which is the work nobody
   does. `HISTORY.md` runs several such series and they have drifted;
   `HISTORY.md` §62 and §63 hold the survey, including one that lives in
-  a rules file the hook delivers. **Name the instance; do not number
+  a rules file the hook delivers while its series is numbered in a
+  different document — the same failure with an extra hop. **Name the instance; do not number
   it**, and when you go looking for a series, grep for the *pattern
   name* in every spelling it has been written in — two successive
   surveys here found more each time by widening the spelling, which is
@@ -757,17 +760,12 @@ Two habits follow from this:
   member is adjacent to nothing; and a correction applied to the top of
   a section and not its foot.
 
-  **Do not put a number in a heading that can change.** A date cannot.
-  Neither can a number naming a split that already happened —
-  `plan.md`'s "Why this is one territory and not three" and
-  `runtime.md`'s "and not two" enumerate a closed history, and they
-  stay. (The first version of this exemption said they "count nothing
-  beneath them", which the line under each heading disproves. The test
-  is whether the thing counted can grow.) `HISTORY.md` is exempt
-  throughout as a record. The sweep must be case-insensitive and must
-  spell the words out — the first version written here used a literal
-  `…` and no `-i`, and so could not find the heading it was derived
-  from:
+  **Do not put a number in a heading that can change.** The test is
+  whether the thing counted can grow: a date cannot, nor can a number
+  naming a split that already happened, so `plan.md`'s "Why this is one
+  territory and not three" and `runtime.md`'s "and not two" stay.
+  `HISTORY.md` is exempt throughout as a record. The sweep must be
+  case-insensitive and spell the words out:
 
       grep -niE "^#{1,6} .*\b(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|[0-9]+)\b" CLAUDE.md .claude/rules/*.md
 
@@ -1052,6 +1050,10 @@ shape this file names as the durable kind.)
   sentence reached for the more dramatic claim and lost the durable
   one.)*
 
+  **Naming a failure mode in a correction does not inoculate the
+  correction against it**, because the author writing the name is in
+  exactly the state the name describes. `HISTORY.md` §63.
+
   The defence is mechanical — run the new rule's own check against the
   change that introduces it, the way `make prereport` is run on its own
   diff, and dispatch the reviewer *before* the push rather than after.
@@ -1071,6 +1073,11 @@ shape this file names as the durable kind.)
   for), a probe that certifies a name instead of a behaviour (the TLC
   probes at `MaxFds = 16`), a proof kept where it cannot be re-run, a
   control that passes. **Every one of those reads as working.**
+
+  **A prescription is a mechanism too, and one shipped here had never
+  been run**: a sweep command written into a rule, with a literal `…`
+  and no `-i`, which could not find the heading the rule was derived
+  from. `HISTORY.md` §63.
 
   So the question to ask of any mechanism is not "does it pass?" but
   **"when did it last fire, and what made it fire?"** If the answer is
