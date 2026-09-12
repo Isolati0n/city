@@ -78,8 +78,14 @@ echo '```'
 echo
 echo "## Diff"
 echo '```diff'
+# ONE command, not two. `git diff <commit>` diffs the WORKING TREE against
+# that commit, so it already carries the uncommitted work; a bare `git diff`
+# beside it is always a subset and, when anything is staged, contributes
+# nothing at all -- measured on a scratch repo with a committed, a staged
+# and an untracked change. With BASE at HEAD, which is every review of
+# uncommitted work, the two were byte-identical and this script doubled the
+# payload it exists to keep small. `claims`.
 git diff "$BASE"
-git diff
 echo '```'
 echo
 echo "## Environment the suite reports"

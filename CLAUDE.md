@@ -939,6 +939,36 @@ shape this file names as the durable kind.)
   `O_CLOEXEC` is dropped and stays green if the `close()` calls are dropped;
   only removing both fails it. Ask what single change would still leave it
   passing.
+- **A TEST THAT DESTROYS ITS OWN EVIDENCE**, and it has two failure
+  modes that need telling apart. The cause is one thing — a step
+  earlier in the test wrote, removed or restored what a later assertion
+  reads — and what happens next splits.
+
+  **Blinded: the assertion cannot see, and reads as one that passed.**
+  `_stage()` was given a comparison of the candidate slot's bytes so no
+  refusal could write it unnoticed, and the symlink case had already
+  `rmtree`'d that slot and recreated it empty, so the captured "before"
+  was `None` at every later call and the comparison silently did
+  nothing. The ill-formed-`current` case restored the file before
+  asserting on it, which made that half of `_live_intact` vacuous.
+
+  **Corrupted: the assertion reads the wrong thing and accuses correct
+  code.** The fixture probing a writable layer wrote its byte over
+  `/id`, which three of `test_brick_is_a_root`'s assertions read,
+  turning `id=brick-two` into `id=xrick-two`. That one goes red, and it
+  blames the brick.
+
+  **The diagnostic differs with the mode, and only the first is the
+  hard one.** A corrupted assertion announces itself — the ordinary
+  suite run is enough, which is how the `/id` probe was found. A
+  blinded one is reachable only by running a control and then asking
+  *why the answer was not what the mutation implied*: when a mutation
+  you expected to bite does not, the first suspect is not the assertion
+  but what ran before it. `claims` separated these; the first telling
+  of this bullet gave both the blinded one's diagnostic, which would
+  have sent the next reader hunting for a mutation to find a defect the
+  suite already prints.
+
 - **A claim with parts is covered when every part is, and reads as
   covered when one is.** The three-noun claim is `nwsup.c`'s grant
   comment and `.claude/rules/runtime.md`'s restatement of it — "no
@@ -1023,12 +1053,22 @@ shape this file names as the durable kind.)
   a rule violation's message" and read the source tree while its
   neighbour reads the stage, reproducing that exact message one level
   down; the fixture probing whether a layer is writable wrote its byte
-  over `/id`, the file every other assertion in that test reads; the
+  over `/id`, which three of that test's assertions read; the
   commit that narrowed the Landlock claim left `lid_landlock()`'s own
   docstring asserting the opposite; and the commit that added
   `harness.md`'s "reset once per run" section added bind-side probes to a
   directory nothing resets, so a second run of the documented workflow
-  reports `EEXIST` as a lid regression.
+  reports `EEXIST` as a lid regression; and — in a *process step*
+  rather than in prose or code, which none of the others is —
+  `git checkout -- .` run to tidy up after a control, in a tree holding
+  uncommitted work, during the round that added the cleanup rules to
+  `harness.md` and `runtime.md` (`HISTORY.md` §66, which files it as
+  the destructive-cleanup class and applies the weakest-rule label to a
+  different item in the same round). Nothing was lost, because the
+  commit was intact; that is luck, not the rule working. Note the fit
+  is by analogy: no rule about destructive cleanup was *introduced* by
+  that change, so this is the pattern's shape without its usual
+  mechanism.
 
   *(This paragraph said "three times now" and was a count in the file
   whose own rule forbids one. It is not corrected to a larger number —

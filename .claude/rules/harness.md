@@ -471,8 +471,12 @@ through the test suite. Two things generalise from it:
   doing something is a difference you will debug later as a code defect.
 - **A probe must not write where an assertion reads.** That one is
   `CLAUDE.md`'s "a rule is at its weakest in the change that introduces
-  it": the fixture that demonstrated a layer is writable did so over the
-  file every other assertion in the test reads.
+  it": the fixture that demonstrated a layer is writable did so over
+  `/id`, which three of that test's assertions read. It went red and
+  blamed the brick — the corrupted mode of `CLAUDE.md`'s
+  evidence-destroying bullet, not the blinded one, and the difference
+  is which instrument finds it. ("The file every other assertion in
+  the test reads" stood in three files; `claims` counted.)
 
 ## A note for reviewers working read-only
 
