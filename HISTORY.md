@@ -6419,3 +6419,122 @@ refusal as broken when the refusal was fine. The test removes and
 asserts-absent that id now, as it already did for the other two. The
 rule at its weakest in the assertion added last, in the round whose
 subject is exactly that.
+
+## 67. The fix answered its own question everywhere but one place (2026-09-12)
+
+`control` on §66. The guard-ordering fix was right and incomplete, and
+the way it was incomplete is the more useful finding.
+
+### The same defect, one refusal along
+
+§66 added `_live_intact()` after every refusal and said the lesson was
+to ask *would this assertion still hold if the refusal happened one
+line too late?* `control` mapped the stager invocations against the two
+helpers and found exactly one with neither: the missing-`nw-check`
+case. It is a write path — it bakes — so the same mutation worked
+again:
+
+```
+B/plan.blob before: df4cd781…
+stage-candidate: no nw-check at …/no-such-nw-check. Refusing to stage
+a candidate nothing validated -- pass --nw-check.
+rc=1
+B/plan.blob after : c56263c6…   (the unvalidated blob)
+```
+
+"Refusing to stage a candidate nothing validated", printed while the
+candidate was staged. **A rule applied by hand is applied where the
+author is looking**, which is why the map matters more than the rule:
+`control` enumerated the call sites and checked the helper against each
+rather than reading for the pattern.
+
+### "A refusal creates nothing" was pinned for one refusal only
+
+Moving the `nw-check` refusal below `stage_layers.stage()` left the
+suite silent while a failed validation created layer directories on the
+machine root. Invisible because the failed-validation city had **no
+layer at all** — the test could not observe layers being created on a
+refusal path. It has its own layer id now, asserted absent afterwards.
+
+### And a refusal did create something, in the honest tool
+
+`os.makedirs(work)` created the slot directory as a side effect of
+creating its parent, and the `finally` removed only the scratch. One
+typo in `--slot` on a run that then refused left `<slots>/ZZZ` behind
+permanently, after which the tool can never derive a candidate again —
+by its own ambiguity refusal. The tool creates the slot directory
+itself now and removes it on the way out when it made it and nothing
+landed in it; `os.rmdir` refusing a non-empty directory is the check
+rather than a second one.
+
+### The clash refusal read a sidecar this tool can make stale
+
+The check reads the live plan's `.layers`, and nothing pinned that
+sidecar against the blob beside it. The rename order — sidecars first,
+blob last — is argued in the tool as "invisible to a boot; visible only
+to this tool and the harness", and `control` pointed out that the
+second half is now load-bearing: **this tool is the harness.** It
+walked it through: SIGKILL in the window, switch to that slot, stage
+against it, and the clash check reads layer ids the running plan does
+not use and says nothing — verbatim the defect §66 says it closed.
+
+Closed by checking the live `.sha256` against the live blob before
+trusting the `.layers` beside it. Not by parsing the blob, which would
+be the third copy of the unit layout: the baker writes both sidecars
+together, so one of them matching is what says the set is current.
+
+### A string comparison and a symlink
+
+`target == live` is a string compare, and the comment said it was sound
+"only because no two spellings name one slot". A symlink is such a
+spelling, `pick_candidate`'s `os.path.isdir` follows it, and the tool
+*derived* the symlinked slot and replaced the running plan while
+printing "untouched". `os.path.samefile` closes it. The comment stating
+the precondition was there; nothing enforced it.
+
+### Two assertions that could not fail
+
+`--root` was asserted only by `rc == 0` and the two layer locations, so
+a mutation relocating the whole candidate slot under the prefix stayed
+green. And the ill-formed-`current` case **restored `current` before
+asserting**, which made that half of `_live_intact` vacuous on the one
+path where `current` is the thing under test — a mutant that rewrote
+`current` and then refused was green. Assert, then restore.
+
+### The leading dot claimed a mechanism it does not have
+
+The comment said the dot is what makes a scratch leftover unbootable.
+It is not: the scratch dir is a *grandchild* of `<slots>` and
+`slot_from_current` composes `<slots>/<name>`, so no `current` can name
+it whatever it is called — measured with a non-dotted leftover, which
+is equally unreachable that way and equally bootable through `--slot`.
+The dot's only real consumer is `_no_scratch`, which keys on it.
+Dropping the dot left the suite green while blinding the detector,
+which is the `mechanism-claim` shape inside a comment written to be
+careful about exactly that.
+
+### Left unenforced, deliberately
+
+A candidate may reuse **its own slot's previous** layer, with its data.
+The §65 hazard is keyed to the *live* plan, and refusing this would
+break re-staging the same plan twice, which the suite does. Recorded
+because `control` is right that the hazard is really "the layer already
+has content", and in an A/B cycle the non-live slot's old layer always
+does.
+
+And a style change from `raise SystemExit` to `print` plus `os._exit`
+would skip the `finally` and leave an unvalidated plan in the slot.
+Nothing in the tree does that today; noted because the `finally` is
+what makes the refusal paths clean and nothing says so.
+
+### Concurrency, and a message that accuses the tool
+
+The test reset fixed ids on the machine root, so a distinct `NW_STAGE`
+did not isolate it. `control` forced the interleaving and got `FAIL:
+the stager did not create l-ctl-race-stage/upper` — a correct tool, a
+correct test, and a failure blaming the tool. Removal-and-assert-absent
+does not fix that class; the ids are keyed to the pid now and removed
+at the end, which does.
+
+One ack was overstated: `_no_scratch` follows some refusals, not every
+one, and the ack said every. Corrected to name the paths.

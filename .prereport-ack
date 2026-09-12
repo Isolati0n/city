@@ -98,8 +98,10 @@ unpaired-absence	tests/run.py	expect("house=candone" not in out,
 mechanism-claim	tools/stage-candidate.py	# BEFORE THE RENAMES, and that order matters as much as the one
 # a quotation of the retracted text, in a record, which is exempt
 prose-count	HISTORY.md	*(This said "exits in exactly three places". There are five `_exit`
-# paired at every call site: after the success it follows rc==0 and "slot B",
-# after each refusal it follows that refusal's reason assertion
+# paired where it is called: after the success it follows rc==0 and "slot B";
+# after the baker, failed-validation and missing-nw-check refusals it follows
+# that refusal's reason assertion. NOT after every refusal -- control found
+# that overstatement, and found the one path that had no helper at all
 unpaired-absence	tests/run.py	expect(not left, f"{why}: scratch left in the candidate slot: {left}")
 # paired by expect("house=liveone" in out) above, and control measured that
 # the tag IS present when the candidate boots, so it can fail for its reason
@@ -109,3 +111,15 @@ unpaired-absence	tests/run.py	expect("[candone]" not in out,
 unpaired-absence	tests/run.py	expect(not os.path.exists(f"{_layer_dir()}/l-cand-live"),
 # paired by the positive: the same id IS created under the --root prefix
 unpaired-absence	tests/run.py	expect(not os.path.exists(f"{_layer_dir()}/{rlid}"),
+# this IS the retraction: the sentence says the dot is NOT load-bearing for
+# bootability, and control measured a non-dotted leftover behaving identically
+mechanism-claim	tools/stage-candidate.py	# dot load-bearing for bootability, and dropping it left the suite
+# HISTORY.md is exempt as a record; both head closed, dated sections
+prose-count	HISTORY.md	## 67. The fix answered its own question everywhere but one place (2026-09-12)
+prose-count	HISTORY.md	### Two assertions that could not fail
+# preconditions for the assertions that follow them: absent now, so a later
+# statement about presence or absence means something
+unpaired-absence	tests/run.py	expect(not os.path.exists(f"{_layer_dir()}/{olid}"),
+unpaired-absence	tests/run.py	expect(not os.path.exists(f"{_layer_dir()}/{clash_lid}"),
+# paired by the positive two lines up: the candidate DID land in <slots>/B
+unpaired-absence	tests/run.py	expect(not os.path.exists(f"{pfx}{slots}"),

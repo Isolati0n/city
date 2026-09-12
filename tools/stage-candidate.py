@@ -41,6 +41,7 @@ this is not a second one.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import os
 import shutil
 import subprocess
@@ -165,7 +166,12 @@ def stage(slots, city, slot=None, root="", nw_check=None, quiet=False):
     # `slot_name_ok` and the nw-check gate are guards too, and the
     # alphabet is the guard UNDER this one -- `target == live` is a
     # string comparison, sound only because no two spellings name one
-    # slot.
+    # slot -- and a symlink IS another spelling. `control` pointed a
+    # slot at the live one, `pick_candidate` followed it through
+    # `os.path.isdir`, and the tool DERIVED it and replaced the running
+    # plan while printing "untouched". The string compare stays because
+    # it catches the common case before any path exists; `samefile`
+    # below catches the rest.
     if target == live:
         raise SystemExit(
             f"stage-candidate: {target!r} is the live slot. Saving is "
@@ -174,6 +180,23 @@ def stage(slots, city, slot=None, root="", nw_check=None, quiet=False):
             f"candidate and switch by writing {slots}/current yourself.")
 
     tdir = os.path.join(slots, target)
+    ldir = os.path.join(slots, live)
+    if os.path.exists(tdir) and os.path.samefile(tdir, ldir):
+        raise SystemExit(
+            f"stage-candidate: {target!r} and the live slot {live!r} are "
+            f"the same directory. A slot name is a spelling and two "
+            f"spellings can name one slot; this tool's guard is that it "
+            f"does not write the running plan.")
+
+    # WE create the slot directory, so a refusal can undo it. It used to
+    # appear as a side effect of `os.makedirs(work)` creating parents,
+    # and `control` showed the cost: one typo in `--slot` on a run that
+    # then refused left `<slots>/ZZZ` behind for good, and the tool can
+    # never derive a candidate again. "A refusal leaves the machine
+    # exactly as it was" was false for that path.
+    made_tdir = not os.path.isdir(tdir)
+    if made_tdir:
+        os.makedirs(tdir)
 
     # Bake into a scratch directory INSIDE the slot, because os.replace
     # is rename(2) and rename needs one filesystem. A temp dir elsewhere
@@ -183,12 +206,19 @@ def stage(slots, city, slot=None, root="", nw_check=None, quiet=False):
     # `claims` and `control` each ran it. The choice is right and the
     # hazard named for it was invented.)
     #
-    # THE LEADING DOT is what makes a leftover unbootable, not the fact
-    # that pid1.c opens only plan.blob: `slot_from_current` refuses any
-    # byte outside [A-Za-z0-9_-], so no `current` can name this
-    # directory. `--slot` names a directory directly and WILL boot a
-    # leftover, including one a SIGKILL left between the bake and the
-    # nw-check below -- a plan nothing validated. `control`.
+    # THE LEADING DOT DOES NOT MAKE THIS UNBOOTABLE and no longer
+    # claims to. `control` measured it: the scratch dir is a GRANDCHILD
+    # of <slots>, and `slot_from_current` composes <slots>/<name>, so no
+    # value of `current` can name it whatever it is called -- a
+    # non-dotted leftover is equally unreachable that way, and equally
+    # bootable through `--slot`, which names a directory directly.
+    # (Such a leftover needs a SIGKILL: the `finally` below removes it.
+    # A plan nothing validated, in a slot, is what that costs.)
+    #
+    # The dot's real consumer is the suite: `_no_scratch` keys on it.
+    # Said plainly because the first version of this comment called the
+    # dot load-bearing for bootability, and dropping it left the suite
+    # green while blinding the detector.
     work = os.path.join(tdir, f".staging-{os.getpid()}")
     shutil.rmtree(work, ignore_errors=True)
     os.makedirs(work)
@@ -241,13 +271,39 @@ def stage(slots, city, slot=None, root="", nw_check=None, quiet=False):
         # layer, that is a design decision and this is where it is made.
         want = {l.strip() for l in open(blob + ".layers") if l.strip()}
         live_side = os.path.join(slots, live, "plan.blob.layers")
+        # THE LIVE SIDECAR MUST DESCRIBE THE LIVE BLOB, and this tool is
+        # the reason it might not. The renames below put the sidecars in
+        # first and the blob last, which is invisible to a boot -- and
+        # NOT invisible here, because this check reads a sidecar. A
+        # SIGKILL in that window leaves new sidecars beside an old blob,
+        # and `control` walked it all the way through: switch to that
+        # slot, stage against it, and the clash check reads layer ids
+        # the running plan does not use and says nothing.
+        #
+        # Checked through `.sha256` rather than by parsing the blob,
+        # which would be the third copy of the unit layout. The baker
+        # writes both sidecars together, so one of them matching the
+        # blob is what says the set is current.
+        live_blob = os.path.join(slots, live, "plan.blob")
+        live_sha = live_blob + ".sha256"
         try:
+            want_sha = open(live_sha).read().strip()
+            got_sha = hashlib.sha256(open(live_blob, "rb").read()).hexdigest()
             live_ids = {l.strip() for l in open(live_side) if l.strip()}
         except OSError as e:
             raise SystemExit(
-                f"stage-candidate: cannot read {live_side} ({e}), so this "
-                f"tool cannot tell whether the candidate reuses a layer "
-                f"the running plan is using. Refusing.")
+                f"stage-candidate: cannot read the live plan's sidecars "
+                f"({e}), so this tool cannot tell whether the candidate "
+                f"reuses a layer the running plan is using. Refusing.")
+        if want_sha != got_sha:
+            raise SystemExit(
+                f"stage-candidate: {live_sha} does not describe "
+                f"{live_blob}, so the live plan's sidecars are stale -- "
+                f"an interrupted stage leaves exactly this. The layer "
+                f"list beside them cannot be trusted, and it is what "
+                f"says whether this candidate reuses a running layer. "
+                f"Refusing. Re-stage the live slot, or repair its "
+                f"sidecars from the plan that is actually there.")
         clash = sorted(want & live_ids)
         if clash:
             raise SystemExit(
@@ -281,6 +337,14 @@ def stage(slots, city, slot=None, root="", nw_check=None, quiet=False):
         os.replace(blob, os.path.join(tdir, "plan.blob"))
     finally:
         shutil.rmtree(work, ignore_errors=True)
+        # And the slot directory itself, if we made it and nothing
+        # landed in it. `os.rmdir` refuses a non-empty directory, which
+        # is the check rather than a second one.
+        if made_tdir:
+            try:
+                os.rmdir(tdir)
+            except OSError:
+                pass
 
     if not quiet:
         print(f"stage-candidate: slot {target} staged and validated "

@@ -3865,7 +3865,14 @@ def test_candidate_stager_never_touches_the_live_slot():
     # A layer id this test owns. Removed first so "the directories
     # exist" is paired with "they did not a moment ago" -- unpaired, it
     # is satisfied by a previous run having made them.
-    lid = "l-cand-stage"
+    # PID-KEYED, because fixed ids on the machine root are not
+    # isolated by a distinct NW_STAGE. `control` forced the
+    # interleaving and got `FAIL: the stager did not create
+    # l-cand-race-stage/upper` -- a correct tool, a correct test, and a
+    # message accusing the tool. Removal-and-assert-absent does not fix
+    # that; a unique id does.
+    tag = os.getpid()
+    lid = f"l-cs-{tag}"
     _sh.rmtree(f"{_layer_dir()}/{lid}", ignore_errors=True)
     expect(not os.path.exists(f"{_layer_dir()}/{lid}"),
            "the layer dir survived its own removal, so its later presence "
@@ -3939,10 +3946,16 @@ def test_candidate_stager_never_touches_the_live_slot():
     # unreadable one: pid1.c truncates such a file and boots a prefix
     # rather than refusing, so the tool is the only thing that says no.
     open(f"{slots}/current", "w").write("A" * 40 + "\n")
+    ill_before = open(f"{slots}/current", "rb").read()
     r = _stage()
-    open(f"{slots}/current", "wb").write(cur_before)
     expect(r.returncode != 0 and "truncates and boots a prefix" in (r.out + r.err),
            f"an ill-formed current was not refused\n{r.out}{r.err}")
+    # ASSERT BEFORE RESTORING. The restore used to run first, which
+    # made the `current` half of _live_intact vacuous on this path --
+    # a mutant that rewrote `current` and then refused stayed green.
+    expect(open(f"{slots}/current", "rb").read() == ill_before,
+           "the tool rewrote slots/current on the way to refusing it")
+    open(f"{slots}/current", "wb").write(cur_before)
     _live_intact("ill-formed current")
 
     bad_city = f"{WORK}/cand-bad.city"
@@ -3959,8 +3972,18 @@ def test_candidate_stager_never_touches_the_live_slot():
     # produces identical bytes and the comparison below could never
     # detect an overwrite. `control` measured that: new inode, same md5.
     other_city = f"{WORK}/cand-other.city"
+    # WITH A LAYER OF ITS OWN. Without one, no refusal path in this
+    # test could observe `stage_layers.stage()` running before a
+    # refusal: `control` moved the nw-check refusal below it and the
+    # suite stayed silent while a failed validation left layer
+    # directories on the machine root.
+    olid = f"l-cs-other-{tag}"
+    _sh.rmtree(f"{_layer_dir()}/{olid}", ignore_errors=True)
+    expect(not os.path.exists(f"{_layer_dir()}/{olid}"),
+           "the other-city layer survived removal")
     open(other_city, "w").write(
-        f"house otherone {BIN}/unit-probe kind=oneshot lids=seccomp\n")
+        f"house otherone {BIN}/unit-probe kind=oneshot "
+        f"lids=newns,seccomp brick={'12' * 32} layer={olid}\n")
     cand_before = open(f"{slots}/B/plan.blob", "rb").read()
     r = run(["python3", stager, "--slots", slots, "--city", other_city,
              "--nw-check", "/bin/false"])
@@ -3968,14 +3991,28 @@ def test_candidate_stager_never_touches_the_live_slot():
            f"an unvalidated candidate was staged\n{r.out}{r.err}")
     expect(open(f"{slots}/B/plan.blob", "rb").read() == cand_before,
            "a refused validation still overwrote the previous candidate")
+    expect(not os.path.exists(f"{_layer_dir()}/{olid}"),
+           "a refused validation created layer directories on the "
+           "machine root -- a refusal must leave nothing behind")
     _live_intact("failed validation")
     _no_scratch("failed validation")
 
-    r = run(["python3", stager, "--slots", slots, "--city", cand_city,
+    # THE ONE INVOCATION THAT HAD NEITHER HELPER, which is how the fix
+    # for the guard-ordering defect reproduced it one refusal along:
+    # `control` moved this block below the renames, kept its message,
+    # and the suite stayed green while the slot took the unvalidated
+    # blob. It is a write path -- it bakes -- so it gets the same
+    # treatment as every other.
+    cand_now = open(f"{slots}/B/plan.blob", "rb").read()
+    r = run(["python3", stager, "--slots", slots, "--city", other_city,
              "--nw-check", f"{WORK}/no-such-nw-check"])
     expect(r.returncode != 0 and "no nw-check at" in (r.out + r.err),
            f"a missing nw-check must be a named refusal, not a traceback"
            f"\n{r.out}{r.err}")
+    expect(open(f"{slots}/B/plan.blob", "rb").read() == cand_now,
+           "the missing-nw-check refusal came AFTER the write")
+    _live_intact("missing nw-check")
+    _no_scratch("missing nw-check")
 
     # A candidate may not reuse a layer the live plan is using.
     clash_city = f"{WORK}/cand-clash.city"
@@ -3986,21 +4023,22 @@ def test_candidate_stager_never_touches_the_live_slot():
     # the refusal as broken when the refusal is fine -- the durable
     # fixture state trap, in the assertion added last and not in the
     # two written first.
-    _sh.rmtree(f"{_layer_dir()}/l-cand-live", ignore_errors=True)
-    expect(not os.path.exists(f"{_layer_dir()}/l-cand-live"),
+    clash_lid = f"l-cs-live-{tag}"
+    _sh.rmtree(f"{_layer_dir()}/{clash_lid}", ignore_errors=True)
+    expect(not os.path.exists(f"{_layer_dir()}/{clash_lid}"),
            "the clash layer survived removal, so its later absence "
            "would prove nothing")
     open(clash_city, "w").write(
         f"house clashone {BIN}/unit-probe kind=oneshot "
-        f"lids=newns,seccomp brick={'cd' * 32} layer=l-cand-live\n")
-    open(f"{slots}/A/plan.blob.layers", "w").write("l-cand-live\n")
+        f"lids=newns,seccomp brick={'cd' * 32} layer={clash_lid}\n")
+    open(f"{slots}/A/plan.blob.layers", "w").write(clash_lid + "\n")
     r = _stage(city=clash_city)
     expect(r.returncode != 0
            and "names layer(s) the live plan is using" in (r.out + r.err),
            f"a candidate reusing the running plan's layer was staged; the "
            f"tool would print 'untouched' while wiring it to a running "
            f"house's writable area\n{r.out}{r.err}")
-    expect(not os.path.exists(f"{_layer_dir()}/l-cand-live"),
+    expect(not os.path.exists(f"{_layer_dir()}/{clash_lid}"),
            "the clash refusal created the layer before refusing")
     os.unlink(f"{slots}/A/plan.blob.layers")
     r = _stage()
@@ -4022,7 +4060,7 @@ def test_candidate_stager_never_touches_the_live_slot():
 
     # --root, which nothing exercised: the layers of a staged tree whose
     # root is not the machine root must land under the prefix.
-    rlid = "l-cand-rooted"
+    rlid = f"l-cs-root-{tag}"
     pfx = f"{WORK}/cand-root"
     _sh.rmtree(pfx, ignore_errors=True)
     _sh.rmtree(f"{_layer_dir()}/{rlid}", ignore_errors=True)
@@ -4034,9 +4072,44 @@ def test_candidate_stager_never_touches_the_live_slot():
     expect(r.returncode == 0, f"--root staging failed\n{r.out}{r.err}")
     expect(os.path.isdir(f"{pfx}{_layer_dir()}/{rlid}/upper"),
            f"--root did not put the layer under the prefix")
+    expect(os.path.exists(f"{slots}/B/plan.blob"),
+           f"--root moved the candidate slot itself: --root prefixes "
+           f"the LAYER directory and nothing else")
+    expect(not os.path.exists(f"{pfx}{slots}"),
+           f"--root prefixed the slot path as well as the layer path")
     expect(not os.path.exists(f"{_layer_dir()}/{rlid}"),
            f"--root still created the layer on the machine root")
     _live_intact("--root stage")
+
+    # A slot that is the live one under another spelling.
+    os.rmdir(f"{slots}/B") if not os.listdir(f"{slots}/B") else None
+    if os.path.isdir(f"{slots}/B"):
+        _sh.rmtree(f"{slots}/B")
+    os.symlink("A", f"{slots}/B")
+    r = _stage()
+    os.unlink(f"{slots}/B")
+    os.makedirs(f"{slots}/B")
+    expect(r.returncode != 0 and "same directory" in (r.out + r.err),
+           f"a slot symlinked to the live one was staged over: "
+           f"`target == live` is a string compare and a symlink is "
+           f"another spelling\n{r.out}{r.err}")
+    _live_intact("symlinked slot")
+
+    # A live plan whose sidecars do not describe it -- what an
+    # interrupted stage leaves, and what the clash check reads.
+    good_sha = open(f"{slots}/A/plan.blob.sha256").read()
+    open(f"{slots}/A/plan.blob.sha256", "w").write("deadbeef\n")
+    r = _stage()
+    open(f"{slots}/A/plan.blob.sha256", "w").write(good_sha)
+    expect(r.returncode != 0 and "does not describe" in (r.out + r.err),
+           f"a stale live sidecar was trusted; it is what the layer "
+           f"clash check reads, and this tool's own rename window is "
+           f"how it goes stale\n{r.out}{r.err}")
+    _live_intact("stale live sidecar")
+
+    for gone in (lid, clash_lid, olid, rlid):
+        _sh.rmtree(f"{_layer_dir()}/{gone}", ignore_errors=True)
+    _sh.rmtree(pfx, ignore_errors=True)
 
     print(f"ok candidate-stager (live plan and current re-read after every "
           f"refusal, which is what pins the guard's ORDER; derived slot B "
@@ -4044,7 +4117,9 @@ def test_candidate_stager_never_touches_the_live_slot():
           f"--slots ran the live house and no [candone] tag; live-slot, "
           f"three bad names, ill-formed current, baker, failed validation, "
           f"missing nw-check, layer clash and missing live sidecar each "
-          f"refused by reason; --root and the .sha256 sidecar pinned)")
+          f"refused by reason; a symlinked slot and a stale live "
+          f"sidecar refused too; --root and the .sha256 sidecar pinned; "
+          f"ids keyed to this pid and removed at the end)")
 
 
 def test_specs_are_checked():
