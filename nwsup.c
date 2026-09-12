@@ -108,33 +108,83 @@ static void lid_brick(const char *brick, char *const *binds, int nbinds)
     int img = open(brick, O_RDONLY | O_CLOEXEC);
     if (img < 0) die("open brick image");
 
-    /* LOOP_CTL_GET_FREE allocates past max_loop -- that parameter is how
-     * many devices exist at module load, not a ceiling. Measured 2026-09-12:
-     * 4096 attached on a kernel reporting 8, no ceiling found. So there is
-     * no derived limit here and nothing in blob.h for it; see docs/plans/01
-     * for the trigger that would change that. */
-    int ctl = open("/dev/loop-control", O_RDWR | O_CLOEXEC);
-    if (ctl < 0) die("open loop-control");
-    int idx = ioctl(ctl, LOOP_CTL_GET_FREE);
-    close(ctl);
-    if (idx < 0) die("loop get free");
-
+    /* LOOP_CTL_GET_FREE REPORTS A FREE INDEX; IT DOES NOT RESERVE ONE.
+     * Between the GET_FREE and the CONFIGURE below, every other house doing
+     * the same thing gets the SAME index, and all but one get EBUSY. Every
+     * brick house runs lid_brick concurrently -- nw-spawn waits only on the
+     * double-fork intermediary, not on the house reaching here -- so this is
+     * the common case, not a rare interleaving.
+     *
+     * Measured 2026-09-12, and it was already firing in the committed suite:
+     * two brick houses produced one `FAIL loop configure errno=16` on every
+     * run, hidden because the default budget absorbed the restart. At 8
+     * houses only 5-6 of 8 ever ran; at 64 -- NW_MAX_UNITS -- 6 to 15 of 64
+     * attached on the first attempt. The city still printed
+     * `closed houses_reaped=N orphans=0`, so half a city could be missing
+     * and the close line looked healthy. Found by `tcb-review` and
+     * `fd-auditor` independently.
+     *
+     * So: RETRY, re-doing GET_FREE each time, because the index is stale the
+     * moment it is returned. This is a bounded check rather than a
+     * design-out, and it is the honest word for it -- but the two
+     * structural-looking alternatives are both worse and are refused here so
+     * they are not rediscovered:
+     *
+     *   - Deriving the index from the unit's table index is literally
+     *     BASE + i on a device number. That is bugs 9 and 13 in a third
+     *     costume, and it collides with loop0..loopN that already exist and
+     *     with any other tenant of the machine.
+     *   - Serialising the attach in nw-spawn breaks AUTOCLEAR's anchor:
+     *     whoever attaches must hold the fd until the house mounts, and
+     *     nw-spawn exits at boot. Passing that fd down is a fourth
+     *     descriptor and breaks invariant 5.
+     *
+     * THE BOUND IS DERIVED, NOT GUESSED, which matters because a guessed
+     * constant is what the Liveness refusal is about. At most NW_MAX_UNITS-1
+     * other houses can be contending for a device, so NW_MAX_UNITS attempts
+     * is enough for every one of them to have taken theirs. Nothing here
+     * sleeps: each attempt is a fresh GET_FREE, and losing means some other
+     * house won that index, which is progress.
+     *
+     * max_loop is not a ceiling -- it is how many devices exist at module
+     * load, and GET_FREE allocates past it. Measured: 4096 attached on a
+     * kernel reporting 8, no ceiling found. docs/plans/01. */
     char dev[32];
-    int dn = snprintf(dev, sizeof dev, "/dev/loop%d", idx);
-    if (dn < 0 || (size_t)dn >= sizeof dev) die("loop device name");
-    int ld = open(dev, O_RDONLY | O_CLOEXEC);
-    if (ld < 0) die("open loop device");
+    int ld = -1;
+    for (int attempt = 0; attempt < NW_MAX_UNITS; attempt++) {
+        int ctl = open("/dev/loop-control", O_RDWR | O_CLOEXEC);
+        if (ctl < 0) die("open loop-control");
+        int idx = ioctl(ctl, LOOP_CTL_GET_FREE);
+        int e = errno;
+        close(ctl);
+        if (idx < 0) { errno = e; die("loop get free"); }
 
-    /* LO_FLAGS_AUTOCLEAR is the design decision here: the device frees
-     * itself when its last reference goes, so there is no teardown path to
-     * get wrong, no cleanup on any die() below, and nothing leaked when a
-     * house is killed. Its control is real -- drop it and `losetup -a`
-     * shows the device still attached after the house exits. */
-    struct loop_config cfg;
-    memset(&cfg, 0, sizeof cfg);
-    cfg.fd = (uint32_t)img;
-    cfg.info.lo_flags = LO_FLAGS_AUTOCLEAR | LO_FLAGS_READ_ONLY;
-    if (ioctl(ld, LOOP_CONFIGURE, &cfg) < 0) die("loop configure");
+        int dn = snprintf(dev, sizeof dev, "/dev/loop%d", idx);
+        if (dn < 0 || (size_t)dn >= sizeof dev) die("loop device name");
+        ld = open(dev, O_RDONLY | O_CLOEXEC);
+        if (ld < 0) die("open loop device");
+
+        /* LO_FLAGS_AUTOCLEAR is the design decision here: the device frees
+         * itself when its last reference goes, so there is no teardown path
+         * to get wrong, no cleanup on any die() below, and nothing leaked
+         * when a house is killed -- including on the die() just below, where
+         * the device is already configured. Both directions are controlled:
+         * drop the flag and `losetup -a` shows the device still attached
+         * after the house exits, and drop it with a forced mount failure and
+         * it is still attached after the _exit(72). */
+        struct loop_config cfg;
+        memset(&cfg, 0, sizeof cfg);
+        cfg.fd = (uint32_t)img;
+        cfg.info.lo_flags = LO_FLAGS_AUTOCLEAR | LO_FLAGS_READ_ONLY;
+        if (ioctl(ld, LOOP_CONFIGURE, &cfg) == 0)
+            break;              /* attached */
+        if (errno != EBUSY) die("loop configure");
+        /* Lost the race. Drop this device and ask for another index --
+         * re-CONFIGUREing the same one would lose again forever. */
+        close(ld);
+        ld = -1;
+    }
+    if (ld < 0) die("loop configure: no free device");
     close(img);
 
     if (mount(dev, NW_BRICK_MNT, "erofs", MS_RDONLY | MS_NODEV, NULL) < 0)

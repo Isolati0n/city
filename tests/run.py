@@ -18,21 +18,44 @@ import zlib
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 STAGE = os.environ.get("NW_STAGE", "/tmp/nw-init-run")
 
+def _brick_suffix():
+    """NW_BRICK_SUFFIX from blob.h -- the same constant mkbrick.py reads."""
+    for line in open(os.path.join(ROOT, "blob.h")):
+        f = line.split()
+        if len(f) >= 3 and f[0] == "#define" and f[1] == "NW_BRICK_SUFFIX":
+            return f[2].strip('"')
+    raise SystemExit("blob.h has no NW_BRICK_SUFFIX")
+
+
 def _stage_limit():
     """How long NW_STAGE may be, derived rather than declared.
 
-    make_brick builds "{STAGE}/nw/bricks/{64 hex}", and NW_BRICK_LEN is sized
-    for the production path "/nw/bricks/" + 64 hex + NUL. Whatever is left is
-    the slack a test stage may use. Past that, baking fails on the third test
+    make_brick builds "{STAGE}/nw/bricks/{64 hex}{NW_BRICK_SUFFIX}", and
+    NW_BRICK_LEN is sized for the production path. Whatever is left is the
+    slack a test stage may use. Past that, baking fails on the third test
     with `house locked: brick= too long`, which names brick= and says nothing
     about the stage -- so the reader looks at the plan. Stated as a
     precondition instead: found by the control agent, whose own documented
-    recipe (mktemp -d) exceeded it."""
+    recipe (mktemp -d) exceeded it.
+
+    THE SUFFIX IS READ, NOT ASSUMED. Phase 2 made bricks image files and this
+    derivation kept subtracting only the hash, coming out four characters too
+    generous: a 17-to-20 character stage passed this guard and then failed at
+    bake time with the exact message the guard exists to prevent. The default
+    /tmp/nw-init-run is 16, sitting one character inside the true limit, which
+    is why nothing noticed. harness.md tells a read-only reviewer to pick a
+    short distinct name under /tmp, and 17-20 is what that looks like.
+    `tcb-review`."""
+    want = {"NW_BRICK_LEN": None, "NW_BRICK_SUFFIX": None}
     for line in open(os.path.join(ROOT, "blob.h")):
         f = line.split()
-        if len(f) >= 3 and f[0] == "#define" and f[1] == "NW_BRICK_LEN":
-            return int(f[2]) - len("/nw/bricks/") - 64 - 1
-    raise SystemExit("blob.h has no NW_BRICK_LEN")
+        if len(f) >= 3 and f[0] == "#define" and f[1] in want:
+            want[f[1]] = f[2]
+    for k, v in want.items():
+        if v is None:
+            raise SystemExit(f"blob.h has no {k}")
+    return (int(want["NW_BRICK_LEN"]) - len("/nw/bricks/") - 64
+            - len(want["NW_BRICK_SUFFIX"].strip('"')) - 1)
 
 
 if len(STAGE) > _stage_limit():
@@ -1591,7 +1614,7 @@ def make_brick(ident, mirrors=()):
     # The image is what buys the seal, and the seal is the reason phase 2
     # exists: a directory brick is writable by the house that roots in it
     # unless a lid says otherwise. See test_brick_image_is_sealed.
-    brick = f"{STAGE}/nw/bricks/{h.hexdigest()}.img"
+    brick = f"{STAGE}/nw/bricks/{h.hexdigest()}{_brick_suffix()}"
     subprocess.run(["rm", "-f", brick], check=False)
     r = run(["mkfs.erofs", "-zlz4", brick, tmp])
     expect(r.returncode == 0 and os.path.exists(brick),
@@ -1723,7 +1746,75 @@ def test_brick_is_a_root():
            f"declared bind did not land\n{out}")
     expect(binds.get("two") == "none",
            f"house two was given a bind it never declared\n{out}")
-    print("ok brick-is-a-root")
+    # THE CENSUS, not the count. `fds_ge3=0` above survives dropping
+    # O_CLOEXEC and survives dropping the close() calls -- it only fails
+    # when BOTH go, so neither single change is pinned, and phase 2 took
+    # that conjunction from two descriptors to five. `fd-auditor`.
+    #
+    # Naming each descriptor makes one change visible: an inherited image
+    # fd appears as fd3=/nw/bricks/<hash>.img. And asserting the pipe
+    # identity is the bug 4/9/13 check done properly -- those were wrong
+    # ROUTING, so which fd is where is the question, not how many.
+    # The link target is the identity: a pipe reads back as "pipe:[INODE]".
+    # No fstat -- glibc routes it through statx, which is not in the seccomp
+    # allow-list, and widening that for a fixture is what runtime.md
+    # forbids. The house was killed by SIGSYS before printing a line, which
+    # nw-sup reported as status 18176 -- 71 << 8, its "not a normal exit"
+    # code -- and read as a mysterious early death.
+    cen = {}
+    for unit, fd, tgt in re.findall(r"(\w+) fd(\d+)=(\S+)", out):
+        cen.setdefault(unit, {})[int(fd)] = tgt
+    # HOUSE ONE ONLY, and that is a real limit of this test rather than an
+    # oversight: a house can only inspect /proc/self/fd if /proc is bound
+    # into its brick, and house two deliberately has no /proc so that the
+    # honest `noproc` path is exercised. So the census covers the house
+    # that can be measured, and house two is asserted to say so rather
+    # than to report a zero nobody measured.
+    #
+    # What this does NOT cover, stated so it is not assumed:
+    #
+    # 1. The cross-house property that each house gets a DISTINCT pipe.
+    #    That is the bug 4/9/13 shape and it needs /proc in both houses,
+    #    which would cost the noproc branch above. `fd-auditor` verified
+    #    it by hand -- fd 1 and 2 were one inode in one house and another
+    #    in the other -- and nothing in the suite pins it.
+    #
+    # 2. IT DOES NOT BREAK THE O_CLOEXEC/close() CONJUNCTION, and
+    #    `fd-auditor` said it would. I ran both controls against the
+    #    census: dropping O_CLOEXEC from all three new descriptors and
+    #    keeping the close() calls still passes, and dropping the three
+    #    close() calls while keeping O_CLOEXEC still passes. Of course it
+    #    does -- either mechanism alone keeps the table clean, so no
+    #    observation of the table can tell them apart. That is correct
+    #    redundancy in lid_brick rather than an untested conjunction, and
+    #    the honest statement is that it cannot be pinned from here, not
+    #    that a better assertion would do it.
+    #
+    # What the census DOES buy over `fds_ge3` is naming what is present:
+    # a leaked image fd reads as fd3=/nw/bricks/<hash>.img rather than as
+    # a count going 0 to 1, and wrong routing is visible at all.
+    fds = cen.get("one", {})
+    expect(sorted(fds) == [0, 1, 2],
+           f"house one was born holding descriptors {sorted(fds)}, "
+           f"expected exactly [0, 1, 2]. Invariant 5: /dev/null on 0 and "
+           f"its own log pipe on 1 and 2, and no third thing. A brick "
+           f"house now opens five descriptors on the way in, so a stray "
+           f"one here is an image or a loop device that outlived "
+           f"execv.\n{fds}\n{out[-1200:]}")
+    expect(fds[0] == "/dev/null",
+           f"house one has {fds[0]!r} on fd 0, not /dev/null -- a count "
+           f"cannot see this and wrong routing is what bugs 4, 9 and 13 "
+           f"were")
+    expect(fds[1] == fds[2] and fds[1].startswith("pipe:"),
+           f"house one's fd 1 and fd 2 are not the same pipe ({fds[1]} vs "
+           f"{fds[2]}); they must be the one log pipe")
+    expect("two census=noproc" in out,
+           f"house two has no /proc bound and must say so; a census that "
+           f"silently reported nothing would read as zero descriptors\n"
+           f"{out[-1200:]}")
+    print("ok brick-is-a-root (census on the house with /proc: exactly "
+          "/dev/null on 0 and one pipe on 1 and 2, named not counted; "
+          "house two honestly reports noproc)")
 
 
 def test_path_traversal_refused():
@@ -1849,6 +1940,71 @@ def test_brick_image_is_sealed():
     print("ok brick-image-is-sealed (lids=newns only -- no landlock, no "
           "seccomp; the house read its own /id out of the image and its "
           "write came back EROFS)")
+
+
+def test_many_brick_houses_all_start():
+    """Every brick house in a city starts. Concurrency is the test.
+
+    LOOP_CTL_GET_FREE reports a free index; it does not reserve one. Every
+    brick house runs lid_brick at the same time -- nw-spawn waits only on
+    the double-fork intermediary -- so without a retry they all get the
+    same index and all but one get EBUSY.
+
+    Measured on the committed-before-this tree: two houses produced one
+    `FAIL loop configure errno=16` on EVERY run, and the suite printed `ok`
+    because the default restart budget absorbed it. At eight houses only
+    five or six of eight ever ran, and the city still closed
+    `houses_reaped=N orphans=0` -- a third of the city missing behind a
+    healthy-looking close line. Found by `tcb-review` and `fd-auditor`
+    independently; neither was looking for it.
+
+    EIGHT IS THE SIZE, and it is not arbitrary: two collides but the budget
+    hides it, and eight is where the budget runs out and a house is
+    permanently lost. A test at two would have gone green against the
+    broken tree.
+
+    The assertions are three, because the failure has three distinguishable
+    shapes and only one of them is what this pins:
+      - every house ran (the outcome),
+      - no house restarted (the budget was not silently spent), and
+      - no EBUSY was logged at all (the retry worked, rather than the
+        budget covering for it).
+    The second and third are what stop this passing for the wrong reason:
+    a tree that loses the race and recovers via restart satisfies the first
+    on its own.
+    """
+    n = 8
+    houses = []
+    for i in range(n):
+        houses.append(make_brick(f"many-{i:02d}"))
+    city = f"{WORK}/many.city"
+    open(city, "w").write("".join(
+        f"house m{i:02d} /bin/brick kind=oneshot lids=newns brick={b}\n"
+        for i, b in enumerate(houses)))
+    blob = f"{WORK}/many.blob"
+    b = run(["python3", CC, "--city", city, "--out", blob])
+    expect(b.returncode == 0, f"bake\n{b.out}{b.err}")
+    rc, out = boot(plan=blob, hold=2500)
+    expect(city_closed(rc, out), f"many-bricks rc={rc}\n{out[-2000:]}")
+
+    ran = sorted(re.findall(r"id=many-(\d+)", out))
+    missing = [f"{i:02d}" for i in range(n) if f"{i:02d}" not in ran]
+    expect(not missing,
+           f"{len(missing)} of {n} brick houses never ran (missing "
+           f"{missing}). The close line above says the city was healthy; "
+           f"it is not.\n{out[-2000:]}")
+    ebusy = out.count("FAIL loop configure")
+    expect(ebusy == 0,
+           f"{ebusy} house(s) lost the loop-device race. Every house "
+           f"started, so the restart budget covered for it -- which spends "
+           f"a hard total (invariant 4) on a kernel race and leaves a "
+           f"longrun house with no budget for a real crash.\n{out[-2000:]}")
+    restarts = len(re.findall(r"restart m\d+", out))
+    expect(restarts == 0,
+           f"{restarts} restart(s) in a city of oneshot houses that should "
+           f"each run once.\n{out[-2000:]}")
+    print(f"ok many-brick-houses-all-start ({n} concurrent brick houses, "
+          f"all ran, zero loop-device contention, zero restarts)")
 
 
 def test_brick_needs_newns():
@@ -3546,7 +3702,8 @@ def main():
         test_crash_does_not_halt, test_budget_is_hard_total,
         test_shutdown_does_not_restart, test_term_signal, test_dawn_real_boot,
         test_kind_required, test_kind_exit0, test_seccomp_kills,
-        test_brick_is_a_root, test_brick_image_is_sealed, test_brick_needs_newns,
+        test_brick_is_a_root, test_brick_image_is_sealed,
+        test_many_brick_houses_all_start, test_brick_needs_newns,
         test_path_traversal_refused, test_dupname_refused,
         test_blob_size_ceiling,
         test_checker_rejects_crafted_fields,

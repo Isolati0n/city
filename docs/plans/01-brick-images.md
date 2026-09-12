@@ -169,6 +169,35 @@ missing.
 4. `mount("/dev/loopN", mountpoint, "erofs", MS_RDONLY | MS_NODEV, NULL)`;
 5. binds, `pivot_root`, detach — unchanged from today.
 
+**`LOOP_CTL_GET_FREE` REPORTS A FREE INDEX; IT DOES NOT RESERVE ONE**, and
+that is the defect phase 2 shipped with. Every brick house runs
+`lid_brick()` concurrently -- `nw-spawn` waits only on the double-fork
+intermediary -- so they all get the same index and all but one get `EBUSY`.
+Measured: two houses produced one failure on every run, hidden because the
+restart budget absorbed it; eight houses lost two or three permanently; at
+`NW_MAX_UNITS` only 6-15 of 64 attached on the first attempt, while the
+city still closed `houses_reaped=64 orphans=0`. Found by `tcb-review` and
+`fd-auditor` independently, neither looking for it.
+
+The fix is a retry that re-does `GET_FREE`, **bounded by `NW_MAX_UNITS`,
+which is derived rather than guessed**: at most that many houses can be
+contending, and a guessed constant is what the Liveness refusal is about.
+Two structural-looking alternatives are refused in the code comment so they
+are not rediscovered -- deriving the index from the unit's table index is
+`BASE + i` on a device number, which is bugs 9 and 13 again, and
+serialising the attach in `nw-spawn` breaks `AUTOCLEAR`'s anchor and
+invariant 5. `test_many_brick_houses_all_start` pins it at eight houses,
+which is the size where the budget stops hiding it.
+
+**A file-backed mount would remove the class rather than retry it.** erofs
+can mount an image directly via `fsopen`/`fsconfig`/`fsmount`/`move_mount`
+on kernel >= 6.12, with no loop device at all -- `tcb-review` demonstrated
+it working here, same seal, no `/dev/loop-control`, no global index, no
+`AUTOCLEAR`. That removes three `open()`s and two `ioctl()`s from the TCB.
+**Not taken here, because it raises the kernel floor to 6.12 and that is a
+production decision rather than a harness one.** Recorded as the standing
+option.
+
 **`LO_FLAGS_AUTOCLEAR` is the design decision in that list.** The loop device
 frees itself when its last reference goes, so there is no teardown path to
 get wrong, no cleanup on the `die()` paths, and nothing leaked when a house

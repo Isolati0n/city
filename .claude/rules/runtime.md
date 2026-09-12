@@ -160,10 +160,40 @@ environment — so a change to any link is a change to everything below it.
 
 ## Bricks
 
-A unit may declare `brick=/nw/bricks/<hash>`. `lid_brick()` makes mount
-propagation private, binds the brick onto itself (`pivot_root` needs a
-mount point; a brick is a plain directory), applies the declared binds, and
-pivots. After that the house's `/` **is** the brick.
+A unit declares `brick=<path to an erofs image>`. `lid_brick()` makes mount
+propagation private, attaches the image to a loop device, mounts it on
+`NW_BRICK_MNT` (`/nw/mnt`, which **dawn creates** — that is a precondition
+of any brick house starting), applies the declared binds, and pivots. After
+that the house's `/` **is** the brick.
+
+*This described the pre-phase-2 code until 2026-09-12 — "binds the brick
+onto itself … a brick is a plain directory" — which was two false clauses
+in the file `tools/rules-hook.sh` hands to the next agent who edits
+`nwsup.c`. Same shape as the `window_s` sentence, same file, and the
+paragraph three sections down that says why a stale rule here is worse than
+elsewhere was already there. `tcb-review`.*
+
+- **`LOOP_CTL_GET_FREE` reports a free index; it does not reserve one.**
+  Every brick house runs `lid_brick()` concurrently, so without a retry
+  they all get the same index and all but one get `EBUSY`. Shipped that
+  way and measured: at two houses one failed on every run and the restart
+  budget hid it; at eight, houses were permanently lost; at
+  `NW_MAX_UNITS`, 6–15 of 64 attached — while the city printed
+  `closed houses_reaped=64 orphans=0`.
+
+  The retry re-does `GET_FREE` each attempt, **bounded by `NW_MAX_UNITS`
+  because that is derived** — at most that many houses can contend. Do
+  not replace it with an index derived from the unit's table position
+  (that is `BASE + i` on a device number, i.e. bugs 9 and 13 again) or by
+  serialising in `nw-spawn` (that breaks `AUTOCLEAR`'s anchor and
+  invariant 5). A file-backed erofs mount would remove the class outright
+  and is recorded in `docs/plans/01`; it raises the kernel floor to 6.12,
+  which is a production decision.
+
+- **The budget is not a retry mechanism.** Anything that spends a death on
+  a transient resource race is spending a hard total (invariant 4) that a
+  longrun house needs for a real crash. That is why the concurrency test
+  asserts zero restarts and zero `EBUSY`, not merely that every house ran.
 
 - **`NW_LID_NEWNS` is mandatory.** `nwcheck.c` returns `NW_E_BRICKNS`
   without it. `nwsup.c` re-checks it anyway, because it reads its unit from

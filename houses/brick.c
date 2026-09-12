@@ -20,6 +20,7 @@
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <sys/syscall.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -92,6 +93,62 @@ static void report_fds(void)
     printf("%s fds_ge3=%d\n", me, n);
 }
 
+/* A CENSUS, not a count. `fds_ge3=0` pins the conjunction of O_CLOEXEC and
+ * the close() calls in lid_brick and pins NEITHER: `fd-auditor` dropped
+ * O_CLOEXEC from all three new descriptors and the test passed, dropped all
+ * three close() calls and it passed, and only removing both turned it red.
+ * Phase 2 took that unpinned conjunction from two descriptors to five.
+ *
+ * Saying WHAT each descriptor is makes a single change visible: an
+ * inherited image fd shows up as fd3=/nw/bricks/<hash>.img rather than as a
+ * count that went from 0 to 1. It is also the bug 4/9/13 check done
+ * properly -- those were silently wrong ROUTING, so the question is not how
+ * many descriptors a house holds but which one is where. Reporting the
+ * pipe's dev/ino lets the suite assert that fd 1 and fd 2 are the same pipe
+ * within a house and different pipes between houses, which a count cannot
+ * express at all. */
+static void report_census(void)
+{
+    DIR *d = opendir("/proc/self/fd");
+    if (!d) {
+        printf("%s census=noproc\n", me);
+        return;
+    }
+    int self = dirfd(d);
+    struct dirent *e;
+    while ((e = readdir(d))) {
+        if (e->d_name[0] == '.') continue;
+        int fd = atoi(e->d_name);
+        if (fd == self) continue;
+        /* readlink ONLY -- no fstat. The link target for a pipe is
+         * already "pipe:[INODE]", so it carries the identity this census
+         * exists to compare, and fstat costs a syscall the house cannot
+         * make: glibc routes it through statx, which is not in the
+         * allow-list, so seccomp killed the house before it printed a
+         * line. Widening the filter for a fixture is exactly what
+         * runtime.md forbids -- "adding a syscall to the allow-list
+         * requires naming the unit that needs it" -- and no unit needs
+         * it. readlinkat is already allowed. */
+        /* readlinkAT, called directly, NOT glibc's readlink(). The
+         * allow-list has __NR_readlinkat and not __NR_readlink, and on
+         * x86-64 glibc's readlink() wrapper issues the legacy __NR_readlink
+         * -- so the house was killed by SIGSYS before printing a line.
+         * nw-sup reported that as status=18176, which is 71 << 8, its code
+         * for "did not exit normally", and it read as a mysterious early
+         * death rather than as a blocked syscall. Bisected by removing the
+         * call. The fix is to use the syscall the filter already permits;
+         * widening the filter for a fixture is what runtime.md forbids. */
+        char link[256], target[256];
+        snprintf(link, sizeof link, "/proc/self/fd/%d", fd);
+        ssize_t k = syscall(SYS_readlinkat, AT_FDCWD, link, target,
+                            sizeof target - 1);
+        if (k < 0) k = 0;
+        target[k] = 0;
+        printf("%s fd%d=%s\n", me, fd, target);
+    }
+    closedir(d);
+}
+
 /* Try to create a file and say what happened. This is how confinement is
  * demonstrated rather than asserted: under the landlock lid the house's own
  * brick is read-only and a declared bind is not, so the two answers must
@@ -117,6 +174,7 @@ int main(int argc, char **argv)
      * else. Every line is tagged with it because PID 1's logger prefixes
      * the start of a write chunk, not each line inside one. */
     if (argc > 0 && argv[0] && argv[0][0]) me = argv[0];
+    report_census();
     report_file("id", "/id");
     report_root();
     report_fds();

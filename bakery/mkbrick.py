@@ -77,6 +77,18 @@ def sha256_file(path: str) -> str:
     return h.hexdigest()
 
 
+def brick_suffix() -> str:
+    """NW_BRICK_SUFFIX from blob.h. Read, not spelled: the suffix is part of
+    the length budget NW_BRICK_LEN covers, and tests/run.py derives a stage
+    limit from the same pair. Three copies of ".img" is the drift class."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    for line in open(os.path.join(here, "..", "blob.h")):
+        f = line.split()
+        if len(f) >= 3 and f[0] == "#define" and f[1] == "NW_BRICK_SUFFIX":
+            return f[2].strip('"')
+    raise SystemExit("mkbrick: blob.h has no NW_BRICK_SUFFIX")
+
+
 def pack(tree: str, out_dir: str, flags=None, quiet: bool = False) -> tuple:
     """Pack tree into out_dir/<sha256>.img. Returns (hash, path).
 
@@ -123,7 +135,7 @@ def pack(tree: str, out_dir: str, flags=None, quiet: bool = False) -> tuple:
                 f"mkbrick: mkfs.erofs failed ({r.returncode})\n"
                 f"  {' '.join(cmd)}\n{r.stdout}{r.stderr}")
         digest = sha256_file(tmp)
-        final = os.path.join(out_dir, digest + ".img")
+        final = os.path.join(out_dir, digest + brick_suffix())
         # Same content, same name: a rebuild is a no-op rather than an
         # error. Content-addressed storage has no update, only arrival.
         os.replace(tmp, final)

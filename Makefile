@@ -15,7 +15,15 @@ STAGE ?= /tmp/nw-init-run
 
 all: nw-dawn nw-root nw-spawn nw-check nw-sup nw-rescue unit-probe unit-boom unit-badcall unit-term unit-brick unit-slowdie unit-dieterm unit-lastwords unit-lastwordsmany unit-orphan unit-orphanslow
 
-nw-dawn: dawn.c
+# blob.h IS A PREREQUISITE, and leaving it off is not cosmetic. dawn now
+# includes it for NW_BRICK_MNT, and the whole justification for that include
+# is that the path is declared once instead of twice. Without this line,
+# `make` after a change to NW_BRICK_MNT rebuilds nw-sup and leaves nw-dawn
+# stale -- dawn creates the old directory, nw-sup mounts on the new one, and
+# every brick house dies at `FAIL mount brick image errno=2`. The drift moves
+# from the source to the build, which is worse, because grep now says the two
+# places agree. `tcb-review`.
+nw-dawn: dawn.c blob.h
 	$(CC) $(CFLAGS) -o $@ dawn.c
 
 nw-root: pid1.c nwcheck.c blob.h
@@ -93,9 +101,12 @@ stage: all
 	# exactly like a code defect and is not one.
 	#
 	# This is the harness being LESS capable than the machine, the inverse
-	# of harness.md's usual case, and it is the first project-absolute path
-	# the TCB uses -- /dev/null, /dev/loop-control and /proc/self/fd are
-	# the others and the lab already provides those. One idempotent mkdir;
+	# of harness.md's usual case. (It is NOT "the first project-absolute
+	# path the TCB uses", which this said until `tcb-review` ran the grep:
+	# dawn alone has /sysroot, /efi, /efi/slots, /nw/bin/nw-root and /run.
+	# The true and narrower claim is that it is the first absolute path the
+	# TCB requires to ALREADY EXIST on the post-pivot root, which the lab
+	# does not otherwise provide.) One idempotent mkdir;
 	# concurrent suites cannot collide on it because each house's mount is
 	# in its own namespace (verified, docs/plans/01).
 	#

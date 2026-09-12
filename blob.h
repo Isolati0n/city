@@ -20,7 +20,16 @@
 #define NW_MAGIC        "NWPLAN06"
 #define NW_NAME_LEN     32
 #define NW_PATH_LEN     128
-#define NW_BRICK_LEN    96    /* "/nw/bricks/" + 64 hex + NUL */
+/* A brick is an IMAGE FILE as of phase 2, so the path carries a suffix and
+   the budget has to include it. The comment here said `"/nw/bricks/" + 64
+   hex + NUL` after that stopped being true, and tests/run.py re-derived its
+   stage-length limit from that stale arithmetic -- coming out four
+   characters too generous, so a 17-to-20 character stage passed the guard
+   and then failed at bake time with the exact message the guard exists to
+   prevent. Declared, not described, so the next reader derives from a
+   constant rather than from prose. `tcb-review`. */
+#define NW_BRICK_SUFFIX ".img"
+#define NW_BRICK_LEN    96    /* "/nw/bricks/" + 64 hex + NW_BRICK_SUFFIX + NUL */
 #define NW_MAX_BINDS    128
 #define NW_MAX_UNITS    64
 #define NW_FD_RESERVED  8
