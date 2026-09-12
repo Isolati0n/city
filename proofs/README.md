@@ -60,6 +60,25 @@ a checker that answers `NW_E_DUPNAME` to everything satisfies the first one.
   a *particular* well-formed blob is. Closing it means constructing a legal
   blob in the harness and asserting `NW_OK`, and it is unbuilt.
 
+  **Repairing an assertion does not help, and that is the trap.** The bind
+  assertion was corrected to scan the whole hash; `fd-auditor` then mutated
+  `nwcheck.c` back and `caller_nw_check_bind` **still passed**, with
+  `caller_nw_check_bind_reached` failing as wanted — so the body was
+  entered and the assertion was evaluated and held. A stricter checker
+  accepts a subset, and every blob it accepts satisfies the post-condition
+  for free. So a corrected assertion here **cannot fail for the reason its
+  name suggests**, which is the shape `CLAUDE.md` says to refuse rather
+  than count as coverage. Do not cite a green `caller_nw_check_bind` as
+  evidence that a rejection rule is pinned.
+
+- **Do not run this beside `make test`.** `leaf_name_dup` is the long one
+  and CBMC is killed under memory or CPU pressure; `run.sh` refuses a run
+  that produced no result line rather than reading it as a pass, which is
+  the guard working. Measured on a 4-CPU machine: a full run contending
+  with the suite and two builds aborted there after ~22 minutes. Run the
+  proofs alone, and read a `NO RESULT LINE` as "it did not finish", not as
+  a failure of the property.
+
 - **N is bounded.** The caller runs at one unit and no binds; `name_dup` at
   two names. Raise them with `PROOF_UNITS` / `PROOF_BINDS`, and the cost
   climbs steeply — `leaf_name_dup` at two names is already 88 s, because the

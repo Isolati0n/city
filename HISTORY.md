@@ -4463,6 +4463,25 @@ through the shared predicate now.
 third is the bind one that §52 is about, and the count was wrong in the
 paragraph correcting a defect that a count would have caught. `claims`.*
 
+**And the repair to that third one does not pin what it looks like it
+pins.** The reasoning above is right for the two UNIT-loop assertions,
+which catch a checker that accepts too much. The bind assertion is on the
+wrong side of the implication: `fd-auditor` mutated the fixed tree's
+`nwcheck.c` bind line back to `brick[0]` while leaving the corrected
+assertion in place, and `caller_nw_check_bind` **passed** — with
+`caller_nw_check_bind_reached` failing as wanted, so the loop body really
+was entered and the assertion really was evaluated. A `brick[0]` checker
+accepts a strict subset, and every blob it accepts satisfies the
+post-condition for free.
+
+Said plainly so nobody reads the repair as coverage: **that assertion
+cannot fail for the reason its name suggests**, and by §50's own corollary
+it is refused as evidence rather than left standing as it. What pins the
+bind site is `test_leading_zero_hash_is_a_brick`, which asserts
+ACCEPTANCE, and it is the only evidence for the property in the tree. A
+proof that pinned it too would need a completeness obligation — *this
+shape is not rejected* — which is a different harness, not an edited line.
+
 `proofs/run.sh` ran `leaf_path_ok` at two widths because `nw_check` called
 `path_ok_len` at two, and running it at one had previously let a
 `if (max != NW_PATH_LEN) return 1;` mutant pass. There is one width now.
