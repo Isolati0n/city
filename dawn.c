@@ -169,8 +169,11 @@ int main(void)
      * EDITED ACROSS AN OWNERSHIP LINE. dawn.c is Grok's file and the
      * trunk was not broken, so the narrow "fix it and flag it" rule did
      * not apply -- this is here because the operator asked for it
-     * directly as part of writable areas. Flagged loudly per CLAUDE.md,
-     * and it is three constants and a deletion. */
+     * directly as part of writable areas. Flagged loudly per CLAUDE.md;
+     * read the diff for its extent rather than a number here, which said
+     * "three constants" against a commit message saying two -- a count,
+     * in a file whose project rule is not to write them, disagreeing
+     * with its own commit. `tcb-review`. */
     mkpath(NW_ROOT_MNT NW_BRICK_DIR);
     mkpath(NW_ROOT_MNT NW_LAYER_DIR);
     /* Phase 2's mountpoint. An image is a file and cannot be bind-mounted

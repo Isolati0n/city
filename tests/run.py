@@ -809,7 +809,8 @@ def test_dawn_real_boot():
         subprocess.run(["mount", espdev, f"{lab}/me"], check=True)
 
         # The layout dawn expects, built the way a real image would be.
-        for d in ("nw/bin", "nw/bricks", "nw/layers", "efi",
+        for d in ("nw/bin", _brick_dir().lstrip("/"),
+                  _layer_dir().lstrip("/"), "efi",
                   "proc", "sys/fs/cgroup", "dev", "run", "tmp"):
             os.makedirs(f"{lab}/mr/{d}", exist_ok=True)
         for b in ("nw-root", "nw-spawn", "nw-sup", "nw-rescue", "unit-probe"):
@@ -2094,8 +2095,18 @@ def test_brick_image_is_sealed():
     # the boot. Comparing two reads taken afterwards is an identity, which
     # is what this line was for one revision -- a check that cannot fail,
     # in the test whose whole subject is a property that must not change.
+    # COPIED ASIDE, not re-read. /nw/bricks is a shared machine-root path
+    # and make_brick packs with bare mkfs.erofs, whose output is NOT a
+    # function of the tree -- three packs of one tree give three different
+    # images. So a concurrent suite regenerating the same <hash>.img makes
+    # this comparison fail on an intact tree, with a message accusing the
+    # overlay of writing through to the lower. `tcb-review` reproduced it
+    # deliberately and also saw it once without interference. Comparing
+    # against a private copy asks the question this test means to ask.
     img0 = f"{_brick_dir()}/{brick}{_brick_suffix()}"
-    before = hashlib.sha256(open(img0, "rb").read()).hexdigest()
+    keep = f"{WORK}/sealed-before.img"
+    shutil.copyfile(img0, keep)
+    before = hashlib.sha256(open(keep, "rb").read()).hexdigest()
     rc, out = boot(plan=blob, hold=800)
     expect(city_closed(rc, out), f"sealed rc={rc}\n{out}")
 
@@ -2123,15 +2134,20 @@ def test_brick_image_is_sealed():
            f"a writable layer over its brick -- if this is EROFS then the "
            f"overlay did not mount and the house is rooted on the bare "
            f"image\n{out[-1500:]}")
-    expect("[sealed] [nw-sup] lid layer" in out,
+    # NO LOGGER PREFIX IN THE MATCH. PID 1 prefixes a write CHUNK, not a
+    # line, so when `lid newns` and `lid layer` land in one read the
+    # second arrives bare. Measured 5 unprefixed in 30 boots under load,
+    # and the real test failed twice in 30 -- with a message saying the
+    # house is not in a brick, which harness.md names as the shape to
+    # avoid. This city has one house, so the prefix carries nothing.
+    expect("[nw-sup] lid layer" in out,
            f"no `lid layer` line: the write above may have succeeded "
            f"because the house is NOT in a brick at all, which is the same "
            f"observation from the failure side\n{out[-1500:]}")
     # And the seal itself, from outside: the image file the house rooted in
     # is byte-identical after the boot. This is what "sealed" means now --
     # not that writes fail, but that they never reach the brick.
-    img = f"{_brick_dir()}/{brick}{_brick_suffix()}"
-    expect(hashlib.sha256(open(img, "rb").read()).hexdigest() == before,
+    expect(hashlib.sha256(open(img0, "rb").read()).hexdigest() == before,
            f"the brick image changed over the boot. The house's write is "
            f"supposed to land in its layer; if the image moved then the "
            f"overlay is writing through to the lower and the seal is gone")
@@ -2215,8 +2231,28 @@ def test_layer_survives_a_restart():
                for i in range(len(later) - 1)) or len(later) < 2,
            f"the state did not GROW across runs, so it is being rewritten "
            f"rather than kept: {states}\n{out[-2000:]}")
+    # AND IT IS THE DECLARED LAYER, checked from OUTSIDE the house. Every
+    # assertion above observes the inside of the house, so all of them
+    # hold for a supervisor that keys the layer by the HOUSE NAME -- which
+    # is the exact failure the layer-id field exists to prevent.
+    # `control` made nw-sup pass `name` instead of `layer`, created
+    # /nw/layers/keeper by hand, and this test passed. What was protecting
+    # the claim was a coincidence of the stager creating the declared id's
+    # directory and nothing creating the name's, not anything asserted.
+    kept = os.path.join(_layer_dir(), lid, _blob_str("NW_LAYER_UPPER"),
+                        "state")
+    expect(os.path.exists(kept),
+           f"nothing was written under the DECLARED layer id: {kept} does "
+           f"not exist. The house kept its data somewhere, since it read "
+           f"it back -- but not where the plan says, so a rename would "
+           f"orphan it and that is what the id is for")
+    got = open(kept).read()
+    expect(got == states[-1] + "r",
+           f"the declared layer holds {got!r}, not the {states[-1] + 'r'!r} "
+           f"the house's last run should have left")
     print(f"ok layer-survives-a-restart (state {states} across "
-          f"{len(states)} runs, /id read from the brick every time)")
+          f"{len(states)} runs, /id read from the brick every time, and "
+          f"{kept} holds {got!r} -- the DECLARED id, checked from outside)")
 
 
 def test_many_brick_houses_all_start():
@@ -2324,7 +2360,8 @@ def test_brick_hash_revalidated_at_the_supervisor():
     ]
     for val, reason, what in bad:
         r = run([f"{BIN}/nw-sup", f"{BIN}/unit-probe", "probe"],
-                env=dict(os.environ, NW_BRICK=val, NW_LIDS="4", NW_KIND="0"))
+                env=dict(os.environ, NW_BRICK=val, NW_LAYER="l-rv",
+                         NW_LIDS="4", NW_KIND="0"))
         out = r.out + r.err
         expect(reason in out,
                f"nw-sup did not refuse {what} with `{reason}`\n{out}")
@@ -2334,7 +2371,11 @@ def test_brick_hash_revalidated_at_the_supervisor():
     # next thing that fails names the path nw-sup composed ITSELF, under
     # NW_BRICK_DIR, which is the property the argument actually needs.
     r = run([f"{BIN}/nw-sup", f"{BIN}/unit-probe", "probe"],
-            env=dict(os.environ, NW_BRICK=hexok, NW_LIDS="4", NW_KIND="0"))
+            # NW_LAYER too: nw-sup re-checks the brick/layer pairing now,
+            # so a brick with no layer dies before it reaches the open and
+            # the pairing below would be about the wrong refusal.
+            env=dict(os.environ, NW_BRICK=hexok, NW_LAYER="l-rv",
+                     NW_LIDS="4", NW_KIND="0"))
     out = r.out + r.err
     expect("brick hash" not in out,
            f"a well-formed hash was refused by the hash guard\n{out}")
@@ -2445,6 +2486,58 @@ def test_leading_zero_hash_is_a_brick():
           f"one of the {NB} byte positions plus a dense hash -- the bind "
           f"loop over-rejects, which only acceptance can see; a bind with "
           f"no brick refused, and the all-zero hash refused at the baker)")
+
+
+def test_baker_refuses_bad_layers():
+    """Every layer refusal the baker makes, with the reason asserted.
+
+    NONE OF THEM WAS PINNED. `control` replaced all three -- the
+    brick-needs-layer refusal, the layer-needs-brick refusal, and the
+    `_is_layer_id` guard -- with `pass`, and `make test` stayed green.
+    `nw-check` caught the resulting blobs, so the two-place design held,
+    but plan.md's rule is that both places enforce it and combined with
+    the pairing gap BOTH could have been deleted unnoticed.
+
+    The reason is asserted, not the exit code: a baker that exits nonzero
+    for a different complaint is not proof it refused the thing meant.
+    test_brick_needs_newns is the template."""
+    brick = "cd" * int(blob_h("NW_BRICK_HASH"))
+    city = f"{WORK}/badlayer.city"
+    cases = [
+        (f"house a /bin/brick kind=oneshot lids=newns brick={brick}",
+         "brick= needs layer=", "a brick with no layer"),
+        (f"house a /bin/true kind=oneshot lids=none layer=orphan",
+         "layer= without brick=", "a layer with no brick"),
+        (f"house a /bin/brick kind=oneshot lids=newns brick={brick} "
+         f"layer=../../etc", "must be a name", "a path-shaped layer id"),
+        (f"house a /bin/brick kind=oneshot lids=newns brick={brick} "
+         f"layer={'x' * int(blob_h('NW_NAME_LEN'))}", "must be a name",
+         "a layer id that fills the field with no room for the NUL"),
+        (f"house a /bin/brick kind=oneshot lids=newns brick={brick} "
+         f"layer=dup\nhouse b /bin/brick kind=oneshot lids=newns "
+         f"brick={brick} layer=dup", "already used by house",
+         "two houses sharing one layer id"),
+    ]
+    for line, reason, what in cases:
+        open(city, "w").write(line + "\n")
+        p = run(["python3", CC, "--city", city, "--out", f"{WORK}/bl.blob"])
+        expect(p.returncode != 0, f"baker accepted {what}\n{p.out}{p.err}")
+        expect(reason in (p.out + p.err),
+               f"wrong reason for {what}: expected {reason!r}\n"
+               f"{p.out}{p.err}")
+    # The pairing, from the accepting side, or every refusal above is
+    # satisfied by a baker that refuses every plan with a layer in it.
+    open(city, "w").write(
+        f"house a /bin/brick kind=oneshot lids=newns brick={brick} "
+        f"layer=fine\nhouse b /bin/brick kind=oneshot lids=newns "
+        f"brick={brick} layer=also-fine\n")
+    p = run(["python3", CC, "--city", city, "--out", f"{WORK}/bl.blob"])
+    expect(p.returncode == 0,
+           f"the baker refused a legal pair of layered houses\n"
+           f"{p.out}{p.err}")
+    print("ok baker-refuses-bad-layers (no layer, no brick, a path, an "
+          "unterminated id and a shared id, each by its own reason; two "
+          "distinct layers still accepted)")
 
 
 def test_brick_needs_newns():
@@ -2597,11 +2690,33 @@ def test_landlock_confines():
     # Allowed write: same bind.
     expect(field("wr_bind").get("sealed") == "ok",
            f"declared bind not writable under the lid\n{out}")
-    # DENIED write: the brick itself. This is the confinement.
+    # DENIED write: the house's own root.
+    #
+    # THE REASON, NOT JUST "denied", AND THE REASON IS NOW THE FINDING.
+    # This asserted `startswith("denied")`, which cannot separate
+    # denied(30) -- EROFS, a root that is a bare read-only image -- from
+    # denied(13) -- EACCES, Landlock refusing a root that IS writable.
+    # Writable areas made every brick house's root an overlay, and
+    # lid_landlock() runs after the brick pivot, so a landlock house now
+    # gets a layer it cannot write. The test would pass before and after
+    # for DIFFERENT reasons, which harness.md says to report rather than
+    # re-baseline.
+    #
+    # So this machine cannot settle it -- Landlock is absent here and
+    # this test skips -- but the FIRST machine that runs it will say
+    # which, in the ok line, instead of printing the same word for two
+    # opposite situations. See CLAUDE.md invariant 6: the resolution is a
+    # design decision and is not taken.
     wr = field("wr_root").get("sealed", "")
     expect(wr.startswith("denied"),
-           f"the house wrote into its own sealed brick: wr_root={wr}\n{out}")
-    print(f"ok landlock-confines (ABI {abi})")
+           f"the house wrote into its own root under landlock: "
+           f"wr_root={wr}\n{out}")
+    why = ("EACCES -- Landlock refusing a WRITABLE layer, which is the "
+           "unresolved contradiction in invariant 6"
+           if "13" in wr else
+           "EROFS -- the root is read-only, so the layer did not mount"
+           if "30" in wr else "an unexpected errno")
+    print(f"ok landlock-confines (ABI {abi}; wr_root={wr}, {why})")
 
 
 def c_name_slots(names):
@@ -2647,7 +2762,9 @@ def c_name_slots(names):
                 '    memset(u, 0, sizeof u);\n'
                 '    strncpy(u[0].name, nm, NW_NAME_LEN - 1);\n'
                 '    name_dup_init(&t);\n'
-                '    if (name_dup(&t, u, 0)) return -2;\n'
+                '    if (field_dup(&t, u, 0,\n'
+                '                  offsetof(struct nw_unit, name)))\n'
+                '        return -2;\n'
                 '    int seen = -1;\n'
                 '    for (int i = 0; i < NW_DUP_SLOTS; i++)\n'
                 '        if (t.slot[i] >= 0) { if (seen >= 0) return -3; seen = i; }\n'
@@ -2974,6 +3091,39 @@ def test_checker_rejects_crafted_fields():
         # later, which is the same argument that kept the rule on `name`
         # and `exec_path` when phase 3 lifted it off `brick`. Found by the
         # coverage floor: the branch existed and nothing reached it.
+        # TWO HOUSES ON ONE LAYER. The baker refuses this by name, so no
+        # blob it emits reaches the checker's duplicate pass -- which is
+        # the arrangement plan.md forbids relying on, and the coverage
+        # floor said so: NW_E_LAYERDUP was written and unreachable.
+        # Crafted here by copying unit 0's id over the victim's.
+        #
+        # What it prevents: two houses sharing one upperdir and one
+        # workdir, each appending to the other's files, while the kernel
+        # logs "accessing files from both mounts will result in undefined
+        # behavior" to a channel nothing reads and the city prints
+        # `closed houses_reaped=2 orphans=0`. `tcb-review` measured it.
+        ("layer-duplicate",
+         [(LAYER_OFF + k, 0) for k in range(LAYERW)]
+         + [(LAYER_OFF + j, ord(c)) for j, c in enumerate("l-c00")],
+         "duplicate layer id",
+         "two houses declaring the same layer id"),
+        # THE PAIRING, BOTH DIRECTIONS. `drift` deleted
+        # `if (has_layer != has_brick) return NW_E_LAYERPAIR;` from the TCB
+        # and the whole suite stayed green at the 99% floor -- nothing
+        # anywhere asserted the string. A brick with no layer is a house
+        # whose writes vanish at exit while the plan says it has data; a
+        # layer with no brick is an area nothing mounts. Neither errors at
+        # runtime, which is why the rule is structural and why it needs a
+        # crafted case rather than a plan (the baker refuses both, so no
+        # blob it emits can reach this code).
+        ("layer-without-brick",
+         [(BRICK_OFF + k, 0) for k in range(BRICK)],
+         "layer and brick must come together",
+         "a layer on a unit with no brick"),
+        ("brick-without-layer",
+         [(LAYER_OFF + k, 0) for k in range(LAYERW)],
+         "layer and brick must come together",
+         "a brick on a unit with no layer"),
         # A LAYER ID THAT IS A PATH. nw-sup composes
         # NW_LAYER_DIR "/" <id> "/" upper, so a separator in the id is the
         # traversal class the brick hash was made immune to -- and unlike
@@ -3172,7 +3322,15 @@ def test_checker_rejects_crafted_binds():
 
 LAYOUT_DECL = re.compile(
     r"^\s*(?:NW_AT|NW_EXTENT|NW_TYPE|NW_ARR_TYPE)\s*\([^)]*\)\s*;"
-    r"|^\s*_Static_assert\s*\(\s*sizeof\s*\(\s*struct\s+nw_\w+\s*\)[^;]*;",
+    r"|^\s*_Static_assert\s*\(\s*sizeof\s*\(\s*struct\s+nw_\w+\s*\)[^;]*;"
+    # AND THE SIZE MACRO ITSELF. nw_bind's size assert carries a literal
+    # (== 130) so its size is hashed; nw_unit's reads == NW_UNIT_SIZE, a
+    # macro reference, so redefining NW_UNIT_SIZE changed the wire format
+    # while leaving every hashed line byte-identical. Measured by `drift`:
+    # a field appended after _pad, the baker packing it, magic untouched,
+    # and the ledger said `ok magic-moves-with-layout`. The blind spot was
+    # exactly the trailing edge of the struct.
+    r"|^\s*#\s*define\s+NW_UNIT_SIZE\b.*$",
     re.M)
 
 
@@ -3192,14 +3350,38 @@ def unit_layout():
 
     The size is offset(_pad) + 1 because _pad is the last member by
     construction and blob.h asserts the struct is exactly NW_UNIT_SIZE."""
+    # FROM THE STAGE, NOT THE SOURCE TREE -- the same rule blob_h() states
+    # and for the same reason. The binaries under test were built from
+    # {STAGE}/src/blob.h; reading ROOT/blob.h after a bare `make` gives
+    # offsets the staged nw-check does not use. `control` desynchronised
+    # the two by swapping brick's and layer's declared offsets in the
+    # source only and got `FAIL: nw-check accepted a layer id with a path
+    # separator in it` -- an offset error wearing a rule violation's
+    # message, which is the exact sentence this helper's docstring was
+    # written to retire, surviving at the source/stage boundary.
     at = {m.group(1): int(m.group(2))
-          for m in UNIT_AT.finditer(open(os.path.join(ROOT, "blob.h")).read())}
+          for m in UNIT_AT.finditer(
+              open(os.path.join(STAGE, "src", "blob.h")).read())}
     for want in ("name", "exec_path", "brick", "layer", "kind", "_pad"):
         expect(want in at,
                f"blob.h declares no NW_AT(nw_unit, {want}, ...) -- the "
                f"layout parse has stopped matching and every crafted-blob "
                f"test below would be reading the wrong bytes")
-    at["_size"] = at["_pad"] + 1
+    # FROM NW_UNIT_SIZE, not from _pad + 1. The old form assumed _pad is
+    # the last member and nothing pins that; with a field appended after
+    # it, unit_layout() returned 228 while sizeof was 229. It degraded
+    # loudly -- four tests red at once -- but every message was a size
+    # error wearing a layout bug's clothes, which is the sentence this
+    # helper exists to retire.
+    src = open(os.path.join(STAGE, "src", "blob.h")).read()
+    m = re.search(r"^\s*#\s*define\s+NW_UNIT_SIZE\s+\((.*)\)\s*$",
+                  src, re.M)
+    expect(m is not None, "blob.h has no NW_UNIT_SIZE as a parenthesised "
+                          "expression; the size derivation has stopped "
+                          "matching")
+    consts = {k: int(blob_h(k)) for k in
+              ("NW_NAME_LEN", "NW_PATH_LEN", "NW_BRICK_HASH")}
+    at["_size"] = eval(m.group(1), {"__builtins__": {}}, consts)
     return at
 
 
@@ -3979,7 +4161,7 @@ def test_blob_size_ceiling():
             binds = "".join(f" bind=/etc/hosts{'' if j == 0 else ''}"
                             for j in range(nb // nu + (1 if i < nb % nu else 0)))
             f.write(f"house m{i:02d} /bin/true kind=oneshot "
-                    f"lids=newns brick={brick} layer=l-probe{binds}\n")
+                    f"lids=newns brick={brick} layer=l-p{i:04d}{binds}\n")
     good = f"{WORK}/maxblob.blob"
     b = run(["python3", CC, "--city", city, "--out", good])
     expect(b.returncode == 0, f"bake a maximal plan\n{b.out}{b.err}")
@@ -4448,6 +4630,7 @@ def main():
         test_brick_is_a_root, test_brick_image_is_sealed,
         test_layer_survives_a_restart,
         test_many_brick_houses_all_start, test_brick_needs_newns,
+        test_baker_refuses_bad_layers,
         test_leading_zero_hash_is_a_brick,
         test_brick_hash_revalidated_at_the_supervisor,
         test_path_traversal_refused, test_dupname_refused,

@@ -160,6 +160,28 @@ environment — so a change to any link is a change to everything below it.
 
 ## Bricks
 
+**UNRESOLVED, READ THIS BEFORE TOUCHING `lid_landlock()`:** Landlock runs
+after the brick pivot, so the `/` it grants read-and-execute beneath is
+the OVERLAY. A `landlock` house therefore has a writable layer it cannot
+write — `EACCES`, silently. And since `landlock` requires a brick and a
+brick now requires a layer, that is every Landlock house. Not verified on
+this machine (no Landlock: `landlock_create_ruleset` → ENOSYS), raised by
+`tcb-review` from the ordering. Do not pick a resolution in passing:
+granting write beneath the root guts the lid, refusing `landlock` with a
+layer retires it. `CLAUDE.md` invariant 6, `HISTORY.md` §55.
+
+**A LAYER CAN MASK ITS BRICK, DURABLY.** "Reads fall through to the sealed
+image" is true and incomplete: the overlay can also whiteout and overwrite,
+and those survive reboot because the layer is durable and keyed by an id.
+Measured: a house that unlinks its own exec path leaves a whiteout in
+`upper` and never starts again — same plan, same sealed brick, `FAIL exec
+house errno=2` forever, image byte-identical to its own name. The only
+recovery is removing the layer AND re-running the stager; `rm` alone gives
+`FAIL mount layer errno=2` on every boot. **Nothing in the tree does
+either** — the suite hand-rolls it for one test and calls it standing in
+for a reclaim step that does not exist. The phase-2 seal protects the
+image file, not the house's view of it. `tcb-review`.
+
 **Every brick house also has exactly one writable layer, and the two are
 one thing.** `lid_brick()` mounts the erofs image on `NW_BRICK_MNT` and
 then mounts an overlay **at that same mountpoint** with
@@ -183,6 +205,12 @@ through to the sealed image; writes land in `upper` and survive a restart.
   "nothing staged this plan" into "the house silently got an empty layer",
   which is the orphaned-data failure the layer-id exists to prevent. A
   missing layer is a loud `FAIL mount layer` instead.
+- **One layer per house, enforced.** Two houses on one id share one
+  `upperdir` and one `workdir`: each appends to the other's data and the
+  kernel calls the workdir sharing undefined behaviour, into `dmesg`,
+  which nothing here reads. `NW_E_LAYERDUP` in `nwcheck.c` (a second pass
+  of the same `field_dup` table that catches duplicate names) and a
+  named refusal in the baker.
 - **Keyed by a declared id, never by the house name.** Rename a house under
   name-keying and it gets an empty layer while its data sits under the old
   name, with nothing reporting anything.

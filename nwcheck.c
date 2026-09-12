@@ -21,7 +21,8 @@ static const char *errs[] = {
     "bind path",
     "landlock without brick",
     "layer id",
-    "layer and brick must come together"
+    "layer and brick must come together",
+    "duplicate layer id"
 };
 
 _Static_assert(sizeof errs / sizeof errs[0] == NW_E__COUNT,
@@ -169,16 +170,26 @@ static void name_dup_init(struct nw_dup_tab *t)
     for (int i = 0; i < NW_DUP_SLOTS; i++) t->slot[i] = -1;
 }
 
-static int name_dup(struct nw_dup_tab *t, const struct nw_unit *u, uint32_t i)
+/* Duplicate detection over ONE fixed-width name field of the unit, named
+ * by its offset. It was `name` only; `layer` needs exactly the same pass,
+ * and a second copy of an open-addressed probe loop in a TCB file is the
+ * drift class invariant 3 is about -- so the field moved into a parameter
+ * rather than the loop into a second function.
+ *
+ * The caller supplies the table, so the two passes cannot share state.
+ * `off` must name a char[NW_NAME_LEN] member; both callers use offsetof. */
+static int field_dup(struct nw_dup_tab *t, const struct nw_unit *u,
+                     uint32_t i, size_t off)
 {
     int *slot = t->slot;
-    uint32_t hv = hash_name(u[i].name);
+    const char *me = (const char *)&u[i] + off;
+    uint32_t hv = hash_name(me);
     int s = (int)(hv & (uint32_t)(NW_DUP_SLOTS - 1));
     for (int p = 0; p < NW_DUP_SLOTS; p++) {
         int k = (s + p) & (NW_DUP_SLOTS - 1);
         if (slot[k] < 0) { slot[k] = (int)i; return 0; }
-        const char *a = u[slot[k]].name;
-        const char *b = u[i].name;
+        const char *a = (const char *)&u[slot[k]] + off;
+        const char *b = me;
         int same = 1;
         for (int n = 0; n < NW_NAME_LEN; n++) {
             if (a[n] != b[n]) { same = 0; break; }
@@ -226,6 +237,22 @@ int nw_check(const void *blob, uint32_t len)
 
     struct nw_dup_tab dup;
     name_dup_init(&dup);
+    /* A SECOND TABLE, for layer ids. Two houses sharing one layer share
+     * one upperdir and one workdir: each reads and appends to the other's
+     * data, and the kernel prints "upperdir is in-use as upperdir/workdir
+     * of another mount, accessing files from both mounts will result in
+     * undefined behavior" -- to dmesg, which the city does not read and
+     * the suite does not look at. Measured: two houses, one id, one file
+     * interleaving both their writes, and `closed houses_reaped=2
+     * orphans=0`. `tcb-review`.
+     *
+     * That is the bug 4/9/13 shape moved from descriptors to DATA, which
+     * is the argument blob.h gives for keying by an id at all. Keying
+     * removed the rename hazard and left the collision hazard; this
+     * removes the second one, with the machinery the first one already
+     * had rather than a new mechanism. */
+    struct nw_dup_tab lay;
+    name_dup_init(&lay);
 
     for (uint32_t i = 0; i < h->n_units; i++) {
         if (!name_ok(u[i].name, NW_NAME_LEN)) return NW_E_NAME;
@@ -294,7 +321,14 @@ int nw_check(const void *blob, uint32_t len)
         if (u[i].lids & ~(uint8_t)(NW_LID_SECCOMP | NW_LID_LANDLOCK
                                    | NW_LID_NEWNS | NW_LID_NEWNET))
             return NW_E_LIDS;
-        if (name_dup(&dup, u, i)) return NW_E_DUPNAME;
+        if (field_dup(&dup, u, i, offsetof(struct nw_unit, name)))
+            return NW_E_DUPNAME;
+        /* Only for units that HAVE one: "no layer" is all-zero and every
+         * brickless house shares it, so an empty field must not collide
+         * with another empty field. */
+        if (u[i].layer[0]
+            && field_dup(&lay, u, i, offsetof(struct nw_unit, layer)))
+            return NW_E_LAYERDUP;
     }
 
     const struct nw_bind *b = nw_binds(blob);

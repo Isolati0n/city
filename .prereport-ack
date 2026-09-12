@@ -43,3 +43,11 @@ prose-count	tests/run.py	# ONE CASE PER BYTE POSITION, and that is not thoroughn
 prose-count	tools/coverage-tcb.sh	# the brick path check; phase 3 deleted that line, and tcb-review had
 # false positive: prose inside a failure message ('is NOT in a brick'), not an assertion
 unpaired-absence	tests/run.py	f"because the house is NOT in a brick at all, which is the same "
+# false positive: describes the code on the next line, not a count that can age
+prose-count	houses/layer.c	* WIDTH divides the logger's buffer, so every write is one whole line and
+# false positive: describes the code on the next line, not a count that can age
+prose-count	houses/layer.c	/* Reads at most n-1 bytes and NUL-terminates. Returns 0 when the file is
+# false positive: describes the code on the next line, not a count that can age
+prose-count	nwcheck.c	* the suite does not look at. Measured: two houses, one id, one file
+# false positive: describes the code on the next line, not a count that can age
+prose-count	tests/run.py	# loudly -- four tests red at once -- but every message was a size

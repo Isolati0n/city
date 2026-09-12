@@ -448,6 +448,21 @@ int main(int argc, char **argv)
      * if that root is a brick. nw-check returns NW_E_LLBRICK; re-checked here
      * because nw-sup reads its unit from the environment. */
     if ((lids & NW_LID_LANDLOCK) && !brick) die("landlock without brick");
+    /* THE PAIRING, RE-CHECKED HERE TOO, under exactly the argument the
+     * layer-id validation above gives and then did not finish: nw-sup
+     * reads its unit from the environment, so nothing the baker or
+     * nw-check did stands behind it. Its two neighbours -- landlock
+     * without brick, brick without newns -- both do the full job; this
+     * one checked the alphabet and stopped.
+     *
+     * Measured with NW_LAYER unset and NW_BRICK set: the house started
+     * rooted on the bare read-only image, no `lid layer`, no die, exit 0,
+     * `write=denied(30)`. That is precisely the state NW_E_LAYERPAIR
+     * exists to forbid -- writes vanishing while the plan says the house
+     * has data -- reached through the one door the comment above names
+     * as the reason the other checks exist. `tcb-review`. */
+    if (brick && !(layer && layer[0])) die("brick without layer");
+    if (!brick && layer && layer[0]) die("layer without brick");
     char *binds[NW_MAX_BINDS];
     int nbinds = 0;
     if (brick) {

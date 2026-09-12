@@ -71,8 +71,16 @@ def stage(blob_path, root=""):
         # and nw-sup each validate them again. Checked a fourth time here
         # because this one turns a string into a mkdir on the machine
         # root, and a sidecar is a plain file anyone can edit.
-        if not i or len(i) >= 32 or not all(
-                c.isalnum() or c in "_-" for c in i):
+        # The width from blob.h, and the alphabet spelled out. This read
+        # `len(i) >= 32` -- a literal, in the file whose own docstring
+        # invokes invariant 3 -- and `c.isalnum()`, which accepts
+        # 'caf\u00e9' and Cyrillic 'a' where the baker, nwcheck.c and
+        # nw-sup all spell [A-Za-z0-9_-]. It was the loosest of the four
+        # checks that exist for the same reason. `drift`, `tcb-review`.
+        ok = (i and len(i) < int(_names("NW_NAME_LEN"))
+              and all(("a" <= c <= "z") or ("A" <= c <= "Z")
+                      or ("0" <= c <= "9") or c in "_-" for c in i))
+        if not ok:
             raise SystemExit(
                 f"stage-layers: {i!r} is not a layer id. It names a "
                 f"directory this tool creates, so it is checked here too.")

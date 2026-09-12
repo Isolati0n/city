@@ -218,6 +218,31 @@ sections after this one and are deliberately not numbered here.
    There is **one** allow-list and a house does not choose it; the second
    profile that briefly existed is `HISTORY.md` §23.
 
+   **LANDLOCK AND THE WRITABLE LAYER CONTRADICT EACH OTHER, AND THIS IS
+   NOT RESOLVED.** The paragraph below says nothing grants write beneath
+   the root; the paragraph above says every brick house has a writable
+   layer at its root. Both are present tense and they cannot both hold
+   for a `landlock` house. `lid_landlock()` runs *after* `lid_brick()`,
+   so the `/` it grants read-and-execute beneath **is the overlay** — the
+   house gets a layer it cannot write, every write is `EACCES` instead of
+   landing in `upper`, and nothing logs anything.
+
+   It is worse than a local contradiction: `landlock` requires a brick,
+   and a brick now requires a layer, so **every** Landlock house is in
+   this state. `test_landlock_confines` cannot tell, because it asserts
+   `denied` and cannot separate `denied(30)` (EROFS, the old reason) from
+   `denied(13)` (EACCES, the new one) — a test that passes before and
+   after for different reasons, which `harness.md` names as a finding.
+
+   **Unverified here and flagged rather than decided**: this machine has
+   no Landlock (`landlock_create_ruleset` → ENOSYS), so `tcb-review`
+   raised it as a HYPOTHESIS from reading the ordering and I could not
+   run it either. The resolution is a design decision — grant write
+   beneath the root and accept what that costs the lid, or refuse
+   `landlock` with a layer and accept that the lid becomes unusable —
+   and it should not be guessed at by whoever next touches the file.
+   Recorded here, in `runtime.md`, and in `HISTORY.md` §55.
+
    **The Landlock lid is for a house in a brick**, and requires one
    (`NW_E_LLBRICK`). It grants read and execute beneath the house's own root
    — which is the brick, since it runs after the pivot — so any linkage works

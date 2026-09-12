@@ -8,10 +8,24 @@
 # person is already editing and the obvious fix is to make it agree.
 # A row that is already written down cannot be satisfied that way.
 #
-# Rows before NWPLAN07 are absent because no signature was recorded
-# at the time -- do not back-fill them by checking out an old tree
-# and hashing it, because that certifies a layout nobody verified.
-# The ledger starts where it starts.
+# Rows before 
 
-NWPLAN07 7416d2cfdb64ccebd7e05909d442da516b90349b03e384b9079cfe1fdedf955d
-NWPLAN08  3bc8a5eab49c1886419335be37edf85b9bf1da1066cf209e84bee6f990ce4c37
+# THE SIGNATURE FUNCTION CHANGED ON 2026-09-12 AND BOTH ROWS WERE
+# RE-DERIVED. It hashed the NW_AT / NW_EXTENT / NW_TYPE / NW_ARR_TYPE
+# lines and the struct-size asserts -- and nw_unit's size assert reads
+# `== NW_UNIT_SIZE`, a macro REFERENCE, so redefining NW_UNIT_SIZE moved
+# the wire format while leaving every hashed line byte-identical. `drift`
+# appended a field after `_pad`, bumped the macro, had the baker pack it,
+# left the magic alone, and this file said ok. The define is hashed now.
+#
+# Re-deriving is not the same as editing. Each row was recomputed from
+# the tree that DEFINED that magic -- NWPLAN07 from `git show
+# 678f1bd:blob.h`, NWPLAN08 from the current one -- so a row still cannot
+# be produced by anything except the layout it names. Editing a row to
+# match a CHANGED layout is the defect; recomputing every row when the
+# hash function itself changes is maintenance, and it is mechanical and
+# repeatable from the commits. If you change the function again, do the
+# same thing and say so here.
+
+NWPLAN07 38cc48d25bec1fb98d3f053d7fdb61d07ca0176292e285f047bc74939c4e142c
+NWPLAN08 cd53343f62ec118f3d0f3202f3204851b76c1c2dbcfae77f1669a424b720abca

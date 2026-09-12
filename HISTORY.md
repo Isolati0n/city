@@ -4868,3 +4868,127 @@ property that must not change.*
 operator asked for it as part of this work: two constants in place of two
 literals, and a deletion. Flagged here, in the commit, and in the comment
 beside it.
+
+## 55. Three reviewers on writable areas: sharing, pairing, and a lid that now contradicts itself (2026-09-12)
+
+`tcb-review`, `drift` and `control` against `6b20b28`. Two HIGHs, and the
+second is unresolved on purpose.
+
+### HIGH: two houses could declare the same layer
+
+Keying by a declared id removed the rename hazard and left the collision
+hazard. Two houses with one id share one `upperdir` **and one `workdir`**:
+each appends to the other's files, and the kernel says exactly what it
+thinks — `upperdir is in-use as upperdir/workdir of another mount,
+accessing files from both mounts will result in undefined behavior` — into
+`dmesg`, which the city does not read and the suite does not look at.
+Measured by `tcb-review`: one file interleaving two houses' writes, under
+`closed houses_reaped=2 orphans=0`.
+
+**And the suite was doing it.** The maximal-plan test baked all
+`NW_MAX_UNITS` houses onto `layer=l-probe` and reported them "accepted by
+all three readers". The bug 4/9/13 shape, moved from descriptors to data —
+which is the argument `blob.h` gives for keying by an id in the first
+place.
+
+`NW_E_LAYERDUP`, and it needed no new mechanism: `nwcheck.c` already had
+an open-addressed duplicate table for names. What it did not have was a
+way to point that table at a different field, so `name_dup` became
+`field_dup(t, u, i, off)` — the field moved into a parameter rather than
+the loop into a second copy. A named refusal in the baker too, which can
+say *which* houses collide where the checker cannot.
+
+### HIGH, UNRESOLVED: Landlock and the writable layer contradict each other
+
+`lid_landlock()` runs **after** `lid_brick()`, so the `/` it grants
+read-and-execute beneath is now the overlay. A `landlock` house therefore
+gets a writable layer it cannot write — `EACCES`, silently, with `lid
+layer` and `lid landlock` both printed and the plan still saying it has
+data. And because `landlock` requires a brick and a brick now requires a
+layer, that is **every** Landlock house.
+
+Invariant 6 asserted both halves at once after this change: "writes land
+in `/nw/layers/<id>/upper`" and "nothing grants write beneath the root".
+Both present tense, both kind 1, and they cannot both hold.
+
+**Not resolved, and deliberately not guessed at.** This machine has no
+Landlock, so `tcb-review` raised it from the ordering as a HYPOTHESIS and
+I could not run it either. Granting write beneath the root guts the lid;
+refusing `landlock` with a layer retires the lid. That is a design
+decision. What landed instead: the contradiction stated where both halves
+are, in `CLAUDE.md` and `runtime.md`, and `test_landlock_confines` now
+reports **which errno** it saw — it asserted `startswith("denied")`, which
+cannot separate `denied(30)` (EROFS, the old root) from `denied(13)`
+(EACCES, the new one), so it would have passed before and after for
+different reasons. The first machine with Landlock will say which.
+
+### The other direction of "a house can keep things"
+
+A layer can also **mask** its brick, durably. "Reads fall through to the
+sealed image" is true and incomplete: whiteouts and overwrites live in
+`upper` and survive reboot. A house that unlinks its own exec path never
+starts again — same plan, same sealed brick, `FAIL exec house errno=2`
+forever, image byte-identical to its own name. Recovery needs the layer
+removed **and** the stager re-run; `rm` alone gives `FAIL mount layer
+errno=2` on every boot, and nothing in the tree does either. The phase-2
+seal protects the image file, not the house's view of it. Recorded in
+`runtime.md`; a reclaim path is a real missing piece and is not this
+change.
+
+### What was pinned by nothing
+
+- **`NW_E_LAYERPAIR` was deletable with the suite green**, found by
+  `drift` and `control` independently, and the coverage floor could not
+  see it because a deleted check has no unreached line. Both spec files
+  claimed "enforcement is nwcheck.c plus the crafted-blob tests" while no
+  test asserted the string.
+- **All three of the baker's layer refusals were unpinned** — brick
+  without layer, layer without brick, and a path-shaped id. `control`
+  replaced all three with `pass` and `make test` stayed green.
+- **The layer test did not pin that the layer is the DECLARED one.** Every
+  assertion in it observed the inside of the house, so all of them hold
+  for a supervisor keying by the house name — the exact failure the id
+  exists to prevent. What was protecting the claim was a coincidence of
+  the stager creating the declared id's directory and nothing creating the
+  name's. It reads `/nw/layers/<id>/upper/state` from outside now.
+
+### Two flaky assertions I wrote, both demonstrated
+
+- **The seal assertion re-read a shared mutable path.** `make_brick` packs
+  with bare `mkfs.erofs`, whose output is not a function of the tree —
+  three packs give three images — so a concurrent suite regenerating the
+  same `<hash>.img` failed the test on an intact tree, with a message
+  accusing the overlay of writing through to the lower. It compares
+  against a private copy now.
+- **`expect("[sealed] [nw-sup] lid layer" in out)` asserted on the
+  logger's prefix**, which marks a write *chunk*. 5 unprefixed in 30 boots
+  under load; the real test failed twice in 30, saying the house was not
+  in a brick. The log-chunk trap, in a test written after the rule.
+
+### And the ledger's blind spot was at the trailing edge
+
+`_layout_signature()` hashed the `NW_AT` lines and the struct-size
+asserts — and `nw_unit`'s size assert reads `== NW_UNIT_SIZE`, a **macro
+reference**. So redefining `NW_UNIT_SIZE` moved the wire format while
+leaving every hashed line byte-identical: `drift` appended a field after
+`_pad`, bumped the macro, had the baker pack it, left the magic alone, and
+the ledger said `ok`. The define is hashed now, and `unit_layout()` derives
+the size from it rather than from `offset(_pad) + 1`, which assumed `_pad`
+is last and nothing pinned that.
+
+**Changing the hash function invalidated both recorded rows**, which is
+worth stating because the file says append-never-edit. Both were
+**re-derived from the trees that defined them** — NWPLAN07 from
+`git show 678f1bd:blob.h` — not edited to fit. A row still cannot be
+produced by anything but the layout it names; that distinction is written
+into the file.
+
+### One more of mine, at the source/stage boundary
+
+`unit_layout()` read `ROOT/blob.h` while `blob_h()` reads `{STAGE}/src`,
+and `test_checker_rejects_crafted_fields` mixed both in one sum.
+`control` desynchronised the source alone and got `FAIL: nw-check accepted
+a layer id with a path separator in it` — an offset error wearing a rule
+violation's message, which is the exact sentence `unit_layout()`'s
+docstring was written to retire, surviving one level down at the boundary
+between the tree and the stage.

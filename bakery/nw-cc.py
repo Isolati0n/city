@@ -145,6 +145,22 @@ def check(houses, binds):
             raise SystemExit(
                 f"house {h['name']}: bind= without brick=; there is no root "
                 "to bind into")
+    # ONE LAYER PER HOUSE. Two houses with the same id share one upperdir
+    # and one workdir: each appends to the other's data, and the kernel
+    # calls the workdir sharing undefined behaviour -- into dmesg, which
+    # nothing here reads. Refused in nwcheck.c too; this is the bake-time
+    # half, and it can name the houses, which the checker cannot.
+    seen = {}
+    for h in houses:
+        if not h["layer"]:
+            continue
+        if h["layer"] in seen:
+            raise SystemExit(
+                f"house {h['name']}: layer={h['layer']} is already used by "
+                f"house {seen[h['layer']]}. A layer is one house's data: "
+                f"sharing one means both append to the same files, and the "
+                f"kernel calls a shared overlay workdir undefined behaviour.")
+        seen[h["layer"]] = h["name"]
     for unit, path in binds:
         if not path_clean(path):
             raise SystemExit(

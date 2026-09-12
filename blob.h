@@ -363,6 +363,7 @@ enum {
     NW_E_LLBRICK = 15,
     NW_E_LAYER = 16,
     NW_E_LAYERPAIR = 17,
+    NW_E_LAYERDUP = 18,
     /* Terminator, not a code. nw_errstr's bound and the length of errs[] in
      * nwcheck.c are both derived from it, so the three things that must
      * agree -- last code, array length, bound -- become one number.
