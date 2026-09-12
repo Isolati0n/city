@@ -3784,6 +3784,132 @@ def test_old_magic_is_refused_as_magic():
           f"refused for its magic, not its size)")
 
 
+def test_candidate_stager_never_touches_the_live_slot():
+    """Staging a candidate changes nothing about what is running.
+
+    That is the whole design of scratch-becomes-saved, one level down:
+    saving is immediate, switching is deferred, and the tool that stages
+    must not be able to cross the line the deferral exists to keep. So
+    this asserts the NEGATIVE property on the live slot -- byte-identical
+    plan, byte-identical `current` -- and then boots through `--slots` to
+    show the machine still comes up on the live plan with the candidate
+    sitting beside it.
+
+    Negative controls, run:
+      - drop the `target == live` guard in stage_candidate.stage() and
+        the live-slot case stages instead of refusing, which turns the
+        `--slot A` assertion red;
+      - move the blob `os.replace` before the two sidecar replaces and
+        the ordering claim is no longer true, though nothing here sees
+        it -- that one is argued in the tool, not tested, because a boot
+        cannot observe the window and neither can this suite. Said out
+        loud rather than left as an untested assertion wearing a test's
+        clothes.
+
+    THE ACCEPTANCE DIRECTION IS HALF THIS TEST. Every refusal below is
+    satisfied by a tool that refuses everything, so the staged-and-
+    bootable case is what separates the guard from a brick wall --
+    `.claude/rules/plan.md`'s missing-direction rule, applied to a tool
+    instead of a checker."""
+    import shutil as _sh
+    slots = f"{WORK}/cand-slots"
+    _sh.rmtree(slots, ignore_errors=True)
+    os.makedirs(f"{slots}/A")
+    os.makedirs(f"{slots}/B")
+
+    live_city = f"{WORK}/cand-live.city"
+    open(live_city, "w").write(
+        f"house liveone {BIN}/unit-probe kind=oneshot lids=seccomp\n")
+    b = run(["python3", CC, "--city", live_city,
+             "--out", f"{slots}/A/plan.blob"])
+    expect(b.returncode == 0, f"bake live\n{b.out}{b.err}")
+    open(f"{slots}/current", "w").write("A\n")
+
+    live_before = open(f"{slots}/A/plan.blob", "rb").read()
+    cur_before = open(f"{slots}/current", "rb").read()
+
+    # A layer id this test owns. Removed first so "the directories exist"
+    # is paired with "they did not exist a moment ago" -- unpaired, it is
+    # satisfied by a previous run having made them.
+    lid = "l-cand-stage"
+    _sh.rmtree(f"{_layer_dir()}/{lid}", ignore_errors=True)
+    expect(not os.path.exists(f"{_layer_dir()}/{lid}"),
+           "the layer dir survived its own removal, so its later presence "
+           "would prove nothing")
+
+    cand_city = f"{WORK}/cand-new.city"
+    open(cand_city, "w").write(
+        f"house candone {BIN}/unit-probe kind=oneshot "
+        f"lids=newns,seccomp brick={'ab' * 32} layer={lid}\n")
+
+    stager = f"{ROOT}/tools/stage-candidate.py"
+    chk = f"{BIN}/nw-check"
+    g = run(["python3", stager, "--slots", slots, "--city", cand_city,
+             "--nw-check", chk])
+    expect(g.returncode == 0, f"staging a legal candidate must succeed, or "
+           f"every refusal below is satisfied by a tool that refuses "
+           f"everything\n{g.out}{g.err}")
+    expect("slot B" in g.out, f"the derived candidate should be B\n{g.out}")
+
+    # THE PROPERTY.
+    expect(open(f"{slots}/A/plan.blob", "rb").read() == live_before,
+           "the live plan changed while staging a candidate")
+    expect(open(f"{slots}/current", "rb").read() == cur_before,
+           "the stager wrote slots/current; switching is the operator's")
+
+    # The candidate is complete and validates on its own.
+    v = run([chk, f"{slots}/B/plan.blob"])
+    expect(v.returncode == 0, f"candidate does not validate\n{v.out}{v.err}")
+    expect(open(f"{slots}/B/plan.blob.layers").read().split() == [lid],
+           "candidate sidecar does not name the layer")
+    for leaf in ("upper", "work"):
+        expect(os.path.isdir(f"{_layer_dir()}/{lid}/{leaf}"),
+               f"the stager did not create {lid}/{leaf}")
+    expect(not [d for d in os.listdir(f"{slots}/B") if d.startswith(".")],
+           f"scratch left in the candidate slot: {os.listdir(f'{slots}/B')}")
+
+    # And the machine still boots the LIVE plan, candidate beside it.
+    rc, out = boot(extra=["--slots", slots], hold=900)
+    expect(city_closed(rc, out), f"boot through --slots rc={rc}\n{out}")
+    expect("house=liveone" in out, f"the live house did not run\n{out}")
+    expect("house=candone" not in out,
+           f"the CANDIDATE ran; staging is not supposed to switch\n{out}")
+
+    # Refusals, each by its reason rather than by exiting non-zero.
+    r = run(["python3", stager, "--slots", slots, "--city", cand_city,
+             "--slot", "A", "--nw-check", chk])
+    expect(r.returncode != 0 and "is the live slot" in (r.out + r.err),
+           f"staging over the live slot was not refused\n{r.out}{r.err}")
+
+    r = run(["python3", stager, "--slots", slots, "--city", cand_city,
+             "--slot", "../escape", "--nw-check", chk])
+    expect(r.returncode != 0
+           and "not a slot name pid1.c would accept" in (r.out + r.err),
+           f"a name pid1.c refuses was accepted\n{r.out}{r.err}")
+
+    cand_before = open(f"{slots}/B/plan.blob", "rb").read()
+    r = run(["python3", stager, "--slots", slots, "--city", cand_city,
+             "--nw-check", "/bin/false"])
+    expect(r.returncode != 0 and "nw-check refused" in (r.out + r.err),
+           f"an unvalidated candidate was staged\n{r.out}{r.err}")
+    expect(open(f"{slots}/B/plan.blob", "rb").read() == cand_before,
+           "a refused validation still overwrote the previous candidate")
+
+    os.replace(f"{slots}/current", f"{slots}/current.moved")
+    r = run(["python3", stager, "--slots", slots, "--city", cand_city,
+             "--nw-check", chk])
+    os.replace(f"{slots}/current.moved", f"{slots}/current")
+    expect(r.returncode != 0 and "cannot read" in (r.out + r.err),
+           f"an unreadable current did not refuse -- it must not default, "
+           f"or the tool overwrites whatever is running\n{r.out}{r.err}")
+
+    print(f"ok candidate-stager (derived slot B from current=A; live plan "
+          f"and current byte-identical; candidate validates and names "
+          f"{lid}; boot through --slots ran the live house and not the "
+          f"candidate; live-slot, bad-name, failed-validation and "
+          f"unreadable-current each refused by reason)")
+
+
 def test_specs_are_checked():
     """Run the two specs. Until 2026-09-11 nothing ever did.
 
@@ -4894,6 +5020,7 @@ def main():
         test_checker_rejects_crafted_binds,
         test_magic_moves_with_the_layout,
         test_old_magic_is_refused_as_magic,
+        test_candidate_stager_never_touches_the_live_slot,
         test_specs_are_checked,
         test_baker_writes_the_declared_layout,
         test_non_provision_at_max,

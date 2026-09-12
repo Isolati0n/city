@@ -6139,3 +6139,133 @@ Checked and clean in the same pass: the trimmed heading exemption and
 its sweep (four hits, all exempt), the historical claim about the
 defective sweep in both directions, and the ordinal-across-documents
 description.
+
+## 65. The candidate stager, and the closed-house decision it will serve (2026-09-12)
+
+Scratch-becomes-saved opened. The design: a house is closed, a helper
+folds its writable layer onto its sealed brick and packs a new brick,
+both bricks remain, and the helper then writes a **candidate** slot
+naming the new one. Saving is immediate; switching is deferred to the
+next boot.
+
+This section lands the stager, which is the deferred half and the piece
+A/B needs regardless — so it is built once and the helper calls it
+rather than growing a second copy that drifts.
+
+### The rule, stated the way that permits the thing we want
+
+The invariant that has actually held is **not** "nothing privileged runs
+live". It is **nothing changes what is running without going through
+validation and a boot**. The first version of that sentence was the
+other one, and it would have ruled out the helper the operator is
+asking for. `tools/stage-candidate.py` is written under the second: it
+produces only a slot nobody is booted from, runs `nw-check` on the bytes
+that will be renamed, and never writes `<slots>/current`.
+
+The guard is structural, not a convention: the tool reads `current` and
+refuses when the target names that slot. And it refuses when `current`
+is unreadable rather than defaulting — a default would make an
+unreadable `current` indistinguishable from a machine booted on B, and
+the tool would then overwrite the running plan. That refusal has a
+control: making it default to `A` turns the suite red.
+
+### Two things that fell out of building it
+
+**The candidate is derived from the tree, not from "A/B".** `pid1.c`
+accepts any `[A-Za-z0-9_-]` slot name, so a tool that assumed two would
+be wrong the day a third appeared — and wrong *silently*, by
+overwriting whichever it guessed. It lists the slot directories and
+refuses when the answer is not unique.
+
+**The order of the renames is the atomicity.** `pid1.c` opens
+`<slot>/plan.blob` and reads nothing else, so the blob is replaced
+last: a boot at any instant sees either the previous candidate complete
+or this one complete. The window where the sidecars are new and the
+blob is old is invisible to a boot and visible only to this tool and the
+harness. That claim is **argued in the tool and not tested** — control
+run, the reversed order leaves the suite green, because nothing the
+suite can do observes the window. Said out loud rather than left as an
+untested assertion wearing a test's clothes.
+
+### The new-layer-id consequence
+
+The folded brick already contains the old layer's contents, and
+`brick=` requires `layer=`. The candidate must therefore name a **new**
+layer id: reusing the old one stacks the just-folded content over
+itself, and the old layer's whiteouts re-delete files now baked into
+the brick. The old layer stays, because it belongs to the plan that is
+still running until the boot. Both remain, one level down from the
+bricks — which is what settles the stager's scope as the candidate
+slot, its plan, and the layer directories that plan names.
+
+### The closed-house decision, recorded before the helper exists
+
+The fold needs the house closed and must establish that itself, because
+a fold of a running house is the silent-wrong-artifact case: the image
+mounts, boots, and holds a half-written file, and nothing in the bytes
+says so.
+
+**The subject is the SUPERVISOR, not the house**, and that falls out of
+`nwsup.c` rather than being asserted. `nw-sup` exits in exactly three
+places — a oneshot that exited 0, a budget exhausted, and `stopping` —
+and otherwise loops and restarts. So "no supervisor for this unit" is
+precisely "this unit will not run again before the next boot", which is
+the fold's actual precondition. "The house process is not running" is
+not: a longrun house between restarts satisfies it and is about to
+write. That distinction is what makes the check correct rather than
+approximately correct, and it is the kind that gets simplified away by
+someone reading the code later, so the three exit paths belong in the
+comment and not just the conclusion.
+
+`nwspawn.c` sets `NW_LAYER` in the supervisor's environment and the
+house inherits it through `execv`, so one scan of `/proc/*/environ` for
+`NW_LAYER=<id>` covers both.
+
+**A second, independent scan of `/proc/*/mountinfo` for
+`upperdir=<layer>/upper`**, because a grandchild the house forked lives
+in the house's mount namespace, can still write the upper, and orphans
+are never reaped. Measured: a private-namespace overlay is invisible in
+the caller's own mountinfo and visible by scanning every pid; the hits
+go to zero the moment the namespace's last process exits, while the
+upper keeps its contents. One tempting check is ruled out — `work/work`
+survives unmount, so the workdir's presence is not a liveness signal.
+
+**Why the second scan is the right instrument and not a hedge.** The
+operator tested whether a process can scrub `NW_LAYER`: `clearenv()`
+does **not** remove it from `/proc/<pid>/environ`, because the kernel
+reads the original environment VMA rather than the live environment. So
+the ordinary way a process loses its environment leaves scan one
+intact, and the hole is narrower than "a process might clear its
+environment" — it takes raw writes into that memory region. Written
+this way deliberately: the loose phrasing invites the next reader to
+conclude scan one is unreliable in general and drop it.
+
+**Each scan is an absence assertion and needs its pairing**, or an
+unreadable `/proc` reads exactly like a closed house. Scan one's
+pairing is free and is the sharper design: the helper sets
+`NW_LAYER=<id>` in its own environment and requires the scan to find
+itself. Scan two's costs a fork — a child in its own namespace with a
+marker overlay — and is worth it, because it exercises the cross-pid
+read, the namespace visibility and the `upperdir=` parser together, and
+each of those could silently return nothing.
+
+**What closes the TOCTOU window is a property, not a lock:** a
+supervisor that has exited cannot come back, because PID 1 has no
+respawn path (invariant 1, pinned by `absent-in` annotations). If PID 1
+ever grows one, this check becomes a race **silently** — nothing would
+fail, the fold would just occasionally capture a live layer. That
+dependency belongs beside the helper when it lands.
+
+### Raised, not built
+
+The stager does not check that the bricks a candidate names exist under
+`NW_BRICK_DIR`. `nw-check` structurally cannot — it validates a blob,
+not a machine — so this is the stager's to own if anyone's, and the
+failure without it is bad in the design's own terms: the operator
+switches, reboots, and every brick house dies at `open brick image`
+after the decision is already made. It is not built here because
+enumerating bricks from the blob means a third copy of the unit layout,
+which is the drift class `.layers` exists to avoid; the symmetric fix
+is a `.bricks` sidecar from the baker. That is a baker change beyond
+the scope the operator set for the stager, so it is recorded rather
+than taken.
