@@ -58,14 +58,27 @@ The boundary that does matter here is not between files, it is **trust**:
   `nwcheck.c` and left the BIND loop reading `brick[0]`, and the CBMC
   caller proof too, so one plan in 256 was refused as `bind unit index` and
   would not boot until the brick's *contents* changed. Three reviewers
-  found it independently. Pinned at EVERY byte position, from both
-  directions, because pinning one end is what produced the bug twice:
+  found it independently. Pinned at EVERY byte position, **in both
+  directions**, and the phrase is exact rather than decorative:
   `test_checker_rejects_crafted_fields` crafts a blob per position and
-  requires a REJECTION, and `test_leading_zero_hash_is_a_brick` bakes a
-  plan per position and requires an ACCEPTANCE. Both are needed and
-  neither substitutes: the unit loop over-accepts when it is wrong, the
-  bind loop over-REJECTS, and no rejection test and no acceptance
-  postcondition (so no CBMC assertion either) can see an over-rejection. *(This paragraph said "`nwcheck.c` ORs the whole
+  requires a REJECTION; `test_leading_zero_hash_is_a_brick` bakes a plan
+  per position and requires an ACCEPTANCE; `test_checker_rejects_crafted_binds`
+  pins the bind rules and the bounds guard by their reason string; and
+  `test_leading_zero_hash_reaches_the_supervisor` boots one, because
+  `nwspawn.c` reads the field too and decides whether a house gets its
+  brick at all.
+
+  **Neither direction substitutes for the other, and this is the thing to
+  carry to the next field.** The unit loop over-ACCEPTS when it is wrong
+  and a rejection test catches that. The bind loop over-REJECTS, and
+  nothing in the rejection direction can see it: a rejection test is
+  satisfied by a rejection for any reason at all, an acceptance
+  postcondition is vacuous because the plan never reaches acceptance, and
+  CBMC cannot assert over a path not taken — measured, the defect passed
+  the caller proof and a *corrected* assertion passed it too. The only
+  instrument for an over-rejection is a legal plan that must be accepted.
+  That was a missing DIRECTION, not a missing test, which is why it was
+  invisible while every individual brick test was sound. `HISTORY.md` §53. *(This paragraph said "`nwcheck.c` ORs the whole
   field" while one of its two sites did not — a present-tense rule stating
   as done the thing that was half-done, in the file the hook hands the next
   agent to edit that file.)*

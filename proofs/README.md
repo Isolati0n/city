@@ -45,7 +45,11 @@ a checker that answers `NW_E_DUPNAME` to everything satisfies the first one.
   inside `if (r == NW_OK) { ... }`, so the whole harness expresses
   *accepted implies P* and nothing else. **No defect that makes `nw_check`
   refuse a plan it should accept is expressible here**, however it is
-  written, because a rejection cannot violate an acceptance postcondition.
+  written: the property is about **a path not taken**, and a rejection
+  cannot violate an acceptance postcondition. An over-strict checker
+  accepts a strict subset, so every blob it accepts satisfies every
+  post-condition here for free — it is not that the assertions are weak,
+  it is that soundness is the wrong half.
 
   Measured 2026-09-12, not reasoned: `nwcheck.c`'s bind loop tested
   `brick[0]` instead of scanning the hash, refusing one legal plan in 256.

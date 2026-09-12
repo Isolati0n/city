@@ -378,6 +378,14 @@ count. Record a completed review with `--record <agent>`.
 | a speed or scale claim was made | `measurement` | never report a single sample |
 | any diff, before writing the report | `make prereport` | not an agent; five shapes that have each cost a round |
 
+**`make prereport`'s calibration number: four, on `4e22204`'s diff.** Keep
+a number here and change it when the patterns change. A heuristic tool
+without a stated expectation is unfalsifiable in use — you cannot tell a
+clean run from a broken matcher. The `which`-matches-English false
+positive that shipped in the first version was found *only* because the
+expected count was four and the run said seven; three rounds of using it
+had not surfaced it.
+
 **Run `make prereport` before you write the report.** It reads the diff
 you are about to report on and asks five questions that have each cost a
 review round here: a comment claiming a mechanism is load-bearing, an
@@ -610,6 +618,38 @@ Two corollaries worth stating, because both have been got wrong:
   `O_CLOEXEC` is dropped and stays green if the `close()` calls are dropped;
   only removing both fails it. Ask what single change would still leave it
   passing.
+- **A test has a DIRECTION, and a suite can be blind in one while looking
+  thorough from either side.** A rejection test is satisfied by a
+  rejection for any reason at all; an acceptance postcondition says
+  *accepted implies P* and is vacuous when the input never reaches
+  acceptance; and CBMC cannot assert over a path not taken, so a
+  soundness harness is blind to an over-strict checker by construction —
+  it accepts a strict subset, and every blob it accepts satisfies every
+  post-condition for free. So **the only instrument that detects an
+  over-rejection is a legal input that must be accepted.**
+
+  `nwcheck.c`'s bind loop refused one legal plan in 256 and every one of
+  those three missed it, including a test written about that exact field.
+  That is not a missing test — a missing test is visible by reading the
+  list. It is a **missing direction**, and it is invisible from either
+  side, because the tests that exist are sound, controlled, and pass for
+  the right reasons in the direction they cover. `HISTORY.md` §53.
+
+  So ask of any check, beside *what single change would leave this
+  passing*: **which direction is this test in, and what covers the other
+  one?**
+
+- **A fix is a change like any other and inherits the same standard.**
+  Phase 3 produced three fixes in a row, each tested, each with a control
+  run and quoted, and each defective in a way the previous fix
+  introduced: a shared-helper fold that turned a proof into an identity,
+  an enumeration that pinned a loop the crafted cases never reached, and
+  a repair that left a TCB bounds guard deletable green. Every one was
+  caught by the next round and none by reading. The output of a review
+  round is **unreviewed code**; re-dispatching against the fixes is not
+  belt-and-braces, it is this rule applied once more. "It fixes a
+  reviewer's finding" is not evidence about the fix. `HISTORY.md` §53.
+
 - **Silence is the expensive failure, not noise.** A mechanism that is
   correct and routed around is worse than a broken one, because it looks
   like it is working. The first `tools/rules-hook.sh` matched only

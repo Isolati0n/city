@@ -4664,3 +4664,85 @@ No figure now, in `HISTORY.md`, `CLAUDE.md` or `nwsup.c`. The durable claim
 is what the control demonstrates: **the test goes red and names the
 shortfall.** Anyone who wants a distribution runs it and quotes their own
 load.
+
+## 53. The missing direction, and three fixes that each broke the next (2026-09-12)
+
+Two findings from the phase 3 review rounds are worth more than the
+defects that produced them. Both are about the shape of the *suite*
+rather than the shape of the code.
+
+### A suite can be complete in one direction and blind in the other
+
+The round-1 HIGH was in `nwcheck.c`'s bind loop, and it made the checker
+**over-reject**: one legal plan in 256 was refused. Work through what
+could have caught it.
+
+- **A rejection test cannot.** A rejection test is satisfied by a
+  rejection *for any reason at all*. The defect produces a rejection, so
+  every rejection test in the file is satisfied by the broken checker —
+  including one written specifically about that field.
+- **An acceptance postcondition cannot.** It says *accepted implies P*,
+  and the plan never reaches acceptance. There is no state in which the
+  property is false.
+- **CBMC cannot assert over it, for the same reason.** The property is
+  about **a path not taken**. `caller_nw_check.c` is a soundness harness;
+  an over-strict checker accepts a strict subset, so every blob it
+  accepts satisfies every post-condition for free. Measured both ways:
+  the defect passes the proof, and a *corrected* assertion passes it too.
+
+So the only instrument that detects an over-rejection is **a legal plan
+that must be accepted**, and the suite had none for that field.
+
+**That is not a missing test. It is a missing direction.** The distinction
+is the whole finding: a missing test is a gap you can see by reading the
+list, and a missing direction is invisible from either side, because the
+tests that exist are thorough, are controlled, and pass for the right
+reasons — in the direction they cover. Every one of the brick tests was
+sound. Collectively they could not see half the failure space.
+
+The fix is recorded as *both directions enumerated*, not as *acceptance
+cases added*, and the wording matters. `test_checker_rejects_crafted_fields`
+crafts a blob per byte position and requires a **rejection**;
+`test_leading_zero_hash_is_a_brick` bakes a plan per byte position and
+requires an **acceptance**. Neither substitutes for the other and neither
+is redundant: the unit loop over-accepts when it is wrong, the bind loop
+over-rejects, and no single direction covers both.
+
+The question to carry to the next field, beside *"what single change would
+leave this passing?"*: **"which direction is this test in, and what covers
+the other one?"**
+
+### Three fixes, each defective in a way the previous fix introduced
+
+Stated as its own entry because the sequence is the argument.
+
+1. The bind site read `brick[0]`. **Fix:** fold the five open-coded copies
+   into one `nw_unit_has_brick()` in `blob.h`, and point the proof at it
+   too. **Defect introduced:** the proof's assertion became an identity —
+   a property about the function, checked using the function — so a
+   mutation of the helper itself was no longer visible to it. `control`.
+2. **Fix:** open-code the proof's copy again, and enumerate one crafted
+   case per byte position so no single position is the pinned one.
+   **Defect introduced:** the crafted cases clear NEWNS to force a
+   rejection, so `nw_check` returns from the *unit* loop and never reaches
+   the binds. The enumeration pinned the loop that was never broken.
+   `tcb-review`.
+3. **Fix:** acceptance cases per byte position, which reach the bind loop.
+   **Defect remaining:** the bind loop's other rule and its
+   `b[i].unit >= h->n_units` **bounds guard** — a TCB out-of-bounds-read
+   check — were both deletable with `make test` green, because no test had
+   ever asserted `bind unit index`. `control`.
+
+Each fix was tested. Each had a control that was run and quoted. Each was
+wrong in a way only the next round found.
+
+**A fix is a change like any other and inherits the same standard.** It
+needs its own control, its own review, and the same question asked of it
+that was asked of the code it repairs — and the answer "it fixes a
+reviewer's finding" is not evidence about the fix. This project already
+knew that reviewing *before* pushing beats reviewing after; what it did
+not have written down is that the output of a review round is itself
+unreviewed code, and that re-dispatching against the fixes is not
+belt-and-braces but the same rule applied once more.
+
+It is also the argument for the rounds. Nothing here was found by reading.
