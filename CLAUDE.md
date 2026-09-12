@@ -552,6 +552,19 @@ Two habits follow from this:
   output. A bug *identifier* (bug 5, bug 13) is a name, not a count, and is
   fine. The one place a count belongs is inside a test assertion, where being
   wrong makes something fail instead of quietly misleading a reader.
+
+  **And a count survives review in a way a wrong fact does not.** On
+  2026-09-12 a report listed three annotatable invariants correctly and
+  then summarised them as four in the next sentence; the reviewer read
+  both, replied "the four annotatable invariants", and the wrong number
+  was now in two places written by two parties. Neither counted. A
+  reviewer checks claims against the code, and a count is not a claim
+  about the code — it is a claim about the list directly above it, which
+  is exactly the thing a reader's eye slides over because it was just
+  read. **That is what makes a miscount durable: not making it, having
+  it repeated.** Every other defect in this file's record was found by
+  somebody re-running something; this one round-tripped through a
+  reviewer whose job was to catch it.
 - **When something is removed, re-file the rule rather than deleting it.**
   Move it to kind 2 or kind 3 with the reasoning intact. A rule deleted is a
   rule someone re-derives badly later.
