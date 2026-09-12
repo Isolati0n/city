@@ -1,0 +1,16 @@
+# Plan format ledger. One row per NW_MAGIC ever shipped, with a hash
+# over blob.h's declared layout: every NW_AT / NW_EXTENT / NW_TYPE /
+# NW_ARR_TYPE and every struct-size assert, whitespace normalised.
+#
+# APPEND, NEVER EDIT. Editing a row to match a changed layout is
+# exactly the defect this file exists to catch: it is what a
+# _Static_assert invites, because the assert lives in the file the
+# person is already editing and the obvious fix is to make it agree.
+# A row that is already written down cannot be satisfied that way.
+#
+# Rows before NWPLAN07 are absent because no signature was recorded
+# at the time -- do not back-fill them by checking out an old tree
+# and hashing it, because that certifies a layout nobody verified.
+# The ledger starts where it starts.
+
+NWPLAN07 7416d2cfdb64ccebd7e05909d442da516b90349b03e384b9079cfe1fdedf955d

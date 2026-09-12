@@ -159,9 +159,18 @@ int main(void)
              *
              * plan.md's LargestCityFits lesson, arriving in proofs/: two
              * predicates that agree throughout the legal range cannot pin
-             * each other. What stops THIS copy drifting from the header is
-             * the compiler -- the harness includes blob.h, so a change to
-             * the field's width or type is a build error here. */
+             * each other.
+             *
+             * WHAT STOPS THIS COPY DRIFTING FROM THE HEADER: the WIDTH
+             * tracks because both spell NW_BRICK_HASH. The TYPE does not
+             * track from here at all -- this said "a change to the field's
+             * width or type is a build error here", and `control` retyped
+             * brick to char[32], updated blob.h's own NW_ARR_TYPE to match
+             * and every caller proof passed. The type is pinned by
+             * NW_ARR_TYPE in blob.h, a different mechanism in a different
+             * file, and by the ledger test in tests/run.py. A sentence
+             * crediting the compiler with a check it does not perform, in
+             * the file written to be the independent oracle. */
             int has_brick = 0;
             for (int i = 0; i < NW_BRICK_HASH; i++)
                 has_brick |= u[k].brick[i];

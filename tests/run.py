@@ -1955,9 +1955,24 @@ def test_path_traversal_refused():
     # validator accepted it. The `ok` line below claimed the baker's refusal
     # "stands in its place" for the deleted traversal case, and the test did
     # not check the thing the line claimed.
+    # LENGTH AND ALPHABET SEPARATELY, because every case here used to fail
+    # on LENGTH alone -- 36, 19 and 12 characters, none of them 64 -- so
+    # the charset clause was never consulted and `control` deleted either
+    # half of `_is_hex64` with the suite green. What each removal costs,
+    # measured: without the charset, a 64-character traversing path dies
+    # inside bake() at `bytes.fromhex` as an unhandled ValueError, which is
+    # a refusal degraded to a traceback; without the length, the baker
+    # SUCCEEDS and writes a short blob that nw-check rejects as `size` --
+    # a true rejection under a false reason, the shape
+    # old-magic-refused-as-magic exists to prevent.
+    NBH = int(blob_h("NW_BRICK_HASH")) * 2
     for path, what in ((f"{STAGE}/nw/bricks/deadbeef/../..", "a traversing path"),
                        (f"{_brick_dir()}/deadbeef", "a clean absolute path"),
-                       ("deadbeef.img", "a bare filename")):
+                       ("deadbeef.img", "a bare filename"),
+                       ("/nw/bricks/" + "a" * (NBH - 11), "a path of exactly "
+                        "the hash length, so only the alphabet can refuse it"),
+                       ("dead", "a short all-hex value, so only the length "
+                        "can refuse it")):
         open(esc, "w").write(
             f"house one /bin/brick kind=oneshot lids=newns,seccomp "
             f"brick={path}\n")
@@ -2854,6 +2869,228 @@ def test_checker_rejects_crafted_fields():
                f"\n{r.out}{r.err}")
     print(f"ok checker-rejects-crafted (every illegal kind and lid bit "
           f"refused on unit {VICTIM} of {NUNITS}, every legal one accepted)")
+
+
+def test_leading_zero_hash_reaches_the_supervisor():
+    """A house whose brick hash begins 0x00 must still be given its brick.
+
+    THE CHECKER IS NOT THE ONLY READER. nwspawn.c decides what goes into
+    NW_BRICK, and it asked the same "does this unit have a brick" question
+    -- so the round-1 defect had a third site, and that one decides
+    whether a house boots in its brick or on the machine root. It is
+    behind the shared predicate now, but nothing BOOTED a leading-zero
+    hash: `control` open-coded that site back to brick[0] and the whole
+    suite stayed green, because no brick image in the tree happened to
+    hash to a leading zero. A 255-in-256 pass, seeded by the build.
+
+    Deterministic here because the hash need not name a real image. The
+    baker accepts any 64 hex characters that are not all zero, so a
+    00-leading hash that matches nothing is a legal plan, and what it
+    proves is the handoff rather than the mount:
+
+      correct   -- NW_BRICK is set, nw-sup composes the path, the image is
+                   not there, the house DIES at `open brick image`
+      brick[0]  -- NW_BRICK is "", nw-sup sees no brick, and the house
+                   RUNS, unconfined, on the machine root, exiting 0
+
+    PAIRED, and the pairing is the whole test: asserting the death alone
+    is satisfied by a city that never booted. So the probe's own line must
+    be ABSENT and the death must be PRESENT, and a second house with a
+    dense hash must fail the same way -- otherwise a supervisor that
+    refuses every brick would pass."""
+    NB = int(blob_h("NW_BRICK_HASH"))
+    city = f"{WORK}/lzboot.city"
+    blob = f"{WORK}/lzboot.blob"
+    open(city, "w").write(
+        f"house zerolead {BIN}/unit-probe kind=oneshot "
+        f"lids=newns brick={'00' + 'ab' * (NB - 1)}\n"
+        f"house denselead {BIN}/unit-probe kind=oneshot "
+        f"lids=newns brick={'ab' * NB}\n")
+    b = run(["python3", CC, "--city", city, "--out", blob])
+    expect(b.returncode == 0, f"bake\n{b.out}{b.err}")
+    rc, out = boot(plan=blob, hold=900)
+    expect(city_closed(rc, out), f"lzboot rc={rc}\n{out[-2000:]}")
+    for name in ("zerolead", "denselead"):
+        expect(f"house={name}" not in out,
+               f"{name} RAN. Its plan declares a brick, so a house that "
+               f"reaches its exec path is a house on the machine root "
+               f"while the plan says it is in a brick\n{out[-2000:]}")
+    expect(out.count("open brick image") >= 2,
+           f"both houses must die composing a path to an image that is "
+           f"not there -- without this the absences above are satisfied "
+           f"by a city that never booted\n{out[-2000:]}")
+    print("ok leading-zero-hash-reaches-the-supervisor (a 00-leading and "
+          "a dense hash both reach nw-sup as NW_BRICK and both die at the "
+          "open; neither house runs unbricked)")
+
+
+def test_checker_rejects_crafted_binds():
+    """Each bind rule in nw_check, crafted, with the reason asserted.
+
+    NEITHER WAS PINNED BY ANYTHING IN make test. `control` deleted the
+    bind-implies-brick rule and the suite was green; deleted the
+    `b[i].unit >= h->n_units` BOUNDS CHECK -- a TCB out-of-bounds read
+    guard -- and the suite was green. `grep` for `bind unit index` across
+    the suite returned one hit, in a docstring. The CBMC harness catches
+    both, but `make proof` is not part of `make test` and is tens of
+    minutes, so a change deleting either line ships green.
+
+    Crafted rather than baked because the baker refuses both at bake time,
+    which is the arrangement plan.md forbids relying on: a blob can arrive
+    from anywhere and the runtime rule has to be in nwcheck.c too.
+
+    The out-of-range case asserts the REASON, not just a non-zero exit.
+    With the bounds check gone, nw_check reads u[0xFFFF] -- a wild pointer
+    -- and whatever happens then (a crash, a garbage verdict) will not
+    print `bind unit index`, so the reason assertion is what makes the
+    case bite rather than the exit code."""
+    NAME, PATH, BRICK = (int(blob_h(x)) for x in
+                         ("NW_NAME_LEN", "NW_PATH_LEN", "NW_BRICK_HASH"))
+    HDR, USZ = 20, NAME + PATH + BRICK + 4
+    BSZ = 2 + PATH
+    city = f"{WORK}/cbind.city"
+    good = f"{WORK}/cbind-ok.blob"
+    # Unit 0 has a brick and the bind; unit 1 has none. Both legal.
+    open(city, "w").write(
+        f"house b0 /bin/true kind=oneshot lids=newns,seccomp "
+        f"brick={'ab' * BRICK} bind=/etc\n"
+        f"house b1 /bin/true kind=oneshot lids=seccomp\n")
+    p = run(["python3", CC, "--city", city, "--out", good])
+    expect(p.returncode == 0, f"bake\n{p.out}{p.err}")
+    base = bytearray(open(good, "rb").read())
+    NUNITS, NBINDS = 2, 1
+    expect(len(base) == HDR + NUNITS * USZ + NBINDS * BSZ,
+           f"layout: {len(base)} bytes")
+    BIND0 = HDR + NUNITS * USZ
+    expect(struct.unpack_from("<H", base, BIND0)[0] == 0,
+           "the bind does not name unit 0 where the layout says")
+
+    def craft(why, edits):
+        d = bytearray(base)
+        for off, val in edits:
+            d[off] = val
+        d[16:20] = b"\x00\x00\x00\x00"
+        d[16:20] = struct.pack("<I", zlib.crc32(bytes(d)) & 0xFFFFFFFF)
+        path = f"{WORK}/cbind-{why}.blob"
+        open(path, "wb").write(bytes(d))
+        return path
+
+    cases = [
+        # Out of range. u[0xFFFF] is a wild read without the bounds check.
+        ("unit-oob", [(BIND0, 0xFF), (BIND0 + 1, 0xFF)],
+         "a bind naming a unit that does not exist"),
+        # In range, but that unit has no brick -- so there is no root to
+        # bind into. Repointed at unit 1, whose brick is all-zero.
+        ("unit-brickless", [(BIND0, 1), (BIND0 + 1, 0)],
+         "a bind on a unit with no brick"),
+    ]
+    for why, edits, what in cases:
+        r = run([f"{BIN}/nw-check", craft(why, edits)])
+        expect(r.returncode != 0, f"nw-check accepted {what}\n{r.out}{r.err}")
+        expect("bind unit index" in (r.out + r.err),
+               f"wrong reason for {what} -- a rejection for another reason "
+               f"would satisfy a returncode check and pin nothing"
+               f"\n{r.out}{r.err}")
+
+    # The pairing: unmodified, both rules satisfied, must be ACCEPTED --
+    # otherwise both rejections are satisfied by a checker that refuses
+    # every blob carrying a bind.
+    r = run([f"{BIN}/nw-check", good])
+    expect(r.returncode == 0,
+           f"nw-check rejected a legal plan with a bind\n{r.out}{r.err}")
+    print("ok checker-rejects-crafted-binds (an out-of-range unit and a "
+          "bind on a brickless unit, each refused naming the bind index; "
+          "the legal plan with a bind still accepted)")
+
+
+LAYOUT_DECL = re.compile(
+    r"^\s*(?:NW_AT|NW_EXTENT|NW_TYPE|NW_ARR_TYPE)\s*\([^)]*\)\s*;"
+    r"|^\s*_Static_assert\s*\(\s*sizeof\s*\(\s*struct\s+nw_\w+\s*\)[^;]*;",
+    re.M)
+
+
+def _layout_signature():
+    """A hash over blob.h's declared layout: every NW_AT / NW_EXTENT /
+    NW_TYPE / NW_ARR_TYPE and every struct-size assert, whitespace
+    normalised and sorted. Comments and prose do not move it; an offset, a
+    width, a member type or a struct size does."""
+    src = open(os.path.join(ROOT, "blob.h")).read()
+    decls = sorted(" ".join(m.group(0).split())
+                   for m in LAYOUT_DECL.finditer(src))
+    expect(len(decls) > 8,
+           f"only {len(decls)} layout declarations found in blob.h -- the "
+           f"pattern has stopped matching and this test would pass by "
+           f"hashing almost nothing")
+    return hashlib.sha256("\n".join(decls).encode()).hexdigest(), decls
+
+
+def test_magic_moves_with_the_layout():
+    """NW_MAGIC and the layout must move together, in BOTH directions.
+
+    This is the rule the 05 -> 06 bump was made for and nothing enforced
+    it. `control` demonstrated both failures against a green suite:
+
+      - Retype `brick` from uint8_t[32] to char[32] -- a TCB field's
+        declared MEANING changed, same bytes -- update blob.h's own
+        NW_ARR_TYPE so the assert agrees (which is the obvious response to
+        the build error, and is a second hand-written copy of the
+        declaration in the same file), add the cast in nwspawn.c that a
+        retyper would add, and `make test` is green with NW_MAGIC
+        untouched.
+      - Bump NWPLAN07 to NWPLAN08 with no layout change at all: green.
+        test_old_magic_is_refused_as_magic derives `old = magic - 1`, so it
+        SLIDES -- after the bump it certifies the refusal of the magic that
+        was current a moment before. It passes for every value of the
+        constant and every layout.
+
+    A `_Static_assert` cannot pin this: it lives in the file the retyper is
+    editing, and the fix for a failing one is to edit it. So the pin is a
+    STORED ARTIFACT -- a ledger of (magic, layout signature) pairs checked
+    into the tree, which a layout change cannot silently satisfy because
+    the previous rows are already written down.
+
+    Both directions are checked. A changed layout under a known magic is
+    the defect the bump exists to prevent; an unchanged layout under a new
+    magic is a version number that means nothing, which is the same lie
+    from the other side."""
+    magic = blob_h("NW_MAGIC").strip('"')
+    sig, decls = _layout_signature()
+    path = os.path.join(ROOT, "plan-formats.txt")
+    rows = {}
+    for line in open(path):
+        line = line.split("#", 1)[0].strip()
+        if not line:
+            continue
+        m, h = line.split()
+        rows[m] = h
+
+    if magic in rows and rows[magic] != sig:
+        expect(False,
+               f"THE LAYOUT MOVED AND {magic} DID NOT.\n"
+               f"  plan-formats.txt records {magic} = {rows[magic][:16]}\n"
+               f"  blob.h now declares        {sig[:16]}\n"
+               f"A blob of the old layout and one of the new both claim to "
+               f"be {magic}, and only the size check tells them apart -- "
+               f"which fails the moment a change keeps the size, as a "
+               f"retype does. Bump NW_MAGIC and add a row; do not edit the "
+               f"existing one.\n"
+               f"  layout now: " + "\n              ".join(decls))
+    for other, h in rows.items():
+        if h == sig and other != magic:
+            expect(False,
+                   f"{magic} IS A NEW NAME FOR THE {other} LAYOUT.\n"
+                   f"The signature is identical, so nothing about a plan "
+                   f"has changed and every {other} blob is byte-compatible. "
+                   f"A version bump that means nothing teaches a reader "
+                   f"that the version means nothing.")
+    expect(magic in rows,
+           f"{magic} IS NOT IN plan-formats.txt. A new magic has to be "
+           f"recorded or the ledger stops covering the current format -- "
+           f"and the next layout change under it goes unnoticed.\n"
+           f"  append this line:\n    {magic}  {sig}")
+    print(f"ok magic-moves-with-layout ({magic} matches its recorded "
+          f"signature over {len(decls)} declarations; "
+          f"{len(rows)} format(s) in the ledger)")
 
 
 def test_old_magic_is_refused_as_magic():
@@ -4013,6 +4250,9 @@ def main():
         test_path_traversal_refused, test_dupname_refused,
         test_blob_size_ceiling,
         test_checker_rejects_crafted_fields,
+        test_leading_zero_hash_reaches_the_supervisor,
+        test_checker_rejects_crafted_binds,
+        test_magic_moves_with_the_layout,
         test_old_magic_is_refused_as_magic,
         test_specs_are_checked,
         test_baker_writes_the_declared_layout,

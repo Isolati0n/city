@@ -1,6 +1,6 @@
 # prereport acks. An ack is a claim that someone looked; it is NOT a fix.
 # Format: shape<TAB>file<TAB>text   (# lines carry the reason)
-# Regenerated 2026-09-12 against `git diff 4e22204` (phase 3, both review rounds).
+# Regenerated 2026-09-12 against `git diff 4e22204` (phase 3, all review rounds).
 #
 # These keys are the exact added-line TEXT, so rewrapping a line silently
 # un-acks it and it comes back as a live finding. That is the intended
@@ -13,12 +13,16 @@ mechanism-claim	blob.h	* function. The type assert is what stops it quietly beco
 mechanism-claim	tests/run.py	# BOTH SHAPES, and the CLEAN one is the load-bearing case. A traversing
 # false positive: prose in a docstring, not an assertion
 unpaired-absence	bakery/nw-cc.py	checked here as well as in nwcheck.c because the baker is not in the TCB
-# prose and guards, except expect('brick hash' not in out) which IS paired -- the next line asserts 'open brick image' in out, the positive that the guard was reached and passed
+# prose, guards, and two PAIRED absences: expect('brick hash' not in out) is followed by expect('open brick image' in out), and expect('house=NAME' not in out) by expect(out.count('open brick image') >= 2) -- in both the positive is the evidence the code under test ran
 unpaired-absence	tests/run.py	if plen is None:
-# prose and guards, except expect('brick hash' not in out) which IS paired -- the next line asserts 'open brick image' in out, the positive that the guard was reached and passed
+# prose, guards, and two PAIRED absences: expect('brick hash' not in out) is followed by expect('open brick image' in out), and expect('house=NAME' not in out) by expect(out.count('open brick image') >= 2) -- in both the positive is the evidence the code under test ran
 unpaired-absence	tests/run.py	THE IMAGE LANDS ON THE MACHINE ROOT, not in the stage, and that is
-# prose and guards, except expect('brick hash' not in out) which IS paired -- the next line asserts 'open brick image' in out, the positive that the guard was reached and passed
+# prose, guards, and two PAIRED absences: expect('brick hash' not in out) is followed by expect('open brick image' in out), and expect('house=NAME' not in out) by expect(out.count('open brick image') >= 2) -- in both the positive is the evidence the code under test ran
 unpaired-absence	tests/run.py	expect("brick hash" not in out,
+# prose, guards, and two PAIRED absences: expect('brick hash' not in out) is followed by expect('open brick image' in out), and expect('house=NAME' not in out) by expect(out.count('open brick image') >= 2) -- in both the positive is the evidence the code under test ran
+unpaired-absence	tests/run.py	expect(f"house={name}" not in out,
+# prose, guards, and two PAIRED absences: expect('brick hash' not in out) is followed by expect('open brick image' in out), and expect('house=NAME' not in out) by expect(out.count('open brick image') >= 2) -- in both the positive is the evidence the code under test ran
+unpaired-absence	tests/run.py	f"{magic} IS NOT IN plan-formats.txt. A new magic has to be "
 # not a count -- the claim is that the hash becomes text exactly once, which is the phase-3 argument, pinned by test_brick_hash_revalidated_at_the_supervisor
 prose-count	nwspawn.c	* handoff is the one place the hash becomes text again, and
 # same claim as nwspawn.c, same pin
