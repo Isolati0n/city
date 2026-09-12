@@ -908,9 +908,25 @@ piece of work, or to stop paying for edges. This is the second.
 
 ### What was deleted
 
-Files: `electrician.c`, `electrician.rs`, `electrician.zig`, `houses/talk.c`,
+Files: `electrician.rs`, `electrician.zig`, `houses/talk.c`,
 `houses/listen.c`, `houses/hub.c`, `houses/ident.c`, `tests/wire_order.py`,
 `tests/bakeoff.py`, `.claude/agents/electrician.md`.
+
+**`electrician.c` was on this list and should not have been.** Git records
+`rename electrician.c => nwspawn.c (58%)` for this commit, and `nwspawn.c`
+first appears in it: the C electrician was not deleted, it *became* the
+spawner that is in the TCB today. Corrected 2026-09-12, when an attic was
+built from this list and the recovery command for that entry turned out to
+be recovering a file whose lineage continues.
+
+**Recoverable from here, and now also findable:** `attic/` holds
+`electrician.c`, `electrician.rs`, `electrician.zig`, `bakeoff.py` and
+`nwsup.rs` at their last state in the tree, with a README explaining what
+each was and why it is kept. Nothing there is on a build path. The reason
+for keeping them is that a hash in a history file is not a thing anyone
+finds — `tests/bakeoff.py` in particular is the instrument that produced
+"the TCB stays C, and twins are evidence rather than mayors", a conclusion
+this file records while the tool behind it was gone.
 
 Format: `struct nw_edge`, `nw_edges()`, `n_edges`, `NW_MAX_EDGES`, the `ne`
 argument to `NW_BLOB_SIZE`. Magic bumped `NWPLAN02` → `NWPLAN03`, so an old
