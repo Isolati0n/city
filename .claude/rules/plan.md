@@ -176,7 +176,29 @@ byte-identical.
 
 Each *is* pinned against a second hand-written copy in its own file:
 `assert FdArithmetic` for Alloy, `FdNeedAgrees` for TLC, and each turns
-`make test` red on its own. That is a weaker pin and a real one, and
+`make test` red on its own.
+
+**Do not audit this with a grep for one spelling.** The same symbol is
+written four ways and the multiplier two, so the obvious search finds
+half of it:
+
+```
+$ grep -rln FD_RESERVED blob.h bakery/nw-cc.py plan.als Plan.tla
+blob.h
+bakery/nw-cc.py
+```
+
+`blob.h` has `NW_FD_RESERVED`, the baker `FD_RESERVED`, `plan.als`
+`nwReserved[]`, `Plan.tla` `Reserved`; the multiplier is `* 2` in three
+places and `2.mul[...]` in Alloy. Read the sites, do not search for a
+name. This was got wrong twice in one exchange on 2026-09-12 — once by
+concluding the arithmetic had shrunk to two places, and once by
+concluding `Plan.tla` had dropped it, which `sed -n 42p Plan.tla`
+disproves.
+
+And when you count them, **`plan.als:137` and `Plan.tla:152` are not
+sites.** They are the deliberate second copies that pin the other two;
+counting them as drift is flagging the guard. That is a weaker pin and a real one, and
 "nothing pins it" — written here for one round without the preposition
 — reads as licence to change a spec to match a `* 3` header and then be
 surprised by a red suite.
