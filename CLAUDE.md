@@ -844,6 +844,37 @@ Two corollaries worth stating, because both have been got wrong:
   `O_CLOEXEC` is dropped and stays green if the `close()` calls are dropped;
   only removing both fails it. Ask what single change would still leave it
   passing.
+- **A claim with parts is covered when every part is, and reads as
+  covered when one is.** Invariant 6 claims "no device nodes, sockets or
+  fifos". The fixture probed the first noun; granting `MAKE_FIFO` or
+  `MAKE_SOCK` at the root left the suite green. That was found, a fifo
+  probe was added — and the socket still was not, so the same claim was
+  half-covered twice in a row. The general case is worse: of the rights
+  the lid withholds at a house's root, `MAKE_REG`, `MAKE_CHAR`,
+  `MAKE_FIFO`, `MAKE_SOCK` and `TRUNCATE` were probed while
+  `MAKE_DIR`, `MAKE_SYM`, `MAKE_BLOCK`, `REMOVE_FILE` and `REMOVE_DIR`
+  changed no field any fixture emitted, so adding any of them back to
+  the grant passed. **`MAKE_BLOCK` was named in the failure string of
+  the assertion standing beside it**, whose probe was char-only — the
+  sentence and the check disagreeing inside one `expect()`. `control`.
+
+  So when a claim enumerates, enumerate the probe. The reading to
+  distrust is the one where a claim's *first* item is tested and the
+  claim's name goes green.
+
+- **The word-versus-symbol trap is not only an annotation problem.** A
+  `checkbrief` annotation must name a symbol rather than an English
+  word, because prose produces hits. The same failure arrives in a
+  fixture as a *comment standing in for a probe*: "REMOVE_FILE is
+  withheld precisely so the house cannot unlink its own exec path" was
+  the premise the whole truncate argument rested on, in several files,
+  and `grep` for `unlink` in the fixture returned exactly one hit — a
+  comment, explaining why the probe was absent, for a reason (the
+  seccomp allow-list) that applies to a house the test does not boot.
+  A true comment, in the right file, answering a question nobody asked.
+  `control` found it by grepping for the behaviour and reading what came
+  back rather than counting the hits.
+
 - **A test has a DIRECTION, and a suite can be blind in one while looking
   thorough from either side.** A rejection test is satisfied by a
   rejection for any reason at all; an acceptance postcondition says
@@ -877,19 +908,40 @@ Two corollaries worth stating, because both have been got wrong:
   reviewer's finding" is not evidence about the fix. `HISTORY.md` §53.
 
 - **A rule is at its weakest in the change that introduces it**, because
-  the author is thinking *about* the rule rather than *applying* it. Three
-  times now: the log-chunk rule was broken by an assertion written on the
-  logger's prefix in the same round the rule was restated; `unit_layout()`
-  was written to retire "an offset error wearing a rule violation's
-  message" and read the source tree while its neighbour reads the stage,
-  reproducing that exact message one level down; and the fixture probing
-  whether a layer is writable wrote its byte over `/id`, the file every
-  other assertion in that test reads.
+  the author is thinking *about* the rule rather than *applying* it. The
+  record, and it keeps growing — the log-chunk rule was broken by an
+  assertion written on the logger's prefix in the same round the rule was
+  restated; `unit_layout()` was written to retire "an offset error wearing
+  a rule violation's message" and read the source tree while its
+  neighbour reads the stage, reproducing that exact message one level
+  down; the fixture probing whether a layer is writable wrote its byte
+  over `/id`, the file every other assertion in that test reads; the
+  commit that narrowed the Landlock claim left `lid_landlock()`'s own
+  docstring asserting the opposite; and the commit that added
+  `harness.md`'s "reset once per run" section added bind-side probes to a
+  directory nothing resets, so a second run of the documented workflow
+  reports `EEXIST` as a lid regression.
 
-  The defence is not more care at the moment of writing — that is the
-  state in which these were written. It is to run the new rule's own
-  check against the change that introduces it, the way `make prereport`
-  is run on its own diff.
+  *(This paragraph said "three times now" and was a count in the file
+  whose own rule forbids one. It is not corrected to a larger number —
+  the instances are named instead, which is what the rule prescribes and
+  what makes the next one cheap to add.)*
+
+  **The strongest form arrived on 2026-09-12: the rule and its violation
+  in ONE DIFF.** `harness.md`'s new section and the probes that break it
+  were the same commit, and the section's own worked example is a fixture
+  writing where an assertion reads. So this is not a rule decaying over
+  time and being caught later — it is a rule that was never true of the
+  change that shipped it.
+
+  **And look at who catches them.** Every one so far was found by a
+  reviewer or by re-running something, and **not one by the author**,
+  including the times the author had just finished writing the rule
+  down. That is the argument against "be more careful": careful is the
+  state these were written in. The defence is mechanical — run the new
+  rule's own check against the change that introduces it, the way `make
+  prereport` is run on its own diff, and dispatch the reviewer *before*
+  the push rather than after.
 
 - **Silence is the expensive failure, not noise.** A mechanism that is
   correct and routed around is worse than a broken one, because it looks

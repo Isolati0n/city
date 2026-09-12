@@ -5478,3 +5478,84 @@ covers twenty mutations plus the ABI branch and the field-name
 cross-check, and it is synthetic by construction. The `TRUNCATE`
 withholding itself has been executed by no kernel in this project's
 record.
+
+## 59. ABI 7 settles it, and the bind half is a real grant (2026-09-12)
+
+The operator ran §57 and §58's work on the machine with Landlock. The
+suite is green — one FAT skip, no Landlock skip — and every assertion
+this project could only argue about is now measured:
+
+```
+trunc_root=denied(13)  trunc_bind=ok(0)
+mknod_root=denied(13)  fifo=denied(13)  sock=denied(13)
+in a bind: device node still refused, fifo and socket allowed
+mkdir/symlink/unlink/rmdir refused at root, allowed in bind,
+mkblock refused in both
+```
+
+All EACCES, so the lid is refusing rather than a capability being
+absent. That closes, in one run: the socket noun, the errno-exactness
+on the fifo, invariant 6's "device nodes are refused even in a bind"
+(written down since §26 and exercised by nothing), `MAKE_BLOCK` refused
+in a bind as well as at the root, and the five rights that until §58
+changed no field any fixture emitted — `REMOVE_FILE` among them, the
+premise the whole truncate argument rests on.
+
+**And the control §58 could not run.** Dropping `TRUNCATE` from the
+bind grant `rw`:
+
+```
+FAIL: truncate must still be granted inside a declared bind, or the root
+      half above is vacuous: trunc_bind=denied(13)
+```
+
+So `trunc_bind=ok(0)` is the grant answering and not a kernel
+short-circuiting a no-op truncate on a zero-length file. §58 recorded
+that as the open HYPOTHESIS and fixed the fixture to write a byte
+first; the control now says the byte was not what made the difference,
+and either way the root half is not vacuous. **The truncate pair is a
+pin, measured rather than argued.**
+
+### Three things carried into the rules from the round, not the code
+
+- **The partial-gate trap**, now a rule in `.claude/rules/harness.md`
+  rather than a note in a commit message. `make test` stages, runs the
+  brief gate, runs `nw-check`, runs the suite and runs the coverage
+  floor; the suite is what the *target* runs, not its middle step. The
+  red trunk of §58 was upstream of everything the report looked at, and
+  "the tree builds" was true and was about neither. It generalises: every
+  project has a target whose steps someone eventually runs one at a
+  time, and the step most likely to be skipped is the cheap one that
+  runs first.
+- **The recovery is promoted from aside to answer.** `runtime.md` now
+  says at the Landlock paragraph that the durable-mask class is open,
+  that no lid set closes it, that nothing detects a masked house, and
+  that deleting the layer is the only answer — because every round that
+  has touched this reached for a rights change first, and the rights are
+  not where the answer is.
+- **The weakest-rule pattern, stated in its strongest form.**
+  `CLAUDE.md` carried it as "three times now", which was a count in the
+  file whose rule forbids one; the instances are named instead, and two
+  more are added. The new claim is the sharp one: 2026-09-12 produced
+  the first case where **the rule and its violation are in one diff** —
+  not a rule decaying and being caught later, but a rule that was never
+  true of the change that shipped it. And every instance so far was
+  found by a reviewer or by re-running something, **never by the
+  author**, including when the author had just written the rule down.
+  That is the argument against "be more careful": careful is the state
+  they were all written in.
+
+Two smaller ones filed beside the characteristic failure, because each
+is a general shape rather than a bug:
+
+- **A claim with parts is covered when every part is, and reads as
+  covered when one is.** "No device nodes, sockets or fifos" was
+  half-covered twice running — the first noun, then the first two — and
+  at the level above, five of the ten rights withheld at a root were
+  unprobed while `MAKE_BLOCK` was *named in the failure string of the
+  assertion beside it*, whose probe was char-only.
+- **The word-versus-symbol trap is not only an annotation problem.** It
+  arrives in a fixture as a comment standing in for a probe: a true
+  comment, in the right file, explaining why `unlink` is not probed for
+  a reason that applies to a house the test does not boot — while the
+  claim it stood in for was load-bearing in four files.

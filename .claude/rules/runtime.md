@@ -188,10 +188,20 @@ the image stays byte-identical. Nor can a house do it to its own exec
 path: that is `ETXTBSY` while it runs, so the reachable target is a
 shared library or a data file the brick shipped. What the withholding
 closes is the zero-length route and the accidental `O_TRUNC` rewrite.
-**The recovery below is still the only answer to the class**, and
-making the class unrepresentable means stopping the layer shadowing the
-image's executables at all — a design change, not a rights change.
-`CLAUDE.md` invariant 6, `HISTORY.md` §56 and §57.
+Making the class unrepresentable means stopping the layer shadowing
+the image's executables at all — a design change, not a rights change.
+`CLAUDE.md` invariant 6, `HISTORY.md` §56, §57 and §58.
+
+**THE CLASS IS OPEN, AND THE RECOVERY TWO SECTIONS DOWN IS THE ONLY
+ANSWER TO IT.** Not a footnote and not an aside: there is no lid set
+that prevents a brick house durably masking its own image, and nothing
+in the tree detects one that has. `landlock` is the narrowest and it
+narrows the routes, not the outcome. So when a house that booted
+yesterday will not exec today and the image still hashes to its own
+name, do not debug the image and do not rebuild it — read **THE
+RECOVERY** below and delete the layer. Every round that has touched
+this so far has reached for a rights change first; the rights are not
+where the answer is.
 
 **A LAYER CAN MASK ITS BRICK, DURABLY.** "Reads fall through to the sealed
 image" is true and incomplete: the overlay can also whiteout and overwrite,
@@ -200,8 +210,11 @@ Measured: a house that unlinks its own exec path leaves a whiteout in
 `upper` and never starts again — same plan, same sealed brick, `FAIL exec
 house errno=2` forever, image byte-identical to its own name. 
 
-**THE RECOVERY, written down because nothing implements it and the next
-person to hit this needs the answer.** It is **not** rebuilding the
+**THE RECOVERY — the only answer to the durable-mask class, not a
+footnote to it.** Written down because nothing implements it and the
+next person to hit this needs the answer, and pointed at from the
+Landlock paragraph above because that is where the wrong answer gets
+reached for. It is **not** rebuilding the
 brick: the image is untouched and still hashes to its own name, so
 rebuilding changes nothing. It is both of these, in order:
 

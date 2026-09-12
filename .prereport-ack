@@ -73,3 +73,6 @@ unpaired-absence	HISTORY.md	brief, not in the TCB, which is this repository's mo
 unpaired-absence	tests/run.py	expect(not v.startswith("unprobed"),
 # set arithmetic in a tool, not a test assertion; a non-empty result exits 2
 unpaired-absence	tools/landlock-assertions-dryrun.py	if n not in emits)
+# false positive: "not one step" is English, and the steps below it are
+# enumerated rather than counted -- adding a sixth ages nothing
+prose-count	.claude/rules/harness.md	**The partial-gate trap.** `make test` is not one step. It stages, runs

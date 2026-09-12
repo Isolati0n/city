@@ -22,6 +22,27 @@ alone is a result about the previous build. This produced a negative control
 that *passed* — which read as "the code works" and actually meant "the test
 never saw the change." Always `make stage`.
 
+**The partial-gate trap.** `make test` is not one step. It stages, runs
+`install-agents.sh --check`, runs `nw-check`, runs `tests/run.py`, and
+runs `tools/coverage-tcb.sh`, in that order — and **the suite is what
+the target runs, not its middle step.** On 2026-09-12 a commit was
+reported as done on the evidence of `make stage` followed by `python3
+tests/run.py`; the brief gate, which runs *before* the suite, was red
+and had been made red by that same commit. Both `tcb-review` and
+`claims` found it. The report said "the tree builds", which was true
+and was about neither the gate nor the suite.
+
+This is the staging trap's sibling and it is worse in one way: the
+staging trap gives a result about the previous build, and this gives a
+result about part of the tree while the part you did not run is the
+part you broke. Run `make test`. If you need the suite alone for speed
+while iterating, that is fine — but the run you *report* is the target,
+and `STAGE=` and `NW_STAGE=` must name the same directory in both.
+
+It generalises past this repository: every project has a target whose
+steps someone eventually runs individually, and the step most likely to
+be skipped is the cheap one that runs first.
+
 **The log-chunk trap.** PID 1's logger prefixes the start of a *write chunk*,
 not each line inside one, and it reads in bounded chunks. A fixture that
 prints several lines and flushes once gets one prefix and then unprefixed
