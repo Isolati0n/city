@@ -34,6 +34,7 @@
   "kind-exit0",
   "kind-required",
   "last-words-survive-group-term",
+  "layer-survives-a-restart",
   "leading-zero-hash-is-a-brick",
   "leading-zero-hash-reaches-the-supervisor",
   "lids-are-not-advisory",

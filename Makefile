@@ -13,7 +13,7 @@ CFLAGS = -Wall -Wextra -O2 -g -std=gnu11 -ffile-prefix-map=$(CURDIR)=.
 # the stage a parallel run is using.
 STAGE ?= /tmp/nw-init-run
 
-all: nw-dawn nw-root nw-spawn nw-check nw-sup nw-rescue unit-probe unit-boom unit-badcall unit-term unit-brick unit-slowdie unit-dieterm unit-lastwords unit-lastwordsmany unit-orphan unit-orphanslow
+all: nw-dawn nw-root nw-spawn nw-check nw-sup nw-rescue unit-probe unit-boom unit-badcall unit-term unit-brick unit-slowdie unit-dieterm unit-lastwords unit-lastwordsmany unit-orphan unit-orphanslow unit-layer
 
 # blob.h IS A PREREQUISITE, and leaving it off is not cosmetic. dawn now
 # includes it for NW_BRICK_MNT, and the whole justification for that include
@@ -89,12 +89,20 @@ unit-lastwordsmany: houses/lastwords.c
 unit-orphanslow: houses/orphan.c
 	$(CC) $(CFLAGS) -DORPHAN_SLEEP_MS=3000 -o $@ houses/orphan.c
 
+# -static, like unit-brick and for the same reason: this one runs INSIDE
+# a brick, which contains the binary and nothing else -- no loader, no
+# libc. A dynamically linked fixture there fails as ENOENT on execve,
+# which reads as a missing binary and is a missing interpreter.
+# harness.md records that trap; this is it, met head-on.
+unit-layer: houses/layer.c
+	$(CC) $(CFLAGS) -static -o $@ houses/layer.c
+
 stage: all
 	rm -rf $(STAGE)
 	# No $(STAGE)/nw/bricks: phase 3 made nw-sup compose an ABSOLUTE
 	# NW_BRICK_DIR path, so make_brick writes the image to the machine
 	# root and this directory was created empty and used by nothing.
-	mkdir -p $(STAGE)/nw/bin $(STAGE)/nw/stores
+	mkdir -p $(STAGE)/nw/bin
 	# NW_BRICK_MNT ON THE HOST ROOT, and it is deliberate. nw-sup mounts a
 	# brick image on an ABSOLUTE path -- /nw/mnt -- because in production
 	# dawn has pivoted and the machine root IS the staged tree. The suite
@@ -116,11 +124,19 @@ stage: all
 	# The alternative was an env override for the mountpoint, which is the
 	# NW_HOLD_MS mistake exactly: a production control surface added for a
 	# lab need. Refused.
-	mkdir -p /nw/mnt
+	# /nw/layers beside it, and for the same reason: nw-sup composes an
+	# ABSOLUTE layer path because in production dawn has pivoted and the
+	# machine root IS the staged tree. The suite execs nw-root with no
+	# pivot, so both resolve against the host root. Dawn creates these two
+	# on a real boot; this line is the lab standing in for dawn, not a
+	# second creator of the per-house children -- those come from
+	# tools/stage-layers.py, which is the only thing that makes them.
+	mkdir -p /nw/mnt /nw/layers
 	mkdir -p $(STAGE)/efi/slots/A $(STAGE)/efi/slots/B $(STAGE)/work
 	cp -f nw-dawn nw-root nw-spawn nw-check nw-sup nw-rescue \
 	      unit-probe unit-boom unit-badcall unit-term unit-brick unit-slowdie unit-dieterm \
-	      unit-lastwords unit-lastwordsmany unit-orphan unit-orphanslow $(STAGE)/nw/bin/
+	      unit-lastwords unit-lastwordsmany unit-orphan unit-orphanslow \
+      unit-layer $(STAGE)/nw/bin/
 	chmod +x $(STAGE)/nw/bin/*
 	# The sources the staged binaries were built from, staged with them.
 	# tests/run.py's hash probe compiles nwcheck.c to ask which slot a name

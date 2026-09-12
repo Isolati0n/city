@@ -96,6 +96,13 @@ The boundary that does matter here is not between files, it is **trust**:
   renumbered when checks were retired — never assume a numeric value, read
   the enum.
 - **The lid set is closed.** Unknown bits are `NW_E_LIDS`.
+- **`brick` and `layer` are paired, in both directions.** A brick with no
+  layer is a house whose writes vanish at exit while the plan says it has
+  data; a layer with no brick names a directory nothing mounts. Neither
+  errors at runtime, so both are structural: `NW_E_LAYERPAIR` in
+  `nwcheck.c` and a refusal in the baker. The id is validated as a NAME,
+  not a path — `nw-sup` composes `NW_LAYER_DIR "/" <id> "/" upper` itself,
+  so the same argument that retired the brick path applies.
 - **Check the struct sizes, do not eyeball them.** The Python
   `struct.pack` format and the C struct must agree. Take the format from
   `bake()` in the baker, run `struct.calcsize` on it, and compare against

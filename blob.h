@@ -17,7 +17,7 @@
  * a rule for whoever changes the layout, not something the code enforces.
  * The asserts below say so in every message they print, because that is
  * the one moment a reader is guaranteed to be looking. */
-#define NW_MAGIC        "NWPLAN07"
+#define NW_MAGIC        "NWPLAN08"
 #define NW_NAME_LEN     32
 #define NW_PATH_LEN     128
 /* PHASE 3: THE PLAN CARRIES A HASH, NOT A PATH. `brick` is 32 raw bytes of
@@ -63,6 +63,31 @@
    boots, so it is flagged rather than fixed here -- but it is the same
    class, in the TCB, and it is the reason this paragraph stops counting
    readers and starts naming the rule. */
+/* WHERE A HOUSE'S DATA LIVES. Every house with a brick also gets exactly
+   one writable layer, and the two together are what it roots in: the brick
+   is what it can SEE, the layer is what it can KEEP. Not opt-in -- there is
+   no plan that has a brick and no layer, and nwcheck.c refuses one.
+
+   <layer-id>/upper is the house's data and <layer-id>/work is overlayfs's
+   scratch. The pair answers the work-dir requirement BY CONSTRUCTION:
+   overlayfs needs a work dir on the same filesystem as upper and not
+   inside it, and two siblings under one parent are that, with no third
+   path for anyone to reason about or get wrong.
+
+   This replaces /nw/stores, renamed rather than reused. A directory called
+   `stores` holding overlay upper-dirs is a name that misleads whoever
+   reads it in six months, and the store concept is gone rather than
+   renamed: it was this mechanism under another name, so collapsing them
+   removes a thing instead of adding one beside it.
+
+   KEYED BY A DECLARED layer-id, NOT BY THE HOUSE NAME. Under name-keying,
+   renaming a house silently hands it an empty layer while its data sits
+   orphaned under the old name -- no error anywhere, which is bugs 4, 9 and
+   13's shape applied to a house's data instead of its descriptors. One
+   field avoids it. */
+#define NW_LAYER_DIR    "/nw/layers"
+#define NW_LAYER_UPPER  "upper"
+#define NW_LAYER_WORK   "work"
 #define NW_BRICK_DIR    "/nw/bricks"
 #define NW_BRICK_SUFFIX ".img"
 #define NW_BRICK_HASH   32    /* raw sha256, not hex */
@@ -145,6 +170,7 @@ struct nw_unit {
     char     name[NW_NAME_LEN];
     char     exec_path[NW_PATH_LEN];   /* resolved inside the brick, if any */
     uint8_t  brick[NW_BRICK_HASH];     /* all-zero = no brick: shares the machine root */
+    char     layer[NW_NAME_LEN];       /* "" = no layer; set iff brick is set */
     uint8_t  kind;       /* NW_KIND_* — was 'critical' until 2026-09-10 */
     uint8_t  budget;     /* deaths for the life of nw-sup; 0 = no restart */
     uint8_t  lids;
@@ -250,16 +276,17 @@ struct nw_hdr {
     _Static_assert(_Generic(&((struct s *)0)->m, t (*)[n]: 1, default: 0), \
                    #s "." #m " retyped: same bytes, different meaning, " \
                    "bump NW_MAGIC")
-#define NW_UNIT_SIZE (NW_NAME_LEN + NW_PATH_LEN + NW_BRICK_HASH + 4)
+#define NW_UNIT_SIZE (NW_NAME_LEN + NW_PATH_LEN + NW_BRICK_HASH + NW_NAME_LEN + 4)
 _Static_assert(sizeof(struct nw_unit) == NW_UNIT_SIZE,
                "unit size drifted: a field was added, removed or resized");
 NW_AT(nw_unit, name,      0);    NW_EXTENT(nw_unit, name,      NW_NAME_LEN);
 NW_AT(nw_unit, exec_path, 32);   NW_EXTENT(nw_unit, exec_path, NW_PATH_LEN);
 NW_AT(nw_unit, brick,     160);  NW_EXTENT(nw_unit, brick,     NW_BRICK_HASH);
-NW_AT(nw_unit, kind,      192);  NW_TYPE(nw_unit, kind,   uint8_t);
-NW_AT(nw_unit, budget,    193);  NW_TYPE(nw_unit, budget, uint8_t);
-NW_AT(nw_unit, lids,      194);  NW_TYPE(nw_unit, lids,   uint8_t);
-NW_AT(nw_unit, _pad,      195);  NW_TYPE(nw_unit, _pad,   uint8_t);
+NW_AT(nw_unit, layer,     192);  NW_EXTENT(nw_unit, layer,     NW_NAME_LEN);
+NW_AT(nw_unit, kind,      224);  NW_TYPE(nw_unit, kind,   uint8_t);
+NW_AT(nw_unit, budget,    225);  NW_TYPE(nw_unit, budget, uint8_t);
+NW_AT(nw_unit, lids,      226);  NW_TYPE(nw_unit, lids,   uint8_t);
+NW_AT(nw_unit, _pad,      227);  NW_TYPE(nw_unit, _pad,   uint8_t);
 /* name and exec_path are char: nwcheck.c hands them to path_ok_len and
  * name_ok as char *. `brick` is uint8_t BECAUSE IT IS NO LONGER TEXT -- 32
  * raw bytes, never printed, never parsed, never passed to a string
@@ -267,6 +294,7 @@ NW_AT(nw_unit, _pad,      195);  NW_TYPE(nw_unit, _pad,   uint8_t);
  * again, which is the change that would bring the traversal class back. */
 NW_ARR_TYPE(nw_unit, name,      char, NW_NAME_LEN);
 NW_ARR_TYPE(nw_unit, exec_path, char, NW_PATH_LEN);
+NW_ARR_TYPE(nw_unit, layer,     char, NW_NAME_LEN);
 NW_ARR_TYPE(nw_unit, brick,     uint8_t, NW_BRICK_HASH);
 
 _Static_assert(sizeof(struct nw_bind) == 130,
@@ -333,6 +361,8 @@ enum {
     NW_E_BINDIDX = 13,
     NW_E_BINDPATH = 14,
     NW_E_LLBRICK = 15,
+    NW_E_LAYER = 16,
+    NW_E_LAYERPAIR = 17,
     /* Terminator, not a code. nw_errstr's bound and the length of errs[] in
      * nwcheck.c are both derived from it, so the three things that must
      * agree -- last code, array length, bound -- become one number.
@@ -406,7 +436,14 @@ static inline int nw_unit_has_brick(const struct nw_unit *u)
 {
     int any = 0;
     for (int k = 0; k < NW_BRICK_HASH; k++) any |= u->brick[k];
-    return any;
+    /* NORMALISED, because a predicate must return a predicate. This
+     * returned the OR itself, which is truthy and served every caller
+     * that wrote `!has_brick` or `has_brick &&` -- and then the layer
+     * rule compared it for EQUALITY against another flag and got
+     * `1 != 171` on a plan that was correct. Caught the first time a
+     * legal plan was baked, which is the only reason it did not ship.
+     * A function named has_X that returns 171 is an invitation. */
+    return any != 0;
 }
 
 #endif

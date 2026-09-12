@@ -4746,3 +4746,125 @@ unreviewed code, and that re-dispatching against the fixes is not
 belt-and-braces but the same rule applied once more.
 
 It is also the argument for the rounds. Nothing here was found by reading.
+
+## 54. Writable areas: a house is its brick plus one layer (2026-09-12)
+
+Design settled, so this was implementation. Every house with a brick now
+roots in that brick with a **writable layer** stacked over it: reads fall
+through to the sealed image, writes land in
+`/nw/layers/<layer-id>/upper`, and they are still there after the house
+dies and is restarted. `NWPLAN07` → `NWPLAN08`, unit 196 → 228.
+
+**There is no store concept any more.** It was this mechanism under
+another name, so it collapsed into it rather than sitting beside it —
+`/nw/stores` is gone rather than renamed, and `docs/options/05`'s
+questions dissolve with it because they were about a thing that no longer
+exists separately. Removing a mechanism, not adding one.
+
+### The three decisions, and what each buys
+
+- **`/nw/layers/<id>/{upper,work}`.** Two siblings under one parent
+  answer overlayfs's work-dir requirement — same filesystem as `upper`,
+  not inside it — **by construction**, with no third path for anyone to
+  reason about. Renamed from `stores` rather than reusing the name: a
+  directory called `stores` holding overlay upper-dirs misleads whoever
+  reads it in six months.
+- **Keyed by a declared layer-id, not the house name.** Rename a house
+  under name-keying and it silently receives an empty layer while its
+  data sits orphaned — no error anywhere, which is the bug 4/9/13 shape
+  applied to data instead of descriptors. One field avoids it.
+- **Dawn creates the parents; staging creates the children.** Dawn makes
+  `/nw/layers` beside `/nw/bricks` and `/nw/mnt` and nothing per-house,
+  so it still does not read the plan — a cost an earlier round had
+  accepted and this removes. `tools/stage-layers.py` makes
+  `<id>/upper` and `<id>/work` from the plan before the boot, and it is
+  the **only** thing that does. `nw-sup` creates neither, deliberately: a
+  supervisor that mkdir'd a missing layer would turn "nothing staged this
+  plan" into "the house silently got an empty layer", which is the
+  orphaned-data failure the layer-id exists to prevent.
+
+### Verified by mounting, not by reading
+
+Two things the design rests on, both checked by running them rather than
+by reasoning about the filesystem:
+
+- **Overlayfs works on this root.** `/` is ext4; mounted an overlay,
+  wrote through it, saw the file land in `upper`.
+- **The overlay can stack on the brick's own mountpoint.** Mounted erofs
+  at a path, then mounted an overlay *at that same path* with the erofs
+  as `lowerdir`: it sees the lower content and writes land in `upper`.
+  Overlayfs resolves `lowerdir` at mount time and holds the superblock,
+  so covering the path afterwards is fine. That is why there is one
+  mountpoint and not two, and why dawn needs no second directory.
+
+The same experiment re-confirmed phase 2's property from the other side:
+a write straight into the erofs mount is `Read-only file system`.
+
+### Both directions, which is the first application of §53
+
+`test_layer_survives_a_restart` is the **acceptance** direction: a house
+reads `/id` from its brick and `/state` from its layer every run, appends
+a mark, and exits nonzero so `nw-sup` restarts it. Measured
+`absent → r → rr → rrr` across four runs. Paired three ways, because each
+alone is satisfied by the wrong arrangement — the first run must find
+nothing (or the layer was not empty), `/id` must be read every run (or the
+house is not rooted in its brick), and the marks must **accumulate** (or
+"persisted" cannot be told from "rewritten each time").
+
+Control, which is phase 2's behaviour: remove the overlay mount and the
+same fixture reports `absent, absent, absent, absent`.
+
+`test_brick_image_is_sealed` is the **rejection** direction, and it had to
+be **re-filed rather than deleted**. It asserted `wr_root=denied(30)` —
+correct when a house's root was the bare image. A house's root is now
+brick plus layer, so the write succeeds; what is still true, and what
+nothing else pins, is that the write never reaches the brick. It asserts
+the image is byte-identical across the boot, hashed **before** it. *The
+first version of that hashed twice afterwards and compared the two — an
+identity, a check that cannot fail, in the test whose whole subject is a
+property that must not change.*
+
+### What the tooling caught, on the first change since it was built
+
+- **The format ledger fired.** `NWPLAN08` was not in `plan-formats.txt`
+  and `make test` failed naming it, with the row to append. Exactly what
+  it was built for, one commit later.
+- **The coverage floor found an unreached branch twice.** The
+  malformed-layer-id return and the dirty-tail return were each written
+  and each unexercised; the floor named them and they now have crafted
+  cases — including a layer id containing `/`, which is the traversal
+  class that a brick hash is immune to and a layer id is not.
+- **`make prereport`: one finding on a diff this size**, a false positive
+  (prose inside a failure message). Calibration is four on `4e22204`.
+- **`make checkbrief` stayed 8/4/0/4**, and invariant 6 picked up two new
+  annotations for the pairing and the mount options.
+
+### Four defects found by running, in my own work
+
+- **`nw_unit_has_brick()` returned the OR of the bytes, not a boolean.**
+  Every existing caller wrote `!has_brick` or `has_brick &&`, so 171 was
+  fine; the new layer rule compared it for equality against another flag
+  and got `1 != 171` on a correct plan. Normalised at the source — a
+  function named `has_X` that returns 171 is an invitation.
+- **Six copies of the unit-layout arithmetic in the suite.** Adding a
+  field meant finding all six, and the one that was missed produced a
+  crafted blob whose lids byte was 32 bytes off — failing as "nw-check
+  must reject a brick without NEWNS", an offset error wearing a rule
+  violation's message. `unit_layout()` derives them from blob.h's own
+  `NW_AT` declarations now, so the next field cannot be missed.
+- **The fixture was dynamically linked**, and a brick has no loader. It
+  failed as `exec house errno=2`, which reads as a missing binary and is
+  a missing interpreter — the trap `harness.md` already records. And
+  `make` does not rebuild when only the *recipe* changes, so adding
+  `-static` did nothing until the binary was removed.
+- **A test regex matched `pid=5`.** `id=(\S+)` picked up nw-spawn's line
+  and failed the brick assertion for a reason unrelated to bricks. Scoped
+  to the fixture's own tag.
+
+### Edited across an ownership line, flagged
+
+`dawn.c` is Grok's file and the trunk was not broken, so the narrow
+"fix it and flag it" rule did not apply. The change is there because the
+operator asked for it as part of this work: two constants in place of two
+literals, and a deletion. Flagged here, in the commit, and in the comment
+beside it.

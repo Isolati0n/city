@@ -153,10 +153,26 @@ int main(void)
     do_mount(root, NW_ROOT_MNT, rootfs, 0);
     do_mount(esp, NW_ROOT_MNT NW_ESP_AT, espfs, MS_RDONLY);
 
-    /* Layout skeleton. Directories only -- no store is created here and
-     * nothing under /nw/stores is touched. See docs/options/05. */
-    mkpath(NW_ROOT_MNT "/nw/bricks");
-    mkpath(NW_ROOT_MNT "/nw/stores");
+    /* Layout skeleton. Directories only: dawn creates the PARENTS and
+     * never a per-house child, because a per-house directory depends on
+     * the plan and dawn does not read the plan. Staging creates
+     * <layer-id>/upper and <layer-id>/work from the plan before the boot
+     * that needs them, which is what keeps that true.
+     *
+     * /nw/stores is GONE, not renamed. The store concept was the writable
+     * layer under another name, so it collapsed into it rather than
+     * sitting beside it; a directory called `stores` holding overlay
+     * upper-dirs would mislead whoever reads it next. docs/options/05's
+     * questions dissolve with it -- they were about a thing that no
+     * longer exists separately.
+     *
+     * EDITED ACROSS AN OWNERSHIP LINE. dawn.c is Grok's file and the
+     * trunk was not broken, so the narrow "fix it and flag it" rule did
+     * not apply -- this is here because the operator asked for it
+     * directly as part of writable areas. Flagged loudly per CLAUDE.md,
+     * and it is three constants and a deletion. */
+    mkpath(NW_ROOT_MNT NW_BRICK_DIR);
+    mkpath(NW_ROOT_MNT NW_LAYER_DIR);
     /* Phase 2's mountpoint. An image is a file and cannot be bind-mounted
      * onto itself the way a directory brick is, so lid_brick() needs
      * somewhere to land it. One mkdir here, once, ever -- against a tmpfs

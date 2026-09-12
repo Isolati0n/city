@@ -129,6 +129,18 @@ def check(houses, binds):
                     f"house {h['name']}: brick= needs lids=...,newns; a brick "
                     "is a root and pivoting without a private mount namespace "
                     "would repoint the machine's root")
+            if not h["layer"]:
+                raise SystemExit(
+                    f"house {h['name']}: brick= needs layer=. Every house "
+                    f"with a brick has exactly one writable layer -- the "
+                    f"brick is what it can see and the layer is what it can "
+                    f"keep. Without one its writes vanish at exit while the "
+                    f"plan says it has data, and nothing errors.")
+        elif h["layer"]:
+            raise SystemExit(
+                f"house {h['name']}: layer= without brick=; there is no "
+                f"lower to overlay, so the layer would name a directory "
+                f"nothing ever mounts")
         elif h["binds"]:
             raise SystemExit(
                 f"house {h['name']}: bind= without brick=; there is no root "
@@ -150,6 +162,7 @@ def bake(path, houses):
         unit += pad(h["name"], NAME_LEN) + pad(h["exec"], PATH_LEN)
         unit += (bytes.fromhex(h["brick"]) if h["brick"]
                  else b"\0" * BRICK_HASH)
+        unit += pad(h["layer"], NAME_LEN)
         # kind (the byte that was "critical" until 2026-09-10), then _pad,
         # which must stay zero -- nwcheck.c rejects a nonzero spare.
         unit += struct.pack("<BBBB", h["kind"], h["budget"], h["lids"], 0)
@@ -158,15 +171,33 @@ def bake(path, houses):
         table += struct.pack("<H", u) + pad(p, PATH_LEN)
     # Must equal NW_MAGIC in blob.h. tests/run.py asserts that agreement;
     # the version moves when the layout moves -- see the comment there.
-    prefix = b"NWPLAN07" + struct.pack("<II", len(houses), len(binds))
+    prefix = b"NWPLAN08" + struct.pack("<II", len(houses), len(binds))
     crc = zlib.crc32(prefix + struct.pack("<I", 0) + unit + table) & 0xFFFFFFFF
     blob = prefix + struct.pack("<I", crc) + unit + table
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     open(path, "wb").write(blob)
     digest = hashlib.sha256(blob).hexdigest()
     open(path + ".sha256", "w").write(digest + "\n")
+    # THE LAYER SIDECAR, so that whatever stages a plan does not need a
+    # second copy of the blob layout to find out which directories to
+    # create. Staging reads this; nw-sup does NOT create layer dirs, and
+    # adding a creator there is what this file exists to avoid.
+    open(path + ".layers", "w").write(
+        "".join(h["layer"] + "\n" for h in houses if h["layer"]))
     print(f"wrote {path} units={len(houses)} binds={len(binds)} "
           f"crc=0x{crc:08x} bytes={len(blob)} sha256={digest}")
+
+
+def _is_layer_id(v):
+    """A layer-id is a NAME, with the same closed alphabet as a house name.
+
+    Not a path, for the reason phase 3 retired the brick path: nw-sup
+    composes NW_LAYER_DIR "/" <id> "/" upper itself, and a fixed alphabet
+    with no separator cannot express a traversal. The length bound is
+    NAME_LEN because that is the field's width."""
+    return (isinstance(v, str) and 0 < len(v) < NAME_LEN
+            and all(c.isalnum() or c in "_-" for c in v)
+            and all(ord(c) < 128 for c in v))
 
 
 def _is_hex64(v):
@@ -186,9 +217,10 @@ def _is_hex64(v):
             and all(c in "0123456789abcdef" for c in v))
 
 
-def house(name, exe, kind, budget, lids, brick="", binds=()):
+def house(name, exe, kind, budget, lids, brick="", binds=(), layer=""):
     return {"name": name, "exec": exe, "kind": kind, "budget": budget,
-            "lids": lids, "brick": brick, "binds": list(binds)}
+            "lids": lids, "brick": brick, "layer": layer,
+            "binds": list(binds)}
 
 
 def default_city(probe: str, lids: int):
@@ -222,7 +254,7 @@ def load_city(path: str):
             name, exe = parts[1], parts[2]
             budget, lids = 3, 0
             kind = None
-            brick, binds = "", []
+            brick, layer, binds = "", "", []
             for kv in parts[3:]:
                 k, _, v = kv.partition("=")
                 if k == "critical":
@@ -240,6 +272,14 @@ def load_city(path: str):
                     lids = parse_lids(v)
                 elif k == "brick":
                     brick = v
+                elif k == "layer":
+                    if not _is_layer_id(v):
+                        raise SystemExit(
+                            f"house {name}: layer= must be a name of up to "
+                            f"{NAME_LEN - 1} characters from "
+                            f"[A-Za-z0-9_-], not a path -- nw-sup composes "
+                            f"the directory itself: {v!r}")
+                    layer = v
                 elif k == "bind":
                     binds.append(v)
                 elif k == "kind":
@@ -264,7 +304,7 @@ def load_city(path: str):
                     f"house {name}: exec path must be absolute inside the "
                     "brick")
             houses.append(house(name, exe, kind, budget, lids,
-                                brick, binds))
+                                brick, binds, layer))
         else:
             raise SystemExit(f"bad city line: {line}")
     return houses

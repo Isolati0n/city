@@ -19,7 +19,9 @@ static const char *errs[] = {
     "bind count",
     "bind unit index",
     "bind path",
-    "landlock without brick"
+    "landlock without brick",
+    "layer id",
+    "layer and brick must come together"
 };
 
 _Static_assert(sizeof errs / sizeof errs[0] == NW_E__COUNT,
@@ -251,6 +253,28 @@ int nw_check(const void *blob, uint32_t len)
             return NW_E_LLBRICK;
         if (has_brick && !(u[i].lids & NW_LID_NEWNS))
             return NW_E_BRICKNS;
+        /* EVERY BRICK HOUSE HAS EXACTLY ONE WRITABLE LAYER, and a house
+         * without a brick has none: there is no lower to overlay, so a
+         * layer-id would name a directory nothing mounts.
+         *
+         * Both directions are refused, and the pairing is the point. A
+         * brick with no layer is a house whose writes vanish at exit while
+         * the plan says it has data; a layer with no brick is a declared
+         * area that nothing ever reads. Neither errors at runtime -- they
+         * are the silent-wrong-routing shape, so they are structural here.
+         *
+         * The id is validated as a NAME, not a path: nw-sup composes
+         * NW_LAYER_DIR "/" <id> "/" upper itself, so the same argument
+         * that retired the brick path applies -- a closed alphabet cannot
+         * express a traversal. name_ok also checks the tail is zero. */
+        int has_layer = u[i].layer[0] != 0;
+        if (has_layer && !name_ok(u[i].layer, NW_NAME_LEN))
+            return NW_E_LAYER;
+        if (!has_layer) {
+            for (int k = 0; k < NW_NAME_LEN; k++)
+                if (u[i].layer[k] != 0) return NW_E_LAYER;
+        }
+        if (has_layer != has_brick) return NW_E_LAYERPAIR;
         /* NO PATH CHECK, AND NW_E_BRICK IS GONE WITH IT. Phase 3 made this
          * field raw sha256 bytes, and there is no value of them this
          * checker could call invalid: every value that names anything

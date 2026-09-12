@@ -160,7 +160,36 @@ environment — so a change to any link is a change to everything below it.
 
 ## Bricks
 
-A unit declares `brick=<path to an erofs image>`. `lid_brick()` makes mount
+**Every brick house also has exactly one writable layer, and the two are
+one thing.** `lid_brick()` mounts the erofs image on `NW_BRICK_MNT` and
+then mounts an overlay **at that same mountpoint** with
+`lowerdir=NW_BRICK_MNT`, `upperdir=/nw/layers/<id>/upper`,
+`workdir=/nw/layers/<id>/work`, and the house pivots into that. Reads fall
+through to the sealed image; writes land in `upper` and survive a restart.
+
+- **Stacked, not given its own mountpoint.** Verified by mounting, not by
+  reading: overlayfs resolves `lowerdir` at mount time and holds the
+  superblock, so covering the path afterwards is fine. One mountpoint means
+  no second directory for dawn and no third path in the design.
+- **Before the binds.** A bind mounted first is hidden by the overlay
+  covering the same mountpoint, and the mount would still succeed — the
+  house would silently see the brick's empty directory instead of the bound
+  path.
+- **`upper` and `work` are siblings under one parent**, which answers
+  overlayfs's requirement (same filesystem as `upper`, not inside it) by
+  construction rather than by a rule anyone has to remember.
+- **nw-sup creates NEITHER.** `tools/stage-layers.py` does, from the plan,
+  before the boot. A supervisor that mkdir'd a missing layer would turn
+  "nothing staged this plan" into "the house silently got an empty layer",
+  which is the orphaned-data failure the layer-id exists to prevent. A
+  missing layer is a loud `FAIL mount layer` instead.
+- **Keyed by a declared id, never by the house name.** Rename a house under
+  name-keying and it gets an empty layer while its data sits under the old
+  name, with nothing reporting anything.
+- `/nw/stores` is **gone**, not renamed: the store concept was this
+  mechanism under another name.
+
+A unit declares `brick=<hash of an erofs image>` and `layer=<id>`. `lid_brick()` makes mount
 propagation private, attaches the image to a loop device, mounts it on
 `NW_BRICK_MNT` (`/nw/mnt`, which **dawn creates** — that is a precondition
 of any brick house starting), applies the declared binds, and pivots. After

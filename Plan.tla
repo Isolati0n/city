@@ -21,7 +21,7 @@ ASSUME /\ MaxUnits \in Nat \ {0}
        /\ Reserved \in Nat
        /\ MaxBinds \in Nat
 
-VARIABLES n, kind, lids, brick, binds
+VARIABLES n, kind, lids, brick, layer, binds
 N == n
 
 (* `Houses == 1..N` stood above the declaration of N until 2026-09-11.
@@ -87,6 +87,17 @@ TypeOK ==
 BrickNeedsNewNS ==
   \A i \in 1..n : brick[i] # "" => LidNewNS \in lids[i]
 
+(* A brick and a writable layer come together or not at all. The brick is
+   what a house can see and the layer is what it can keep; a brick with no
+   layer loses its writes at exit while the plan says it has data, and a
+   layer with no brick names an area nothing mounts. nwcheck.c returns
+   NW_E_LAYERPAIR. Like BrickNeedsNewNS this is NOT state-checked -- Init
+   gives every house "" for both, so the implication holds vacuously and
+   TLC explores no state where it could fail. Written for the reader; the
+   enforcement is nwcheck.c and the crafted-blob tests. *)
+LayerPairsWithBrick ==
+  \A i \in 1..n : (brick[i] # "") <=> (layer[i] # "")
+
 (* Landlock grants beneath the house's root; only a restriction when that
    root is a brick. nwcheck.c returns NW_E_LLBRICK. *)
 LandlockNeedsBrick ==
@@ -136,9 +147,10 @@ Init ==
   /\ kind = [i \in 1..n |-> 0]
   /\ lids = [i \in 1..n |-> {}]
   /\ brick = [i \in 1..n |-> ""]
+  /\ layer = [i \in 1..n |-> ""]
   /\ binds = [i \in 1..n |-> {}]
 
-Next == UNCHANGED <<n, kind, lids, brick, binds>>
+Next == UNCHANGED <<n, kind, lids, brick, layer, binds>>
 
 FdBudgetCovers == FdNeed <= MaxFds
 

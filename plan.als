@@ -31,6 +31,7 @@ sig House {
   budget: one Int,
   lids: set Lid,
   brick: lone Brick,
+  layer: lone Layer,
   binds: set Path
 }
 
@@ -47,6 +48,14 @@ sig House {
    Recorded because a prediction of work that turned out to be unnecessary
    reads, later, like work that was skipped. */
 sig Brick {}
+
+/* A writable layer. Opaque, like Brick, and for the same reason: what is
+   modelled is identity and pairing, not structure. Unlike a brick it is
+   NOT shared -- two houses with one layer would write into each other's
+   data -- but nothing here says so, because `lone` does not express
+   disjointness and the checker does not enforce it either. Recorded as a
+   gap rather than modelled as a property nobody checks. */
+sig Layer {}
 sig Path {}
 
 /* Explicit in the plan: no default, no inference. */
@@ -68,6 +77,15 @@ fact brickNeedsNewNS { all h: House | some h.brick => NewNS in h.lids }
 /* A bind is a path made visible inside a root. Without a brick there is no
    root to bind into (NW_E_BINDIDX). */
 fact bindsNeedBrick { all h: House | some h.binds => some h.brick }
+
+/* A brick and a layer come together or not at all: the brick is what a
+   house can see, the layer is what it can keep, and one without the other
+   is a house whose writes vanish or an area nothing mounts. nwcheck.c
+   returns NW_E_LAYERPAIR for either direction. Like the three facts
+   above this SHAPES instances rather than being checked -- see the note
+   below -- and its enforcement is nwcheck.c plus
+   test_checker_rejects_crafted_fields. */
+fact layerPairsWithBrick { all h: House | some h.layer <=> some h.brick }
 
 /* Landlock grants beneath the house's root, which is a restriction only when
    that root is a brick (NW_E_LLBRICK). */

@@ -14,3 +14,4 @@
 # The ledger starts where it starts.
 
 NWPLAN07 7416d2cfdb64ccebd7e05909d442da516b90349b03e384b9079cfe1fdedf955d
+NWPLAN08  3bc8a5eab49c1886419335be37edf85b9bf1da1066cf209e84bee6f990ce4c37

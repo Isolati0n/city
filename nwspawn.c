@@ -202,6 +202,13 @@ int main(int argc, char **argv)
             for (int k = 0; k < NW_BRICK_HASH; k++)
                 snprintf(hex + 2 * k, 3, "%02x", u[i].brick[k]);
             setenv("NW_BRICK", nw_unit_has_brick(&u[i]) ? hex : "", 1);
+            /* The layer id travels as itself: it is already a name from a
+             * closed alphabet, so unlike the hash there is no encoding
+             * step and nothing to decode. nw-sup re-validates it anyway,
+             * because nw-sup reads its unit from the environment and not
+             * from the sealed blob. setenv with overwrite=1 so a house
+             * without a layer cannot inherit the previous one's. */
+            setenv("NW_LAYER", u[i].layer, 1);
             int nb = 0;
             for (uint32_t b = 0; b < h->n_binds; b++) {
                 if (bd[b].unit != (uint16_t)i) continue;

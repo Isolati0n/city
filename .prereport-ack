@@ -41,3 +41,5 @@ prose-count	tests/run.py	# ONE ACCEPTANCE CASE PER BYTE POSITION, and it has to 
 prose-count	tests/run.py	# ONE CASE PER BYTE POSITION, and that is not thoroughness for its
 # false positive: matched 'phase 3 deleted that line', a phase number, not a count
 prose-count	tools/coverage-tcb.sh	# the brick path check; phase 3 deleted that line, and tcb-review had
+# false positive: prose inside a failure message ('is NOT in a brick'), not an assertion
+unpaired-absence	tests/run.py	f"because the house is NOT in a brick at all, which is the same "

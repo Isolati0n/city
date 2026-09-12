@@ -118,7 +118,7 @@ echo "== root.img (ext4, 64 MiB) =="
 dd if=/dev/zero of="$ROOTIMG" bs=1M count=64 status=none
 mkfs.ext4 -q -F -L nw-root "$ROOTIMG"
 mount -o loop "$ROOTIMG" "$MNT/root"
-mkdir -p "$MNT/root/nw/bin" "$MNT/root/nw/bricks" "$MNT/root/nw/stores" \
+mkdir -p "$MNT/root/nw/bin" "$MNT/root/nw/bricks" "$MNT/root/nw/layers" \
          "$MNT/root/efi" "$MNT/root/proc" "$MNT/root/sys" "$MNT/root/dev" \
          "$MNT/root/run" "$MNT/root/tmp" "$MNT/root/sys/fs/cgroup"
 cp -f "$BUILD/nw-root" "$BUILD/nw-spawn" "$BUILD/nw-sup" \

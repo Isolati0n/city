@@ -174,12 +174,30 @@ sections after this one and are deliberately not numbered here.
    would have used anyway, because a bind is the same path inside and out.
    Nothing is handed over. The invariant is about the descriptor table a house
    is born with, and that is still exactly three descriptors.
+
+   **Neither is a writable layer.** Every house with a brick roots in that
+   brick plus one writable area, so it can create files under `/` — but it
+   opens them itself, by name, with no descriptor passed in. The layer
+   changes what a house can *keep*, not what it is *given*. Three
+   descriptors, still, and `test_brick_is_a_root`'s census asserts it by
+   name on a house that has one.
 6. **Lids are the only thing that decides what a house can *do*; a brick
-   decides what it can *see*.** Seccomp, Landlock and namespaces are applied
+   decides what it can *see*, and its layer is what it can *keep*.**
+   Seccomp, Landlock and namespaces are applied
    per unit by `nw-sup` before `execv`. A unit with `brick=` also
    `pivot_root`s into it first, so its `/` is its own tree — its own
    libraries and toolchain, at the same paths, invisible to every other house
-   and to the machine. `brick=` forces `NW_LID_NEWNS`; `nwcheck.c` returns
+   and to the machine. That `/` is the brick with the house's **writable
+   layer** stacked over it: reads fall through to the sealed image, writes
+   land in `/nw/layers/<layer-id>/upper` and are still there when the house
+   is restarted. Not opt-in — `brick=` requires `layer=` and the reverse,
+   refused in the baker and in `nwcheck.c` (`NW_E_LAYERPAIR`). The layer is
+   keyed by a declared id and not by the house name: under name-keying,
+   renaming a house hands it an empty layer while its data sits orphaned
+   and nothing reports an error.
+   <<filecontains:nwcheck.c:NW_E_LAYERPAIR>>
+   <<filecontains:nwsup.c:lowerdir=%s,upperdir=%s,workdir=%s>>
+   `brick=` forces `NW_LID_NEWNS`; `nwcheck.c` returns
    `NW_E_BRICKNS` otherwise, because pivoting outside a private mount
    namespace repoints the machine's root. Cybersecurity is not a goal;
    containerization applies to apps.

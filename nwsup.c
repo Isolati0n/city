@@ -94,7 +94,8 @@ static void lid_newns(void)
  * brick a directory bind-mounted onto itself, the pre-phase-2 code, and
  * the write succeeds. docs/plans/01.
  */
-static void lid_brick(const char *brick, char *const *binds, int nbinds)
+static void lid_brick(const char *brick, const char *layer,
+                      char *const *binds, int nbinds)
 {
     /* Without this the mounts below propagate back to the machine and every
      * house sees every other house's binds. A brick that is visible outside
@@ -195,6 +196,48 @@ static void lid_brick(const char *brick, char *const *binds, int nbinds)
     /* The mount holds the device now, so the descriptor can go. AUTOCLEAR
      * frees it when the mount does, which is when this namespace dies. */
     close(ld);
+
+    /* THE WRITABLE LAYER, STACKED ON THE BRICK'S OWN MOUNTPOINT.
+     *
+     * lowerdir is NW_BRICK_MNT -- the erofs mount made just above -- and
+     * the overlay is mounted at that same path, on top of it. Verified by
+     * mounting rather than by reading: the overlay resolves lowerdir at
+     * mount time and holds the superblock, so covering the path
+     * afterwards is fine, and a write through the overlay lands in
+     * upper/ while the erofs stays read-only underneath.
+     *
+     * Stacked rather than given its own mountpoint so that there is no
+     * second directory for dawn to create and no third path in the
+     * design. The house pivots into NW_BRICK_MNT exactly as before; what
+     * changed is which filesystem is topmost there.
+     *
+     * BEFORE THE BINDS, deliberately. A bind mounted first would be
+     * hidden by the overlay covering the same mountpoint, so the house
+     * would see the brick's empty directory instead of the bound path --
+     * silently, because the mount would have succeeded. */
+    if (layer && layer[0]) {
+        char up[sizeof(NW_LAYER_DIR) + 1 + NW_NAME_LEN + 1
+                + sizeof(NW_LAYER_UPPER)];
+        char wk[sizeof(NW_LAYER_DIR) + 1 + NW_NAME_LEN + 1
+                + sizeof(NW_LAYER_WORK)];
+        char opt[sizeof up + sizeof wk + sizeof(NW_BRICK_MNT) + 64];
+        int n = snprintf(up, sizeof up, "%s/%s/%s",
+                         NW_LAYER_DIR, layer, NW_LAYER_UPPER);
+        if (n < 0 || (size_t)n >= sizeof up) die("layer upper path");
+        n = snprintf(wk, sizeof wk, "%s/%s/%s",
+                     NW_LAYER_DIR, layer, NW_LAYER_WORK);
+        if (n < 0 || (size_t)n >= sizeof wk) die("layer work path");
+        n = snprintf(opt, sizeof opt, "lowerdir=%s,upperdir=%s,workdir=%s",
+                     NW_BRICK_MNT, up, wk);
+        if (n < 0 || (size_t)n >= sizeof opt) die("layer options");
+        /* NOT created here. Staging creates <id>/upper and <id>/work from
+         * the plan before the boot that needs them, so a missing layer is
+         * a loud failure at exactly this line rather than a directory
+         * conjured by the supervisor behind the stager's back. */
+        if (mount("overlay", NW_BRICK_MNT, "overlay", 0, opt) < 0)
+            die("mount layer");
+        say("lid layer");
+    }
 
     for (int i = 0; i < nbinds; i++) {
         char tgt[sizeof(NW_BRICK_MNT) + NW_PATH_LEN];
@@ -384,6 +427,23 @@ int main(int argc, char **argv)
         if (bn < 0 || (size_t)bn >= sizeof brickbuf) die("brick path");
         brick = brickbuf;
     }
+    /* THE LAYER ID, RE-VALIDATED HERE for the same reason the hash is:
+     * nw-sup reads its unit from the environment rather than from the
+     * sealed blob, so nothing the baker or nw-check did stands behind
+     * this value. A name from a closed alphabet cannot express a
+     * traversal, and that is only true if it is checked to be one. */
+    const char *layer = getenv("NW_LAYER");
+    if (layer && layer[0]) {
+        size_t ll = strlen(layer);
+        if (ll >= NW_NAME_LEN) die("layer id length");
+        for (size_t k = 0; k < ll; k++) {
+            char c = layer[k];
+            int ok = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')
+                  || (c >= '0' && c <= '9') || c == '_' || c == '-';
+            if (!ok) die("layer id not a name");
+        }
+    }
+
     /* Landlock grants beneath the house's root, which is only a restriction
      * if that root is a brick. nw-check returns NW_E_LLBRICK; re-checked here
      * because nw-sup reads its unit from the environment. */
@@ -436,7 +496,7 @@ int main(int argc, char **argv)
         if (p == 0) {
             if (lids & NW_LID_NEWNET) lid_netns();
             if (lids & NW_LID_NEWNS) lid_newns();
-            if (brick) lid_brick(brick, binds, nbinds);
+            if (brick) lid_brick(brick, layer, binds, nbinds);
             if (lids & NW_LID_LANDLOCK) lid_landlock(binds, nbinds);
             if (lids & NW_LID_SECCOMP) {
                 if (nw_apply_house_seccomp() < 0) die("house seccomp");
