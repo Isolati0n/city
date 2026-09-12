@@ -145,7 +145,26 @@ int main(void)
              * its NUL and a hash has none, so the input class the check
              * existed for is gone. Its subject, not the check, is what
              * disappeared. */
-            int has_brick = nw_unit_has_brick(&u[k]);
+            /* OPEN-CODED ON PURPOSE, and this is the one place in the
+             * tree where a second copy of a predicate is correct.
+             *
+             * It briefly called nw_unit_has_brick() -- the shared helper
+             * that removed the five open-coded copies elsewhere -- and that
+             * made this assertion an IDENTITY: a property about the
+             * function, checked using the function. `control` measured the
+             * cost: mutating the helper to skip byte 0 was CAUGHT by this
+             * proof when the loop was here, and not caught once it called
+             * the helper. Folding the copies fixed a drift class and
+             * removed an oracle in the same edit.
+             *
+             * plan.md's LargestCityFits lesson, arriving in proofs/: two
+             * predicates that agree throughout the legal range cannot pin
+             * each other. What stops THIS copy drifting from the header is
+             * the compiler -- the harness includes blob.h, so a change to
+             * the field's width or type is a build error here. */
+            int has_brick = 0;
+            for (int i = 0; i < NW_BRICK_HASH; i++)
+                has_brick |= u[k].brick[i];
             __CPROVER_assert(!has_brick || (u[k].lids & NW_LID_NEWNS),
                              "accepted: a brick implies the NEWNS lid");
             __CPROVER_assert(!(u[k].lids & NW_LID_LANDLOCK) || has_brick,
@@ -192,7 +211,10 @@ int main(void)
              * is. Closing that needs a completeness direction -- construct
              * a legal blob and assert NW_OK -- and it is unbuilt.
              * proofs/README.md. */
-            __CPROVER_assert(nw_unit_has_brick(&u[bd[k].unit]),
+            int bind_has_brick = 0;
+            for (int i = 0; i < NW_BRICK_HASH; i++)
+                bind_has_brick |= u[bd[k].unit].brick[i];
+            __CPROVER_assert(bind_has_brick,
                              "accepted: a bind implies the unit has a brick");
         }
 #endif

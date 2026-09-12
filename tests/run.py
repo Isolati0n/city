@@ -1946,15 +1946,28 @@ def test_path_traversal_refused():
     # means "../..". Asserted from the other side, because "we deleted a
     # test" is not evidence: the baker must refuse a brick= that is a path
     # at all, which is the input the old case was built from.
-    open(esc, "w").write(
-        f"house one /bin/brick kind=oneshot lids=newns,seccomp "
-        f"brick={STAGE}/nw/bricks/deadbeef/../..\n")
-    p = run(["python3", CC, "--city", esc, "--out", f"{WORK}/nope.blob"])
-    expect(p.returncode != 0, f"baker accepted a path as brick=\n{p.out}{p.err}")
-    expect("hex characters" in (p.out + p.err),
-           f"the baker must refuse a path-shaped brick= for being the wrong "
-           f"SHAPE, not for containing '..' -- the traversal check is gone "
-           f"and this is what replaced it\n{p.out}{p.err}")
+    # BOTH SHAPES, and the CLEAN one is the load-bearing case. A traversing
+    # path is refused by any check that looks at `..`, so on its own it
+    # cannot tell a shape check from a traversal check: `control` widened
+    # `_is_hex64` to accept a clean absolute path -- phase-2 behaviour, with
+    # bake() padding it into the 32 bytes -- and the suite stayed green
+    # while the baker emitted `brick=/nw/bricks/anything/at/all` and the TCB
+    # validator accepted it. The `ok` line below claimed the baker's refusal
+    # "stands in its place" for the deleted traversal case, and the test did
+    # not check the thing the line claimed.
+    for path, what in ((f"{STAGE}/nw/bricks/deadbeef/../..", "a traversing path"),
+                       (f"{_brick_dir()}/deadbeef", "a clean absolute path"),
+                       ("deadbeef.img", "a bare filename")):
+        open(esc, "w").write(
+            f"house one /bin/brick kind=oneshot lids=newns,seccomp "
+            f"brick={path}\n")
+        p = run(["python3", CC, "--city", esc, "--out", f"{WORK}/nope.blob"])
+        expect(p.returncode != 0,
+               f"baker accepted {what} as brick=\n{p.out}{p.err}")
+        expect("hex characters" in (p.out + p.err),
+               f"the baker must refuse {what} for being the wrong SHAPE, not "
+               f"for containing '..' -- the traversal check is gone and this "
+               f"is what replaced it\n{p.out}{p.err}")
 
     # The checker must refuse a crafted blob on its own, from one the baker
     # would not emit. exec_path is the field that is still a path, so it is
@@ -2739,7 +2752,7 @@ def test_checker_rejects_crafted_fields():
     # a closed set and pinning one member of it.
     LEGAL_LIDS = 1 | 2 | 4 | 8          # seccomp landlock newns newnet
     BRICK_OFF = HDR + VICTIM * USZ + NAME + PATH
-    cases = [
+    cases = ([
         # THE TWO "dirty blank" CASES ARE GONE, and this is what replaced
         # them. They asserted that a blank brick is zero to the field
         # width, because a NUL-terminated path left an unvalidated tail and
@@ -2749,18 +2762,26 @@ def test_checker_rejects_crafted_fields():
         # different hash. The input class went, so the check went with it.
         #
         # What still matters, and is sharper: "no brick" is ALL-ZERO, so
-        # the checker must look at every byte. A `has_brick` that tested
-        # brick[0] alone would read any hash beginning with a zero byte --
-        # one in 256 of them -- as "no brick", silently starting a house on
-        # the machine root that the plan says is in a brick. That is the
-        # lid-says-one-thing-code-does-another shape, and it is why this
-        # case sets the LAST byte and clears NEWNS: it can only be refused
-        # if the scan reached byte 31.
-        ("hash-tail-only",
-         [(BRICK_OFF + k, 0) for k in range(BRICK - 1)]
-         + [(BRICK_OFF + BRICK - 1, 1), (LIDS_OFF, 1)],
+        # the checker must look at EVERY byte. A `has_brick` that tested
+        # brick[0] alone reads any hash beginning with a zero byte -- one in
+        # 256 -- as "no brick", silently starting a house on the machine
+        # root that the plan says is in a brick.
+        #
+        # ONE CASE PER BYTE POSITION, and that is not thoroughness for its
+        # own sake. A single `hash-tail-only` case pinned byte 31 and
+        # NOTHING ELSE: `control` mutated the shared predicate to read only
+        # byte 31 -- the exact mirror of the brick[0] defect this all came
+        # from, one byte over -- and the suite AND the proof both stayed
+        # green, because every brick any test used had byte 31 nonzero.
+        # Pinning one position is what produced the bug twice, so the
+        # position is enumerated out of existence rather than chosen.
+    ] + [
+        (f"hash-only-byte{k}",
+         [(BRICK_OFF + j, 0) for j in range(BRICK) if j != k]
+         + [(BRICK_OFF + k, 1), (LIDS_OFF, 1)],
          "brick without NEWNS lid",
-         "a brick whose hash is nonzero only in its last byte"),
+         f"a brick whose hash is nonzero only at byte {k}")
+        for k in range(BRICK)
     ] + [
         (f"kind{k}", [(KIND_OFF, k)], "kind",
          f"kind={k}, outside the two the runtime knows")
@@ -2777,7 +2798,7 @@ def test_checker_rejects_crafted_fields():
          [(BRICK_OFF + k, 0) for k in range(BRICK)]
          + [(LIDS_OFF, 1 | 2)], "landlock without brick",
          "landlock on a house with no brick"),
-    ]
+    ])
     for why, edits, reason, what in cases:
         path = craft(why, edits)
         r = run([f"{BIN}/nw-check", path])
