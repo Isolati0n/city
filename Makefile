@@ -166,6 +166,25 @@ PREREPORT_BASE ?= $(shell git rev-parse --verify --quiet '@{u}'                 
 prereport:
 	@git diff $(PREREPORT_BASE) | python3 tools/prereport.py --diff -
 
+# The brief's numbered invariants, against the tree. Reads only items under
+# a heading whose first word is `Invariants`, so the refusals and the
+# waiting-on-a-prerequisite entries are excluded BY SECTION rather than by
+# anyone's judgement -- they are never candidates and cannot be counted as
+# gaps.
+#
+# --exclude is not optional: the checker's own source contains every
+# annotation form it looks for, so a tree containing it answers its own
+# grep-absent checks. prereport.py hit the identical thing in the same
+# session it arrived.
+#
+# NOT in `test`, and the reason is the honest one: today it reports one
+# invariant verified out of eight, so wiring it into the suite would add a
+# target that passes while checking almost nothing. It is a tool you run
+# when you edit the brief. Exit 1 means an annotation is CONTRADICTED --
+# the brief says something the tree does not.
+checkbrief:
+	python3 tools/checkbrief.py --brief CLAUDE.md --tree . 	    --exclude tools/checkbrief.py
+
 # The CBMC proofs of the validator, and the controls that must fail. Not in
 # `test`: it is minutes rather than seconds, and it needs cbmc, which is not
 # a build dependency of anything here. `run.sh` exits 3 and says SKIP rather

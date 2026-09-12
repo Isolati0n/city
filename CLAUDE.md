@@ -49,6 +49,42 @@ sections after this one and are deliberately not numbered here.
    `bakery/nw-cc.py`, `plan.als` (`fdNeed`) and `Plan.tla` (`FdNeed`) —
    change one, change all four, or they drift.
 
+   Annotated for `tools/checkbrief.py`, one per site, each naming that
+   file's own spelling — the symbol is written four ways and a grep for
+   any one of them finds a quarter of it:
+   <<count:blob.h:NW_MAX_UNITS * 2 + NW_FD_RESERVED:2>>
+   <<filecontains:bakery/nw-cc.py:FD_RESERVED + len(houses) * 2>>
+   <<filecontains:plan.als:plus[nwReserved[], 2.mul[#House]]>>
+   <<filecontains:Plan.tla:FdNeed == Reserved + 2 * n>>
+   and the two second copies that pin the others rather than being sites
+   themselves, because losing one loses the only thing checking equality:
+   <<filecontains:plan.als:assert FdArithmetic>>
+   <<filecontains:Plan.tla:FdNeedAgrees ==>>
+
+   **What that buys, measured rather than reasoned, because the first
+   version of this paragraph was wrong.** It said the annotations catch a
+   site disappearing and not a site disagreeing, so `* 3` in `blob.h`
+   would pass all six. It does not — the annotations name the arithmetic
+   *verbatim*, so changing the multiplier in a named file removes the
+   named text and is caught. Run:
+
+   - delete the `plan.als` site → `contradicted`, naming that annotation
+   - `* 2` → `* 3` in `blob.h` → `contradicted`, exit 1
+
+   What genuinely survives is a disagreement that leaves every named
+   string intact, and the sharpest case is a **value**: set
+   `NW_FD_RESERVED` to 16 in `blob.h` while the baker keeps
+   `FD_RESERVED = 8`, and all six annotations still pass — the
+   *expressions* are untouched and only what they evaluate to has
+   diverged. Verified: `1 verified, 0 contradicted`.
+
+   So the honest scope is **text, not arithmetic**. What pins the
+   arithmetic is `FdArithmetic` and `FdNeedAgrees`, each against a second
+   hand-written copy in its own file, and what pins the values is
+   `tools/gen-spec-limits.py`, which generates them out of `blob.h` so
+   the specs cannot hold a stale one. The annotation covers the third
+   thing neither of those does: a site quietly ceasing to exist.
+
    The *values* are now a two-place change: `blob.h` and
    `bakery/nw-cc.py`. Both specs read theirs from `specs/limits.als` and
    `specs/Plan.cfg`, generated out of `blob.h` by
@@ -377,6 +413,7 @@ count. Record a completed review with `--record <agent>`.
 | a brief, this file, or an environment claim changed | `claims` | kind-1 statements rot silently |
 | a speed or scale claim was made | `measurement` | never report a single sample |
 | any diff, before writing the report | `make prereport` | not an agent; five shapes that have each cost a round |
+| a numbered invariant here changed | `make checkbrief` | not an agent; verifies the annotations, and exits 1 when the tree contradicts one |
 
 **`make prereport`'s calibration number: four, on `4e22204`'s diff.** Keep
 a number here and change it when the patterns change. A heuristic tool
