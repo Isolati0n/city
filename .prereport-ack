@@ -51,3 +51,13 @@ prose-count	houses/layer.c	/* Reads at most n-1 bytes and NUL-terminates. Return
 prose-count	nwcheck.c	* the suite does not look at. Measured: two houses, one id, one file
 # false positive: describes the code on the next line, not a count that can age
 prose-count	tests/run.py	# loudly -- four tests red at once -- but every message was a size
+# the three assertions beneath it ARE the check, and each is shown to matter by what satisfies the other two; they cannot be RUN here (no Landlock, the test skips by name) so this is a claim awaiting an environment rather than an unchecked one
+mechanism-claim	tests/run.py	# load-bearing:
+# false positive: describes the line beneath it, not a count that can age
+unpaired-absence	HISTORY.md	- **`mknod` is not in the seccomp allow-list**, so the probe killed the
+# false positive: describes the line beneath it, not a count that can age
+unpaired-absence	HISTORY.md	- **`unlink` is not in it either**, which killed the house that has binds
+# false positive: describes the line beneath it, not a count that can age
+prose-count	houses/brick.c	* so every write is one whole line and a bounded read can only return
+# false positive: describes the line beneath it, not a count that can age
+prose-count	houses/brick.c	/* Built into one buffer and emitted as ONE padded line -- it was

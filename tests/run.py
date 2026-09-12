@@ -345,6 +345,21 @@ def stage_layers(blob):
     /nw/bricks do."""
     if not os.path.exists(blob + ".layers"):
         return
+    # RESET FIRST, and this is not hygiene -- it is what makes the suite
+    # deterministic. A layer is DURABLE by design and keyed by an id, so
+    # without this a test inherits whatever a previous suite run left
+    # under the same id. Measured the hard way: a buggy probe wrote one
+    # byte over /id, that write copied up into the layer, and every
+    # later run of test_brick_is_a_root read `id=xrick-one` from a
+    # correct brick -- the masking failure runtime.md records, arriving
+    # inside the harness before anyone hit it in production.
+    #
+    # No test wants cross-RUN persistence. layer-survives-a-restart is
+    # about surviving a restart WITHIN one boot, and it hand-rolled this
+    # same rmtree for itself; one mechanism instead, so a new brick test
+    # cannot forget it.
+    for lid in (l.strip() for l in open(blob + ".layers") if l.strip()):
+        shutil.rmtree(os.path.join(_layer_dir(), lid), ignore_errors=True)
     r = run(["python3", os.path.join(ROOT, "tools", "stage-layers.py"),
              blob, "--quiet"])
     expect(r.returncode == 0, f"stage-layers failed\n{r.out}{r.err}")
@@ -1686,7 +1701,10 @@ def make_brick(ident, mirrors=(), exe="unit-brick"):
     why = erofs_available()
     if why:
         raise Unavailable(why)
-    files = {"id": ident.encode() + b"\n"}
+    # /w is a writable-probe target: houses/brick.c writes a byte into an
+    # EXISTING file to show the layer is writable, and it must not be /id,
+    # which every other assertion reads.
+    files = {"id": ident.encode() + b"\n", "w": b"-\n"}
     tmp = tempfile.mkdtemp(dir=WORK)
     os.makedirs(f"{tmp}/bin")
     # WHICH FIXTURE, because a house that pivots into its brick can only
@@ -2189,13 +2207,8 @@ def test_layer_survives_a_restart():
     never the brick. Neither substitutes for the other."""
     brick = make_brick("layer-one", exe="unit-layer")
     lid = "l-survive"
-    # A FRESH LAYER PER RUN OF THE SUITE. The layer is durable by design,
-    # so a leftover from a previous run would make run 1 report a state
-    # that is not absent -- the test would pass for the wrong reason, or
-    # fail confusingly. Removing it here is the suite standing in for a
-    # reclaim step that does not exist yet.
-    import shutil
-    shutil.rmtree(os.path.join(_layer_dir(), lid), ignore_errors=True)
+    # The fresh-layer reset lives in stage_layers() now, so every brick
+    # test gets it and none can forget it. This test had the only copy.
     city = f"{WORK}/layer.city"
     open(city, "w").write(
         f"house keeper /bin/brick kind=longrun budget=3 "
@@ -2707,16 +2720,51 @@ def test_landlock_confines():
     # which, in the ok line, instead of printing the same word for two
     # opposite situations. See CLAUDE.md invariant 6: the resolution is a
     # design decision and is not taken.
+    # RESOLVED 2026-09-12, and the assertion reverses. It required
+    # `wr_root` to be denied, and the first machine with both Landlock
+    # and erofs reported `denied(13)` -- EACCES from the lid, not
+    # `denied(30)` EROFS from the image -- which is the contradiction
+    # confirmed live: a writable layer the house could not write.
+    #
+    # The lid grants write beneath the root now, and invariant 6 claims
+    # less. So the three things below are what the lid IS, and each is
+    # load-bearing:
+    #
+    #   1. writing a file the brick already contains SUCCEEDS -- the
+    #      layer is writable, which is what the grant bought;
+    #   2. a DEVICE NODE at the root is refused -- the MAKE_ rights stay
+    #      withheld, which is what the lid still provides;
+    #   3. creating a plain file is refused at the root and allowed in a
+    #      declared bind -- the pair that shows the scoping still
+    #      DISCRIMINATES. Without 3, a lid that granted everything would
+    #      satisfy 1 and a lid that granted nothing would satisfy 2.
+    #
+    # MAKE_REG is one of the withheld rights, so 3's root half also means
+    # a landlock house cannot create files in its layer, only modify what
+    # it shipped with. That is narrower than a plain brick house and it
+    # is deliberate; see the note in nwsup.c.
+    wrx = field("wr_existing").get("sealed", "")
+    expect(wrx.startswith("ok"),
+           f"a landlock house could not write a file its brick already "
+           f"contains: wr_existing={wrx}. The lid grants write beneath "
+           f"the root since 2026-09-12; if this is denied(13) the grant "
+           f"did not take, and if denied(30) the layer did not mount"
+           f"\n{out}")
+    mk = field("mknod_root").get("sealed", "")
+    expect(mk.startswith("denied"),
+           f"a landlock house created a DEVICE NODE at its root: "
+           f"mknod_root={mk}. The MAKE_ rights are what the lid still "
+           f"withholds, and without them it grants everything the "
+           f"filesystem would have\n{out}")
     wr = field("wr_root").get("sealed", "")
-    expect(wr.startswith("denied"),
-           f"the house wrote into its own root under landlock: "
-           f"wr_root={wr}\n{out}")
-    why = ("EACCES -- Landlock refusing a WRITABLE layer, which is the "
-           "unresolved contradiction in invariant 6"
-           if "13" in wr else
-           "EROFS -- the root is read-only, so the layer did not mount"
-           if "30" in wr else "an unexpected errno")
-    print(f"ok landlock-confines (ABI {abi}; wr_root={wr}, {why})")
+    mkb = field("mk_bind").get("sealed", "")
+    expect(wr.startswith("denied") and mkb.startswith("ok"),
+           f"the lid no longer DISCRIMINATES: creating a file must be "
+           f"refused at the root (MAKE_REG withheld) and allowed in a "
+           f"declared bind. Got wr_root={wr} mk_bind={mkb}\n{out}")
+    print(f"ok landlock-confines (ABI {abi}; wr_existing={wrx} into the "
+          f"layer, mknod_root={mk}, and create refused at the root "
+          f"({wr}) but allowed in a bind ({mkb}))")
 
 
 def c_name_slots(names):

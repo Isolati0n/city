@@ -218,38 +218,40 @@ sections after this one and are deliberately not numbered here.
    There is **one** allow-list and a house does not choose it; the second
    profile that briefly existed is `HISTORY.md` §23.
 
-   **LANDLOCK AND THE WRITABLE LAYER CONTRADICT EACH OTHER, AND THIS IS
-   NOT RESOLVED.** The paragraph below says nothing grants write beneath
-   the root; the paragraph above says every brick house has a writable
-   layer at its root. Both are present tense and they cannot both hold
-   for a `landlock` house. `lid_landlock()` runs *after* `lid_brick()`,
-   so the `/` it grants read-and-execute beneath **is the overlay** — the
-   house gets a layer it cannot write, every write is `EACCES` instead of
-   landing in `upper`, and nothing logs anything.
+   **RESOLVED 2026-09-12 by narrowing what this lid CLAIMS, not what it
+   does.** It granted read-and-execute beneath `/` and that was never
+   what made a brick unwritable: phase 2 established the seal is
+   over-determined — the kernel forces read-only when either fd is
+   `O_RDONLY` and erofs has no write path — so no flag `nwsup.c` passed
+   enforced it. Writable areas then made the root an overlay, and because
+   Landlock runs *after* the brick pivot the `/` being restricted **is**
+   that overlay: every landlock house got a writable layer it could not
+   write. Confirmed live on the first machine with both Landlock and
+   erofs — `wr_root=denied(13)`, EACCES from the lid, where a read-only
+   image gives `denied(30)`.
 
-   It is worse than a local contradiction: `landlock` requires a brick,
-   and a brick now requires a layer, so **every** Landlock house is in
-   this state. `test_landlock_confines` cannot tell, because it asserts
-   `denied` and cannot separate `denied(30)` (EROFS, the old reason) from
-   `denied(13)` (EACCES, the new one) — a test that passes before and
-   after for different reasons, which `harness.md` names as a finding.
-
-   **Unverified here and flagged rather than decided**: this machine has
-   no Landlock (`landlock_create_ruleset` → ENOSYS), so `tcb-review`
-   raised it as a HYPOTHESIS from reading the ordering and I could not
-   run it either. The resolution is a design decision — grant write
-   beneath the root and accept what that costs the lid, or refuse
-   `landlock` with a layer and accept that the lid becomes unusable —
-   and it should not be guessed at by whoever next touches the file.
-   Recorded here, in `runtime.md`, and in `HISTORY.md` §55.
+   Write is granted beneath the root now. It gives away nothing that was
+   being protected: the root is a private overlay no other house can see.
 
    **The Landlock lid is for a house in a brick**, and requires one
-   (`NW_E_LLBRICK`). It grants read and execute beneath the house's own root
-   — which is the brick, since it runs after the pivot — so any linkage works
-   without a list of library paths guessed at in the TCB. Nothing grants write
-   beneath the root, so a house cannot write into its own brick; declared
-   binds get read and write, which makes the bind table the policy input.
-   `HISTORY.md` §26.
+   (`NW_E_LLBRICK`). It grants read, execute and **write** beneath the
+   house's own root — which is the brick with its layer over it, since it
+   runs after the pivot — so any linkage works without a list of library
+   paths guessed at in the TCB, and the layer is writable as every other
+   brick house's is.
+
+   **So what the lid provides is not "the house cannot write". It is: the
+   house cannot create device nodes, sockets or fifos, and cannot reach a
+   path it was not given.** The `MAKE_` rights stay withheld beneath the
+   root and declared binds still get the full set, which makes the bind
+   table the policy input. That is narrower than the old claim and it is
+   true; the old one asserted both halves of a contradiction.
+
+   A consequence worth knowing rather than discovering: `MAKE_REG` is one
+   of the withheld rights, so a landlock house can modify a file its
+   brick already contains and cannot create a new one under `/`. Granting
+   it is a deliberate change here and in this paragraph, not a fix.
+   `HISTORY.md` §26 and §56.
 
    **Lids are not advisory.** If a declared lid cannot be applied, that house
    does not start: every lid path in `nwsup.c` ends in `die()`, never in a log
@@ -776,6 +778,21 @@ Two corollaries worth stating, because both have been got wrong:
   round is **unreviewed code**; re-dispatching against the fixes is not
   belt-and-braces, it is this rule applied once more. "It fixes a
   reviewer's finding" is not evidence about the fix. `HISTORY.md` §53.
+
+- **A rule is at its weakest in the change that introduces it**, because
+  the author is thinking *about* the rule rather than *applying* it. Three
+  times now: the log-chunk rule was broken by an assertion written on the
+  logger's prefix in the same round the rule was restated; `unit_layout()`
+  was written to retire "an offset error wearing a rule violation's
+  message" and read the source tree while its neighbour reads the stage,
+  reproducing that exact message one level down; and the fixture probing
+  whether a layer is writable wrote its byte over `/id`, the file every
+  other assertion in that test reads.
+
+  The defence is not more care at the moment of writing — that is the
+  state in which these were written. It is to run the new rule's own
+  check against the change that introduces it, the way `make prereport`
+  is run on its own diff.
 
 - **Silence is the expensive failure, not noise.** A mechanism that is
   correct and routed around is worse than a broken one, because it looks

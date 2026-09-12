@@ -160,26 +160,34 @@ environment — so a change to any link is a change to everything below it.
 
 ## Bricks
 
-**UNRESOLVED, READ THIS BEFORE TOUCHING `lid_landlock()`:** Landlock runs
-after the brick pivot, so the `/` it grants read-and-execute beneath is
-the OVERLAY. A `landlock` house therefore has a writable layer it cannot
-write — `EACCES`, silently. And since `landlock` requires a brick and a
-brick now requires a layer, that is every Landlock house. Not verified on
-this machine (no Landlock: `landlock_create_ruleset` → ENOSYS), raised by
-`tcb-review` from the ordering. Do not pick a resolution in passing:
-granting write beneath the root guts the lid, refusing `landlock` with a
-layer retires it. `CLAUDE.md` invariant 6, `HISTORY.md` §55.
+**Landlock grants WRITE beneath the root as of 2026-09-12**, because it
+runs after the brick pivot and that root is the overlay — granting only
+read made every landlock house's layer unwritable, confirmed live as
+`wr_root=denied(13)` where a read-only image gives `denied(30)`. What the
+lid still provides is the withheld `MAKE_` rights (no device nodes,
+sockets or fifos) and the scoping of binds. `MAKE_REG` is withheld too,
+so a landlock house modifies what its brick shipped with and creates
+nothing new under `/`. `CLAUDE.md` invariant 6, `HISTORY.md` §56.
 
 **A LAYER CAN MASK ITS BRICK, DURABLY.** "Reads fall through to the sealed
 image" is true and incomplete: the overlay can also whiteout and overwrite,
 and those survive reboot because the layer is durable and keyed by an id.
 Measured: a house that unlinks its own exec path leaves a whiteout in
 `upper` and never starts again — same plan, same sealed brick, `FAIL exec
-house errno=2` forever, image byte-identical to its own name. The only
-recovery is removing the layer AND re-running the stager; `rm` alone gives
-`FAIL mount layer errno=2` on every boot. **Nothing in the tree does
-either** — the suite hand-rolls it for one test and calls it standing in
-for a reclaim step that does not exist. The phase-2 seal protects the
+house errno=2` forever, image byte-identical to its own name. 
+
+**THE RECOVERY, written down because nothing implements it and the next
+person to hit this needs the answer.** It is **not** rebuilding the
+brick: the image is untouched and still hashes to its own name, so
+rebuilding changes nothing. It is both of these, in order:
+
+    rm -rf /nw/layers/<layer-id>
+    python3 tools/stage-layers.py <blob>    # recreates upper/ and work/
+
+`rm` alone gives `FAIL mount layer errno=2` on every boot, because
+nw-sup does not create what the stager owns. The house's data is lost;
+there is no way to keep it and undo the mask. **Nothing in the tree does
+either step** — a reclaim path is a real missing piece. The phase-2 seal protects the
 image file, not the house's view of it. `tcb-review`.
 
 **Every brick house also has exactly one writable layer, and the two are

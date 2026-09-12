@@ -366,7 +366,37 @@ static void lid_landlock(char *const *binds, int nbinds)
     int rfd = sys_landlock_create_ruleset(&attr, sizeof attr, 0);
     if (rfd < 0) die("landlock ruleset");
 
-    ll_beneath(rfd, "/", ro);
+    /* WRITE BENEATH THE ROOT, which reverses what this lid granted until
+     * 2026-09-12 and narrows what it claims rather than what it does.
+     *
+     * `ro` was the grant here, and it was never what made a brick
+     * unwritable: phase 2 established the seal is OVER-DETERMINED -- the
+     * kernel forces read-only when either fd is O_RDONLY and erofs has no
+     * write path -- so no flag this file passes enforced it. Writable
+     * areas then made the root an overlay, and because this runs AFTER
+     * the brick pivot the `/` being restricted IS that overlay: every
+     * landlock house got a writable layer it could not write, EACCES,
+     * silently. Confirmed live on the first machine with both Landlock
+     * and erofs: `wr_root=denied(13)` where a read-only image gives
+     * `denied(30)`.
+     *
+     * Granting write back gives away nothing that was being protected.
+     * The root is a private overlay no other house can see, and the
+     * things this lid actually provides are untouched: the MAKE_ rights
+     * stay withheld, so no device nodes, no sockets, no fifos; and the
+     * scoping stays, so a path outside the declared binds is unreachable.
+     *
+     * NOTE WHAT ELSE THE MAKE_ RIGHTS COST, because it is a consequence
+     * and not an oversight: MAKE_REG is one of them, so a landlock house
+     * can modify a file its brick already contains and cannot CREATE a
+     * new one under `/`. "Writes what it was shipped with, adds nothing"
+     * is a coherent rule and it is narrower than what a bare brick house
+     * gets. It is what was asked for; if creating files in the layer is
+     * wanted, MAKE_REG has to be granted here deliberately and invariant
+     * 6 has to say so. */
+    const uint64_t root = (ro | LANDLOCK_ACCESS_FS_WRITE_FILE
+                              | LANDLOCK_ACCESS_FS_TRUNCATE) & handled;
+    ll_beneath(rfd, "/", root);
     for (int i = 0; i < nbinds; i++)
         ll_beneath(rfd, binds[i], rw);
 

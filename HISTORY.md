@@ -4992,3 +4992,114 @@ a layer id with a path separator in it` — an offset error wearing a rule
 violation's message, which is the exact sentence `unit_layout()`'s
 docstring was written to retire, surviving one level down at the boundary
 between the tree and the stage.
+
+## 56. Landlock, resolved by claiming less (2026-09-12)
+
+The contradiction §55 recorded was confirmed **live** on the first machine
+with both Landlock and erofs installed:
+
+```
+ok landlock-confines (ABI 7; wr_root=denied(13), EACCES -- Landlock
+   refusing a WRITABLE layer, which is the unresolved contradiction in
+   invariant 6)
+```
+
+`denied(13)` is EACCES from the lid, not `denied(30)` EROFS from the
+image. **The errno separation added in §55 is what made that legible**,
+on its first run in an environment that could distinguish them — before
+it, both were "denied" and the test would have passed for the wrong
+reason in precisely the environment where the defect lives.
+
+### The resolution is neither option §55 named
+
+Both of those assumed Landlock's old purpose. It never had it.
+
+Phase 2 established the seal is **over-determined**: the kernel forces
+read-only when either fd is `O_RDONLY` and erofs has no write path, so no
+flag `nwsup.c` passes is what enforced it. Landlock granting read-only
+beneath `/` was therefore never what made a brick unwritable — it was a
+claim sitting next to a filesystem already doing the work, which is this
+project's characteristic shape wearing a security lid's clothes.
+
+So: **grant write beneath the root, and narrow what invariant 6 claims.**
+It gives away nothing that was being protected, because the root is a
+private overlay no other house can see. What the lid actually provides is
+untouched — the `MAKE_` rights stay withheld and the binds stay scoped.
+
+The invariant now says what is left, and it is narrower and true: **not
+"the house cannot write", but "the house cannot create device nodes,
+sockets or fifos, and cannot reach a path it was not given."**
+
+A consequence recorded rather than discovered: `MAKE_REG` is one of the
+withheld rights, so a landlock house modifies what its brick shipped with
+and creates nothing new under `/`. Granting it is a deliberate change, not
+a fix.
+
+### The control, and why it has three parts
+
+Each alone is satisfied by the wrong lid — a lid granting everything
+passes the first, a lid granting nothing passes the second:
+
+1. writing a file the brick already contains **succeeds** — the layer is
+   writable, which is what the grant bought;
+2. a **device node** at the root is refused — the `MAKE_` rights, which
+   are what the lid still is;
+3. creating a plain file is refused at the root and **allowed in a
+   declared bind** — the pair showing the scoping still discriminates.
+
+Written here and not run here: this machine still has no Landlock, so the
+test skips by name. It reports the errnos it saw in its own `ok` line, so
+the machine that runs it says which.
+
+### Four defects in writing the fixture, all mine, all found by running
+
+- **`mknod` is not in the seccomp allow-list**, so the probe killed the
+  house under `lids=...,seccomp` — status 18176, the 71<<8 signature
+  `readlink` produced in phase 2. The filter was **not** widened: adding
+  a syscall requires naming a unit that needs it and no house needs
+  `mknod`, so the probe skips and *says* it skipped, because an absent
+  line reads the same as a refusal.
+- **`unlink` is not in it either**, which killed the house that has binds
+  when the probe tidied up after itself. The cleanup went.
+- **The probe wrote its byte over `/id`** — the file every other
+  assertion in that test reads — turning `id=brick-two` into
+  `id=xrick-two`. A probe that corrupts the evidence.
+- **`brick.c` buffered its whole report and flushed once**, so PID 1's
+  256-byte read split it mid-line: `one mk_bind` / `[one] =ok(0)`. It had
+  been under the limit by luck and three added probes pushed it over.
+  Every line is its own padded write now, as `orphan.c` and `layer.c`
+  already were.
+
+### And the masking failure bit the harness before production
+
+After the `/id` corruption was fixed, `test_brick_is_a_root` still read
+`id=xrick-one` from a correct brick — because the earlier buggy write had
+**copied up into the durable layer**, which the suite never reset. Exactly
+the masking failure §55 recorded, arriving inside the harness first.
+
+The fix is one place rather than one per test: `stage_layers()` removes a
+declared layer before creating it. No test wants cross-*run* persistence —
+`layer-survives-a-restart` is about surviving a restart *within* one boot,
+and it had hand-rolled the same `rmtree` for itself.
+
+### The pattern, named
+
+**A rule is at its weakest in the change that introduces it**, because the
+author is thinking *about* the rule rather than *applying* it. Three
+instances in two rounds: an assertion on the logger's prefix written in
+the round that restated the log-chunk rule; `unit_layout()`, written to
+retire "an offset error wearing a rule violation's message", reproducing
+that message one level down by reading the source tree while its
+neighbour reads the stage; and the writability probe corrupting the
+evidence. The defence is not more care while writing — that is the state
+these were written in. It is to run the new rule's own check against the
+change that introduces it.
+
+### One more note on §55's duplicate-layer finding
+
+The maximal plan baking all `NW_MAX_UNITS` houses onto one layer id and
+being accepted is the **same class as phase 3's over-rejection blindness,
+arriving as over-acceptance**: the suite exercised the field and never
+exercised two houses disagreeing about it. Both directions again, and the
+missing direction was neither accept nor reject — it was *two units
+interacting through one field*.
