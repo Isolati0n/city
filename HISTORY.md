@@ -6159,8 +6159,11 @@ live". It is **nothing changes what is running without going through
 validation and a boot**. The first version of that sentence was the
 other one, and it would have ruled out the helper the operator is
 asking for. `tools/stage-candidate.py` is written under the second: it
-produces only a slot nobody is booted from, runs `nw-check` on the bytes
-that will be renamed, and never writes `<slots>/current`.
+runs `nw-check` on the bytes that will be renamed, never writes
+`<slots>/current`, and produces a slot nobody is booted from plus the
+layer directories that slot's plan names — which are on the machine
+root, so "only a slot" was an absolute the tool's own first line
+disproves.
 
 The guard is structural, not a convention: the tool reads `current` and
 refuses when the target names that slot. And it refuses when `current`
@@ -6206,11 +6209,21 @@ mounts, boots, and holds a half-written file, and nothing in the bytes
 says so.
 
 **The subject is the SUPERVISOR, not the house**, and that falls out of
-`nwsup.c` rather than being asserted. `nw-sup` exits in exactly three
-places — a oneshot that exited 0, a budget exhausted, and `stopping` —
-and otherwise loops and restarts. So "no supervisor for this unit" is
-precisely "this unit will not run again before the next boot", which is
-the fold's actual precondition. "The house process is not running" is
+`nwsup.c` rather than being asserted. The supervisor stops *looping*
+for three reasons — a oneshot that exited 0, a budget exhausted, and
+`stopping` — and **every other way it can terminate is terminal too**:
+`die()` (`_exit(72)`) from the fork and wait paths and from many sites
+in `main`, and PID 1's SIGKILL at the grace deadline. Nothing respawns
+a supervisor by any route, which is the property the fold needs. So
+"no supervisor for this unit" is precisely "this unit will not run
+again before the next boot", which is the fold's actual precondition.
+
+*(This said "exits in exactly three places". There are five `_exit`
+statements in the loop alone. The conclusion survived and the
+enumeration did not — and the enumeration was prescribed for copying
+into the helper's comment, which is a wrong count propagated into code
+by instruction. `claims`. State the reasons it stops looping, then say
+every other termination is terminal; that is what the fold rests on.)* "The house process is not running" is
 not: a longrun house between restarts satisfies it and is about to
 write. That distinction is what makes the check correct rather than
 approximately correct, and it is the kind that gets simplified away by
@@ -6223,8 +6236,13 @@ house inherits it through `execv`, so one scan of `/proc/*/environ` for
 
 **A second, independent scan of `/proc/*/mountinfo` for
 `upperdir=<layer>/upper`**, because a grandchild the house forked lives
-in the house's mount namespace, can still write the upper, and orphans
-are never reaped. Measured: a private-namespace overlay is invisible in
+in the house's mount namespace and can still write the upper. It has no
+supervisor, and nothing kills it — PID 1 *does* reap orphans as they
+die (`orphans_reaped`), so the first telling of this, that orphans are
+never reaped, contradicted both the tree and `runtime.md`. The half
+that matters is true: an orphan is never killed and has no supervisor,
+so "the supervisor is gone" does not imply "nothing is writing the
+upper". `claims`. Measured: a private-namespace overlay is invisible in
 the caller's own mountinfo and visible by scanning every pid; the hits
 go to zero the moment the namespace's last process exits, while the
 upper keeps its contents. One tempting check is ruled out — `work/work`
@@ -6251,7 +6269,11 @@ each of those could silently return nothing.
 
 **What closes the TOCTOU window is a property, not a lock:** a
 supervisor that has exited cannot come back, because PID 1 has no
-respawn path (invariant 1, pinned by `absent-in` annotations). If PID 1
+respawn path — its fork of the spawner is outside any loop, and
+invariant 1's `absent-in` annotations are a *spelling* backstop rather
+than support for the property. They pin three tokens; a re-fork named
+anything else passes all of them, which is `CLAUDE.md`'s own point
+about what an absence annotation can express. `claims`. If PID 1
 ever grows one, this check becomes a race **silently** — nothing would
 fail, the fold would just occasionally capture a live layer. That
 dependency belongs beside the helper when it lands.
@@ -6265,7 +6287,135 @@ failure without it is bad in the design's own terms: the operator
 switches, reboots, and every brick house dies at `open brick image`
 after the decision is already made. It is not built here because
 enumerating bricks from the blob means a third copy of the unit layout,
-which is the drift class `.layers` exists to avoid; the symmetric fix
-is a `.bricks` sidecar from the baker. That is a baker change beyond
+which is the drift class `.layers` exists to avoid — `blob.h` and
+`bakery/nw-cc.py` are the hand-written copies today, and
+`tests/run.py`'s `unit_layout()` derives its own from `blob.h` rather
+than adding another. The symmetric fix is a `.bricks` sidecar from the
+baker. That is a baker change beyond
 the scope the operator set for the stager, so it is recorded rather
 than taken.
+
+## 66. Two reviewers on the stager: the guard ran, and the test could not tell when (2026-09-12)
+
+`control` and `claims` against §65. The tool's guards were right; the
+test pinned the wrong thing about the most important one, and five of
+§65's sentences were wrong.
+
+### The headline: a guard that fires AFTER the damage passes the test
+
+`control` kept the `target == live` refusal verbatim — same condition,
+same message, same non-zero exit — and moved it below the renames:
+
+```
+make exit=0
+ok candidate-stager (... live plan and current byte-identical ...)
+```
+
+while the same mutant, run directly:
+
+```
+LIVE plan before: 9c5ccd580351c5ee26e1de725c495720
+stage-candidate: 'A' is the live slot. Saving is immediate and ...
+rc=1
+LIVE plan after : d4d97378c3d40356b67dad9cf080bbbd
+nw-check on the overwritten live plan: rc=0
+```
+
+The running machine's plan replaced by the candidate, the replacement
+validating, and the `ok` line reading "live plan and current
+byte-identical". The cause is exact and worth carrying: **the test read
+the live slot once, at the top, and the refusal cases asserted only a
+reason string and a non-zero exit.** So it pinned that the guard exists
+and prints. It did not pin that the guard runs first, which is the
+entire property.
+
+Every refusal now re-reads the live slot through one helper. The
+mutation turns it red: `FAIL: live-slot refusal: the live plan changed`.
+
+**The general shape, because it is not about this tool.** A guard has a
+position as well as a condition, and a test that checks the refusal
+checks the condition only. Ask of any refusal: *would this assertion
+still hold if the refusal happened one line too late?* Where the answer
+is yes, the test is about the message.
+
+### Guards that existed and nothing pinned
+
+`control` removed each in turn. Green, every one, before this round:
+the alphabet beyond `/` (only `../escape` was tried, which `/` alone
+rejects); `slot_name_ok` on the CONTENTS of `current`; the
+baker-refused path entirely; validate-before-rename; `pick_candidate`'s
+uniqueness refusal; the nw-check existence refusal; `--root`; the
+`.sha256` rename; and the `finally:` cleanup on the refusal paths.
+All are pinned now, each by its reason string, each control run.
+
+Two deserve their own line.
+
+**The failed-validation assertion was vacuous and looked careful.** It
+re-staged the *same* city and compared bytes, and the baker is
+reproducible — `new inode, identical md5`. It could never have detected
+an overwrite. It bakes a different city for that attempt now.
+
+**`expect("house=candone" not in out)` could not fail for its reason.**
+`control` booted the same tree with `current=B` — the switch the tool
+exists to prevent — and the candidate house *still* never printed
+`house=candone`, because its brick is a hash of nothing and it dies at
+`open brick image`. True in both worlds. The logger tag `[candone]` IS
+present when the candidate boots, so that is what the test asserts now.
+This is the harness rule's question — *what else makes this true* —
+answered wrongly in the ack I wrote for it.
+
+### A defect, not just a gap
+
+The tool accepted a candidate reusing the **live plan's** layer id and
+printed `live slot A, untouched` while wiring the candidate to the
+running house's writable area: a message true of the slot and false of
+the machine. After a fold it is worse than sharing, because the folded
+brick already contains that layer's contents, so the candidate would
+stack them over themselves and the old whiteouts would re-delete files
+now baked in. Refused now, from the two sidecars, before anything is
+created; a live plan with no sidecar is also a refusal, for the reason
+an unreadable `current` is.
+
+### Five sentences in §65 were wrong
+
+Corrected in place, each with what replaced it: "exits in exactly three
+places" (five `_exit` in the loop alone, plus `die()` and PID 1's
+SIGKILL — and the count was *prescribed for copying into the helper's
+comment*); "orphans are never reaped" (PID 1 reaps them; the true half
+is that an orphan is never killed and has no supervisor); "produces
+only a slot nobody is booted from" (it also creates layer directories
+on the machine root, which the tool's own first line says); `os.replace`
+"falls back to a copy across a mount point" (it raises EXDEV and copies
+nothing — that is `shutil.move`, so the hazard named for a correct
+decision was invented); and "pinned by `absent-in` annotations" (they
+pin three spellings, not the absence of a respawn path).
+
+Two more in the tool: "read the way PID 1 reads it" — PID 1 *truncates*
+an over-long `current` and boots a prefix rather than refusing, so the
+tool is stricter everywhere they differ and the refusal message said
+the opposite; and the invariant 7 citation for not writing `current`,
+which over-reached, since writing `current` IS the A/B switch that
+invariant prescribes.
+
+### And the rule went into the file that instructs
+
+§65 recorded the closed-house decision as a record. `claims` pointed
+out it is textbook kind 3 — a real rule with no subject yet — so it now
+sits in `CLAUDE.md`'s *Waiting on a prerequisite*, with the corrected
+exit description rather than the count, and with invariant 1 named as
+the dependency that makes it sound.
+
+### One of mine, in the same round
+
+Cleaning up after a control I ran `git checkout -- .` in a tree holding
+uncommitted work and wiped the edits. Nothing was lost — the commit was
+intact and the edits were redone — but it is the destructive-cleanup
+class and it belongs in the record beside the findings rather than
+quietly repeated.
+
+And the control that deletes the layer-clash refusal **leaves a layer
+directory behind on the machine root**, so the next run reported the
+refusal as broken when the refusal was fine. The test removes and
+asserts-absent that id now, as it already did for the other two. The
+rule at its weakest in the assertion added last, in the round whose
+subject is exactly that.

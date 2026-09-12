@@ -85,10 +85,7 @@ unpaired-absence	HISTORY.md	`make prereport` does not catch it — `hit` is not 
 prose-count	HISTORY.md	is_comment("- three files, see https://x/y"): True
 # HISTORY.md is exempt as a record, and the heading names a closed dated episode
 prose-count	HISTORY.md	## 64. Closing the prose work: four lines, and why stopping is a finding (2026-09-12)
-# no test pins this and both the tool and the test docstring say so -- the
-# control was run (reversed order, suite stays green) because nothing a boot
-# or this suite can do observes the window
-mechanism-claim	tools/stage-candidate.py	# which is exactly the partial-file window this ordering avoids.
+
 # this IS the pairing: absent before, present after, asserted a few lines down
 unpaired-absence	tests/run.py	expect(not os.path.exists(f"{_layer_dir()}/{lid}"),
 # paired by the staging assertions above it -- rc==0 and "slot B" in the output
@@ -96,3 +93,19 @@ unpaired-absence	tests/run.py	expect(not [d for d in os.listdir(f"{slots}/B") if
 # paired by expect("house=liveone" in out) on the line above: the boot ran and
 # produced houses, so "candone absent" is about the candidate and not the boot
 unpaired-absence	tests/run.py	expect("house=candone" not in out,
+# the comment itself says it is argued and not tested, and control ran it:
+# moving stage_layers after the renames leaves the suite green
+mechanism-claim	tools/stage-candidate.py	# BEFORE THE RENAMES, and that order matters as much as the one
+# a quotation of the retracted text, in a record, which is exempt
+prose-count	HISTORY.md	*(This said "exits in exactly three places". There are five `_exit`
+# paired at every call site: after the success it follows rc==0 and "slot B",
+# after each refusal it follows that refusal's reason assertion
+unpaired-absence	tests/run.py	expect(not left, f"{why}: scratch left in the candidate slot: {left}")
+# paired by expect("house=liveone" in out) above, and control measured that
+# the tag IS present when the candidate boots, so it can fail for its reason
+unpaired-absence	tests/run.py	expect("[candone]" not in out,
+# this is the pairing's own precondition: absent now, so a later assertion
+# about it means something
+unpaired-absence	tests/run.py	expect(not os.path.exists(f"{_layer_dir()}/l-cand-live"),
+# paired by the positive: the same id IS created under the --root prefix
+unpaired-absence	tests/run.py	expect(not os.path.exists(f"{_layer_dir()}/{rlid}"),

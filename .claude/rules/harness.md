@@ -501,6 +501,17 @@ another agent's, expect it, and do not chase it as a regression.
 The images are also never cleaned: `make stage` only removes `$(STAGE)`.
 They accumulate under `NW_BRICK_DIR` on the machine. `fd-auditor`.
 
+**`NW_LAYER_DIR` is the same story**, and
+`test_candidate_stager_never_touches_the_live_slot` resets ids there
+regardless of `NW_STAGE` — it removes and re-creates its own layer ids
+on the machine root, because that is where the tool under test puts
+them. A distinct stage does not
+isolate it. `control` also found the sharper version: a control run
+that deletes one of the tool's refusals LEAVES a layer behind, and the
+next run then reports the refusal as broken when the refusal is fine —
+so every machine-root id a test asserts about has to be removed first
+and asserted absent, not merely created and checked.
+
 ## Definition of done
 
 Quote real command output. Never summarise a run you did not execute.

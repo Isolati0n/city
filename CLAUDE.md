@@ -403,6 +403,22 @@ Statements here are real rules with no subject yet. They become enforceable
 the moment the prerequisite lands, and they are recorded so nobody has to
 rediscover them.
 
+- **A fold establishes that no SUPERVISOR exists for the unit, not that
+  no house process is running.** The prerequisite is the fold helper of
+  scratch-becomes-saved, which does not exist yet. "The house is not
+  running" is satisfied by a longrun house between restarts, which is
+  about to write; the supervisor is the thing whose absence means the
+  unit will not run again before the next boot, because it stops
+  looping for a oneshot that exited 0, a budget exhausted, or
+  `stopping`, and every other way it can terminate is terminal too.
+  Folding a live layer is the silent-wrong-artifact case: the image
+  mounts, boots, and holds a half-written file, and nothing in the
+  bytes says so. **This depends on invariant 1** — a supervisor that
+  has exited cannot come back only because PID 1 has no respawn path,
+  and if PID 1 ever grows one this check becomes a race *silently*:
+  nothing fails, the fold just occasionally captures a live layer.
+  Recorded here rather than only in the record because a reader of
+  this file alone would not find it. `HISTORY.md` §65 and §66.
 - **Authoritative state never auto-restarts on an integrity fault.** Inherited
   from `HISTORY.md` §11 and still correct. It has no subject today: there is
   no persistent state anywhere in the design, and no integrity-fault channel —

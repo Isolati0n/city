@@ -11,14 +11,18 @@ next boot and changes nothing about what is running now.
 So the line it must not cross is writing the live plan, and the guard is
 structural rather than a convention: it reads `<slots>/current` and
 REFUSES when the target names that slot. It also never writes `current`
-itself -- the switch is the operator's, and a tool that both stages and
-switches is the in-place rewrite invariant 7 forbids, wearing two steps.
+itself -- the switch is the operator's. (That is the whole argument. An
+earlier version cited invariant 7 and over-reached: writing `current`
+IS the A/B switch that invariant prescribes, not an in-place rewrite,
+and it takes effect only at the next boot. `claims`.)
 
 THE RULE THIS SITS UNDER is not "nothing privileged runs live". It is
 **nothing changes what is running without going through validation and a
 boot**. That is why `nw-check` runs here on the candidate before any of
-it is visible, and why the only thing this produces is a slot nobody is
-booted from.
+it is visible. What it produces is a slot nobody is booted from AND the
+layer directories that slot's plan names, which are on the machine root
+-- idempotent, and read by no running house, but "only a slot" was an
+absolute this file's own first line disproves. `claims`.
 
     python3 tools/stage-candidate.py --slots DIR --city FILE \
         [--slot NAME] [--root DIR] [--nw-check PATH]
@@ -83,7 +87,17 @@ def slot_name_ok(nm):
 
 
 def live_slot(slots):
-    """The slot `<slots>/current` names, read the way PID 1 reads it.
+    """The slot `<slots>/current` names, read STRICTLY -- not the way
+    PID 1 reads it, which is the thing to know before relaxing it.
+
+    `slot_from_current` reads `sizeof nm - 1` bytes and TRUNCATES: a
+    `current` holding forty `A`s boots the slot named by thirty-one of
+    them, no diagnostic. It trims only trailing `\n\r` and space where
+    `.strip()` here also removes leading whitespace. Every divergence
+    makes this tool stricter, so it refuses where it would otherwise
+    guess which prefix is running -- but the sentence that used to be
+    here, that PID 1 "would refuse" such a file, is false. `claims` and
+    `control`, independently.
 
     A refusal, not a default, when it cannot be read. The tool's one
     safety property is "not the live slot", and it cannot hold that
@@ -102,8 +116,9 @@ def live_slot(slots):
     nm = nm.strip()
     if not slot_name_ok(nm):
         raise SystemExit(
-            f"stage-candidate: {p} holds {nm!r}, which pid1.c would refuse. "
-            f"Refusing rather than guessing what the machine will boot.")
+            f"stage-candidate: {p} holds {nm!r}. pid1.c would not refuse "
+            f"it -- it truncates and boots a prefix -- so this tool "
+            f"refuses rather than guess which prefix is running.")
     return nm
 
 
@@ -138,7 +153,19 @@ def stage(slots, city, slot=None, root="", nw_check=None, quiet=False):
         raise SystemExit(
             f"stage-candidate: {target!r} is not a slot name pid1.c would "
             f"accept, so a candidate written there could never boot.")
-    # THE GUARD. Everything else in this file is plumbing.
+    # THE GUARD, and its ORDER is the property rather than its
+    # existence: it must run before anything is written. `control` kept
+    # this block verbatim and moved it below the renames, and the suite
+    # stayed green while the running machine's plan was replaced by the
+    # candidate -- the test pinned that the guard prints, not that it
+    # runs first. It is pinned now, by re-reading the live slot after
+    # every refusal.
+    #
+    # Nor is it the only guard, which this comment used to say:
+    # `slot_name_ok` and the nw-check gate are guards too, and the
+    # alphabet is the guard UNDER this one -- `target == live` is a
+    # string comparison, sound only because no two spellings name one
+    # slot.
     if target == live:
         raise SystemExit(
             f"stage-candidate: {target!r} is the live slot. Saving is "
@@ -147,14 +174,21 @@ def stage(slots, city, slot=None, root="", nw_check=None, quiet=False):
             f"candidate and switch by writing {slots}/current yourself.")
 
     tdir = os.path.join(slots, target)
-    os.makedirs(tdir, exist_ok=True)
 
-    # Bake into a scratch directory INSIDE the slot, so the renames below
-    # are same-filesystem and therefore atomic. A temp dir elsewhere
-    # would make os.replace fall back to a copy across a mount point,
-    # which is exactly the partial-file window this ordering avoids.
-    # Named with a leading dot and the pid: pid1.c opens <slot>/plan.blob
-    # and nothing else, so a leftover here cannot be booted.
+    # Bake into a scratch directory INSIDE the slot, because os.replace
+    # is rename(2) and rename needs one filesystem. A temp dir elsewhere
+    # does NOT open a partial-file window -- it raises EXDEV and copies
+    # nothing, loudly, before anything is renamed. (This said os.replace
+    # "falls back to a copy across a mount point". That is shutil.move;
+    # `claims` and `control` each ran it. The choice is right and the
+    # hazard named for it was invented.)
+    #
+    # THE LEADING DOT is what makes a leftover unbootable, not the fact
+    # that pid1.c opens only plan.blob: `slot_from_current` refuses any
+    # byte outside [A-Za-z0-9_-], so no `current` can name this
+    # directory. `--slot` names a directory directly and WILL boot a
+    # leftover, including one a SIGKILL left between the bake and the
+    # nw-check below -- a plan nothing validated. `control`.
     work = os.path.join(tdir, f".staging-{os.getpid()}")
     shutil.rmtree(work, ignore_errors=True)
     os.makedirs(work)
@@ -186,7 +220,53 @@ def stage(slots, city, slot=None, root="", nw_check=None, quiet=False):
                 "stage-candidate: nw-check refused the candidate, so it is "
                 "not staged:\n" + v.stdout + v.stderr)
 
+        # A CANDIDATE MUST NOT REUSE A LAYER THE LIVE PLAN NAMES, and
+        # this is checked BEFORE anything is created, so a refusal
+        # leaves the machine exactly as it was.
+        #
+        # Not hygiene. `control` staged a candidate whose layer id was
+        # the running plan's, and this tool printed "live slot A,
+        # untouched" while wiring the candidate to the running house's
+        # writable area -- a message true of the slot and false of the
+        # machine. After a fold it is worse than sharing: the folded
+        # brick already contains that layer's contents, so the candidate
+        # stacks them over themselves and the old whiteouts re-delete
+        # files now baked in.
+        #
+        # Both sides come from the sidecar the baker writes, so neither
+        # needs a second copy of the blob layout. A live plan with no
+        # sidecar is a refusal for the reason an unreadable `current`
+        # is: the tool cannot establish the property, and guessing is
+        # how it goes wrong quietly. If two plans ever need to share a
+        # layer, that is a design decision and this is where it is made.
+        want = {l.strip() for l in open(blob + ".layers") if l.strip()}
+        live_side = os.path.join(slots, live, "plan.blob.layers")
+        try:
+            live_ids = {l.strip() for l in open(live_side) if l.strip()}
+        except OSError as e:
+            raise SystemExit(
+                f"stage-candidate: cannot read {live_side} ({e}), so this "
+                f"tool cannot tell whether the candidate reuses a layer "
+                f"the running plan is using. Refusing.")
+        clash = sorted(want & live_ids)
+        if clash:
+            raise SystemExit(
+                f"stage-candidate: the candidate names layer(s) the live "
+                f"plan is using: {' '.join(clash)}. A candidate gets its "
+                f"own layer -- sharing wires it to a running house's "
+                f"writable area, and after a fold it would stack the "
+                f"folded contents over themselves.")
+
         # The layer directories this plan names, through the one creator.
+        #
+        # BEFORE THE RENAMES, and that order matters as much as the one
+        # below: a candidate whose blob is live but whose layers were
+        # never created boots into `FAIL mount layer`. `control` moved
+        # this after the renames, injected a failure in `stage()`, and
+        # got exactly that -- a new candidate in the slot with no layer
+        # for it -- while the suite stayed green. Like the sidecar
+        # ordering, argued here and not tested: the suite has no way to
+        # make `stage()` fail.
         ids = stage_layers.stage(blob, root)
 
         # THE ORDER IS THE ATOMICITY, and it is one-directional: pid1.c
