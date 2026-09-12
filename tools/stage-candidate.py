@@ -41,6 +41,7 @@ this is not a second one.
 from __future__ import annotations
 
 import argparse
+import errno
 import hashlib
 import os
 import shutil
@@ -181,7 +182,8 @@ def stage(slots, city, slot=None, root="", nw_check=None, quiet=False):
 
     tdir = os.path.join(slots, target)
     ldir = os.path.join(slots, live)
-    if os.path.exists(tdir) and os.path.samefile(tdir, ldir):
+    if (os.path.exists(tdir) and os.path.exists(ldir)
+            and os.path.samefile(tdir, ldir)):
         raise SystemExit(
             f"stage-candidate: {target!r} and the live slot {live!r} are "
             f"the same directory. A slot name is a spelling and two "
@@ -212,8 +214,12 @@ def stage(slots, city, slot=None, root="", nw_check=None, quiet=False):
     # value of `current` can name it whatever it is called -- a
     # non-dotted leftover is equally unreachable that way, and equally
     # bootable through `--slot`, which names a directory directly.
-    # (Such a leftover needs a SIGKILL: the `finally` below removes it.
-    # A plan nothing validated, in a slot, is what that costs.)
+    # (Such a leftover needs a signal whose default action terminates
+    # without unwinding -- SIGTERM, SIGHUP and SIGQUIT all do, not only
+    # SIGKILL, because Python installs no handler for them and
+    # `finally` does not run. SIGINT is the exception that makes the
+    # narrower claim feel true. A plan nothing validated, in a slot, is
+    # what that costs. `control` measured rc=143.)
     #
     # The dot's real consumer is the suite: `_no_scratch` keys on it.
     # Said plainly because the first version of this comment called the
@@ -250,9 +256,14 @@ def stage(slots, city, slot=None, root="", nw_check=None, quiet=False):
                 "stage-candidate: nw-check refused the candidate, so it is "
                 "not staged:\n" + v.stdout + v.stderr)
 
-        # A CANDIDATE MUST NOT REUSE A LAYER THE LIVE PLAN NAMES, and
-        # this is checked BEFORE anything is created, so a refusal
-        # leaves the machine exactly as it was.
+        # A CANDIDATE MUST NOT REUSE A LAYER THE LIVE PLAN NAMES,
+        # checked before the layer directories and before the renames.
+        # NOT "before anything is created": by this line the slot
+        # directory and a complete, validated candidate already exist
+        # inside the scratch dir, and what removes them is the
+        # `finally` -- which a SIGTERM skips (above) and which can
+        # itself fail (below). The stronger sentence was in this file
+        # sixty lines under its own retraction. `control`.
         #
         # Not hygiene. `control` staged a candidate whose layer id was
         # the running plan's, and this tool printed "live slot A,
@@ -280,6 +291,15 @@ def stage(slots, city, slot=None, root="", nw_check=None, quiet=False):
         # slot, stage against it, and the clash check reads layer ids
         # the running plan does not use and says nothing.
         #
+        # AND THIS TOOL IS NOT THE ONLY READER. `tools/stage-layers.py`
+        # reads `.layers` too, and `.claude/rules/runtime.md`'s THE
+        # RECOVERY tells the operator to run exactly that on a slot's
+        # blob. In the window it stages the layers of a plan that is
+        # not there, and the slot boots into `FAIL mount layer`. It
+        # carries the same sha check now; the comment that said the
+        # window was visible only here enumerated two of three
+        # readers.
+        #
         # Checked through `.sha256` rather than by parsing the blob,
         # which would be the third copy of the unit layout. The baker
         # writes both sidecars together, so one of them matching the
@@ -302,8 +322,10 @@ def stage(slots, city, slot=None, root="", nw_check=None, quiet=False):
                 f"an interrupted stage leaves exactly this. The layer "
                 f"list beside them cannot be trusted, and it is what "
                 f"says whether this candidate reuses a running layer. "
-                f"Refusing. Re-stage the live slot, or repair its "
-                f"sidecars from the plan that is actually there.")
+                f"Refusing. Re-stage the live slot, or write the "
+                f"hexdigest alone into that file -- `sha256sum` emits "
+                f"'<hash>  <name>', which this compares whole and "
+                f"would reject forever.")
         clash = sorted(want & live_ids)
         if clash:
             raise SystemExit(
@@ -325,6 +347,17 @@ def stage(slots, city, slot=None, root="", nw_check=None, quiet=False):
         # make `stage()` fail.
         ids = stage_layers.stage(blob, root)
 
+        # `.sha256` FIRST, AND THAT IS NOT COSMETIC: the clash check
+        # above infers "the .layers beside it is current" from ".sha256
+        # matches the blob", and that inference holds only because
+        # .sha256 can never be older than .layers. Swap this tuple and
+        # an interruption between them leaves .layers new, .sha256 old
+        # and the blob old -- the sha matches, the check passes, and a
+        # stale layer list is trusted. `control` swapped it, the suite
+        # stayed green, and walked the reopened defect end to end.
+        # Pinned now by a source-level assertion in the suite, because
+        # the order is not observable after the fact.
+        #
         # THE ORDER IS THE ATOMICITY, and it is one-directional: pid1.c
         # opens <slot>/plan.blob and reads nothing else, so the blob goes
         # LAST. A boot at any instant sees either the previous candidate
@@ -338,13 +371,26 @@ def stage(slots, city, slot=None, root="", nw_check=None, quiet=False):
     finally:
         shutil.rmtree(work, ignore_errors=True)
         # And the slot directory itself, if we made it and nothing
-        # landed in it. `os.rmdir` refuses a non-empty directory, which
-        # is the check rather than a second one.
+        # landed in it. `os.rmdir` refusing a non-empty directory is
+        # the check rather than a second one.
+        #
+        # ENOTEMPTY IS THE ONLY ONE SWALLOWED. A bare `except OSError`
+        # was two stacked silences: `ignore_errors=True` above turns
+        # any failure to remove the scratch into an ENOTEMPTY here, so
+        # every other errno -- EACCES, EBUSY, ENOTDIR -- reported
+        # "could not clean up" as nothing at all, and the slot stayed
+        # behind to poison the next derivation. `control` forced it
+        # with a tmpfs inside the scratch.
         if made_tdir:
             try:
                 os.rmdir(tdir)
-            except OSError:
-                pass
+            except OSError as e:
+                if e.errno != errno.ENOTEMPTY:
+                    raise
+                print(f"stage-candidate: left {tdir} behind: it is not "
+                      f"empty, which means the scratch directory could "
+                      f"not be removed. The next derived run will call "
+                      f"this slot ambiguous.", file=sys.stderr)
 
     if not quiet:
         print(f"stage-candidate: slot {target} staged and validated "

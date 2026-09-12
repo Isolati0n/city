@@ -6538,3 +6538,91 @@ at the end, which does.
 
 One ack was overstated: `_no_scratch` follows some refusals, not every
 one, and the ack said every. Corrected to name the paths.
+
+## 68. The check was sound because of an order nothing stated (2026-09-12)
+
+`control`'s third pass on the stager. Two findings are worth carrying
+past this tool; the rest are the same shape as §67's and are listed
+without ceremony.
+
+### The inference, not the check
+
+§67 added: verify the live `.sha256` against the live blob, then trust
+the `.layers` beside it. The check is right. **The inference is sound
+only because `.sha256` is renamed before `.layers`**, so the sha can
+never be the older of the two — and nothing said so. `control` swapped
+the tuple, the suite stayed green, and walked the reopened defect end
+to end: interruption between them leaves a new layer list beside a sha
+that still matches the old blob, the check passes, and a stale list is
+trusted.
+
+The comment's reasoning was the wrong half: *"the baker writes both
+sidecars together, so one of them matching the blob is what says the
+set is current."* One of them is not enough. It has to be the one
+written first.
+
+Stated at the rename loop now, and pinned by reading the source,
+because **the order is not observable after the fact** — there is no
+state a test can inspect that distinguishes the two orders once the
+stage has finished. A source-level assertion is the only instrument
+there is, which is the same position the spec test is in.
+
+### The covered claim with an uncovered member
+
+The comment said the rename window is "visible only to this tool and
+the harness". `control` grepped for who else reads `.layers`:
+`tools/stage-layers.py` — which is neither, has no sha check, and is
+the tool `.claude/rules/runtime.md`'s THE RECOVERY tells an operator to
+run on a slot. In the window it stages the layers of a plan that is not
+there and the slot boots into `FAIL mount layer`. It carries the same
+check now.
+
+Two readers enumerated, three existed. The enumeration was written in
+the round that added the second reader, by the author who added it.
+
+### The rest, each real and each the same shape
+
+- The missing-`nw-check` refusal got three of the four assertions the
+  other write paths have, and the fourth was the one that mattered:
+  creating layers before refusing stayed green.
+- `_no_scratch` was wired to four of thirteen call sites, so which
+  refusal an author touched decided whether the suite noticed. **Both
+  post-checks now run inside `_stage()` itself**, so a new case cannot
+  forget them — remembering is the thing that failed twice.
+- The `samefile` guard, moved below `stage_layers`, bakes a complete
+  candidate *inside the live slot* and creates layers before refusing.
+  Invisible at first even after the fix, because the symlink case
+  reused a layer id that already existed; it has its own now. Found by
+  running the control against my own fix rather than by reading it.
+- The slot-directory cleanup added in §67 was exercised by nothing —
+  every case targeted a slot that already existed, so `made_tdir` was
+  false throughout and reverting it left the suite green.
+- `except OSError: pass` swallowed every errno, and composed with the
+  `ignore_errors=True` above it: any failure to remove the scratch
+  became an ENOTEMPTY indistinguishable from the intended case. Two
+  stacked silences reporting "could not clean up" as nothing. Narrowed
+  to ENOTEMPTY, which now also prints why the slot was left.
+- "Such a leftover needs a SIGKILL" is false — SIGTERM, SIGHUP and
+  SIGQUIT skip `finally` too, because Python installs no handler.
+  SIGINT is the exception that makes the narrower claim feel true.
+- "checked BEFORE anything is created, so a refusal leaves the machine
+  exactly as it was" was false at that line, sixty lines below its own
+  retraction in the same file.
+- The new `samefile` guard raised a traceback when the live slot
+  directory was absent — new code failing the standard the test beside
+  it asserts ("a named refusal, not a traceback").
+- The stale-sidecar refusal advised a repair the tool then rejects
+  forever: `sha256sum` writes `<hash>  <name>` and the comparison is
+  whole-line.
+- `rlid` was the one layer id with no assert-absent precondition, so a
+  leftover `rmtree` could not remove made the test blame `--root`.
+  The rule at its weakest in the assertion added by the fix for it.
+
+### And the cleanup did not run on the failure paths
+
+`expect()` raises, so the end-of-test removal never ran for a red run,
+and `control` found this round's own six red controls still on the
+machine root. **Pid keying converted interference into accumulation** —
+the forced-interleaving experiment confirms the interference class is
+closed, and the accumulation it left was new. A `finally` around the
+body closes it; a full suite run now leaves nothing behind.

@@ -123,3 +123,13 @@ unpaired-absence	tests/run.py	expect(not os.path.exists(f"{_layer_dir()}/{olid}"
 unpaired-absence	tests/run.py	expect(not os.path.exists(f"{_layer_dir()}/{clash_lid}"),
 # paired by the positive two lines up: the candidate DID land in <slots>/B
 unpaired-absence	tests/run.py	expect(not os.path.exists(f"{pfx}{slots}"),
+# inside _stage(), which runs it after every invocation -- the invocation
+# itself is the positive, and the wrapper is what makes it unforgettable
+unpaired-absence	tests/run.py	expect(not left, f"{why}: scratch left in slot {d}: {left}")
+# _no_new_layers is only ever called with an id the case asserted absent
+# beforehand, so the pairing is the precondition at each call site
+unpaired-absence	tests/run.py	expect(not os.path.exists(f"{_layer_dir()}/{i}"),
+unpaired-absence	tests/run.py	expect(not os.path.exists(f"{_layer_dir()}/{symlid}"),
+# paired by the refusal above it: the tool ran, refused, and must have
+# removed the slot directory it created for the attempt
+unpaired-absence	tests/run.py	expect(not os.path.exists(f"{slots}/FRESH"),

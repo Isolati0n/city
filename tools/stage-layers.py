@@ -57,6 +57,33 @@ def stage(blob_path, root=""):
     declares. Returns the ids. Idempotent: staging twice keeps the data,
     which is the whole point of the layer."""
     side = blob_path + ".layers"
+    # THE SIDECAR MUST DESCRIBE THE BLOB BESIDE IT, and this tool is the
+    # one `.claude/rules/runtime.md`'s THE RECOVERY tells an operator to
+    # run on a slot. `tools/stage-candidate.py` renames `.sha256`, then
+    # `.layers`, then the blob, so an interrupted stage leaves new
+    # sidecars beside an old blob -- and this tool would then create the
+    # layers of a plan that is not there, after which the slot boots
+    # into `FAIL mount layer`. The stager learned to check this and this
+    # reader did not; `control` found the asymmetry by grepping for who
+    # else reads the file.
+    #
+    # Through `.sha256` rather than by parsing the blob: a third copy of
+    # the unit layout is the drift class this file's docstring is about.
+    # Absent `.sha256` is not fatal here -- a blob may arrive from
+    # somewhere that writes no sidecars at all, and this tool's contract
+    # is the `.layers` beside it -- but a `.sha256` that DISAGREES is.
+    import hashlib
+    sha = blob_path + ".sha256"
+    if os.path.exists(sha) and os.path.exists(blob_path):
+        want = open(sha).read().strip()
+        got = hashlib.sha256(open(blob_path, "rb").read()).hexdigest()
+        if want != got:
+            raise SystemExit(
+                f"stage-layers: {sha} does not describe {blob_path}, so "
+                f"the sidecars beside it are stale -- an interrupted "
+                f"stage leaves exactly this. Staging the layers they "
+                f"name would create the layers of a plan that is not "
+                f"there. Refusing.")
     try:
         ids = [l.strip() for l in open(side) if l.strip()]
     except OSError as e:
