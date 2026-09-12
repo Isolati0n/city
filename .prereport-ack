@@ -1,0 +1,32 @@
+# prereport acks. An ack is a claim that someone looked; it is NOT a fix.
+# Format: shape<TAB>file<TAB>text   (# comment lines carry the reason)
+# Written 2026-09-12 against the phase 3 diff (4e22204..working tree).
+
+# the _Static_assert IS the check: NW_ARR_TYPE(nw_unit, brick, uint8_t, ...) makes a retype to char a build error, and a build error is a test that fails
+mechanism-claim	blob.h	* function. The type assert is what stops it quietly becoming a string
+# controlled: widening _is_hex64 to accept a clean absolute path turns path-traversal-refused red. Run, quoted in the commit
+mechanism-claim	tests/run.py	# BOTH SHAPES, and the CLEAN one is the load-bearing case. A traversing
+# false positive: prose in a docstring ('the baker is not in the TCB'), not an assertion
+unpaired-absence	bakery/nw-cc.py	checked here as well as in nwcheck.c because the baker is not in the TCB
+# two are prose/guards; expect('brick hash' not in out) IS paired -- the next line asserts 'open brick image' in out, the positive that the guard was reached and passed
+unpaired-absence	tests/run.py	if plen is None:
+# two are prose/guards; expect('brick hash' not in out) IS paired -- the next line asserts 'open brick image' in out, the positive that the guard was reached and passed
+unpaired-absence	tests/run.py	THE IMAGE LANDS ON THE MACHINE ROOT, not in the stage, and that is
+# two are prose/guards; expect('brick hash' not in out) IS paired -- the next line asserts 'open brick image' in out, the positive that the guard was reached and passed
+unpaired-absence	tests/run.py	expect("brick hash" not in out,
+# not a count -- 'the one place' is the claim that the hash becomes text exactly once, which is the phase-3 argument and is pinned by test_brick_hash_revalidated_at_the_supervisor
+prose-count	nwspawn.c	* handoff is the one place the hash becomes text again, and
+# same claim as nwspawn.c, same pin
+prose-count	nwsup.c	* the phase-3 argument would be false in the one place it matters.
+# describes the two assertions immediately below it and the deliberate second copy; both are visible at the point of reading, not a number a later commit can falsify silently
+prose-count	proofs/caller_nw_check.c	* two assertions must say so rather than reading brick[0].
+# describes the two assertions immediately below it and the deliberate second copy; both are visible at the point of reading, not a number a later commit can falsify silently
+prose-count	proofs/caller_nw_check.c	/* OPEN-CODED ON PURPOSE, and this is the one place in the
+# pre-existing text, unchanged by this work; the 'one entry' is what the code does and the width list is derived from blob.h
+prose-count	proofs/leaf_path_ok.c	* whichever width it was called with: the one place a stub assumed more
+# pre-existing text, unchanged by this work; the 'one entry' is what the code does and the width list is derived from blob.h
+prose-count	proofs/leaf_path_ok.c	* hardcoding one entry, so a second width would come back on its own. */
+# describes the loop directly beneath it, which generates exactly one case per byte -- the code is the assertion
+prose-count	tests/run.py	# ONE CASE PER BYTE POSITION, and that is not thoroughness for its
+# false positive: matched 'phase 3 deleted that line', which is a phase number, not a count
+prose-count	tools/coverage-tcb.sh	# the brick path check; phase 3 deleted that line, and tcb-review had

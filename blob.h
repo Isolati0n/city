@@ -382,8 +382,8 @@ static inline const struct nw_bind *nw_binds(const void *blob)
  * All-zero means no brick. A hash has no terminator, so `brick[0]` answers
  * a different question: it reads one image in 256 -- every hash beginning
  * with a zero byte -- as having no brick. That is not a hypothetical. Phase
- * 3 converted the unit loop in nwcheck.c to scan all 32 bytes and left the
- * BIND loop 28 lines below it reading brick[0], and the CBMC caller proof
+ * 3 converted the unit loop in nwcheck.c to scan the whole hash and left
+ * the BIND loop in the same function reading brick[0], and the caller proof
  * asserting brick[0] too, so the proof pinned the defect in place and would
  * have turned red on the fix. Both found by `tcb-review`; reproduced by
  * baking two plans differing only in the first hex pair, one accepted and
@@ -396,8 +396,10 @@ static inline const struct nw_bind *nw_binds(const void *blob)
  * site left that could disagree with another.
  *
  * In blob.h rather than nwcheck.c because nwspawn.c needs it too and does
- * not link the checker's non-inline half. It costs the TCB three lines and
- * removes four copies. */
+ * not link the checker's non-inline half. It is a loop and a return, and
+ * it removes every open-coded copy but the deliberate one in the proof --
+ * which is open-coded precisely so it is an independent oracle, and says
+ * so there. */
 static inline int nw_unit_has_brick(const struct nw_unit *u)
 {
     int any = 0;

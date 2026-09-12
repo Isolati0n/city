@@ -252,9 +252,13 @@ int nw_check(const void *blob, uint32_t len)
         if (has_brick && !(u[i].lids & NW_LID_NEWNS))
             return NW_E_BRICKNS;
         /* NO PATH CHECK, AND NW_E_BRICK IS GONE WITH IT. Phase 3 made this
-         * field 32 raw bytes of sha256, and there is no value of those 32
-         * bytes that is invalid: every one names a file under
-         * NW_BRICK_DIR. The `..` guard that used to live here is not
+         * field raw sha256 bytes, and there is no value of them this
+         * checker could call invalid: every value that names anything
+         * names a file under NW_BRICK_DIR. (All-zero names nothing -- it
+         * is how the blob spells NO brick -- and the baker refuses a plan
+         * that writes it, because once the blob exists the distinction is
+         * gone. blob.h says why at the field.) The `..` guard that used to
+         * live here is not
          * relaxed, it is INAPPLICABLE -- the input class it defended
          * against cannot be expressed any more. HISTORY.md records this,
          * because a deleted security check reads as a regression to

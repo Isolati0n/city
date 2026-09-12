@@ -357,8 +357,8 @@ not touch that, and nothing below should be read as saying it does.
 
 ## Phase 3 — the plan carries a hash, not a path. **LANDED 2026-09-12.**
 
-**Landed. Where it differed from this text, in three places, because a
-plan read afterwards is read as a record:**
+**Landed. Where it differed from this text — because a plan read
+afterwards is read as a record:**
 
 - **The unit is 196 bytes, not 198.** This text was written before
   `window_s` left the unit. Measured, not counted:
