@@ -194,9 +194,18 @@ can mount an image directly via `fsopen`/`fsconfig`/`fsmount`/`move_mount`
 on kernel >= 6.12, with no loop device at all -- `tcb-review` demonstrated
 it working here, same seal, no `/dev/loop-control`, no global index, no
 `AUTOCLEAR`. That removes three `open()`s and two `ioctl()`s from the TCB.
-**Not taken here, because it raises the kernel floor to 6.12 and that is a
-production decision rather than a harness one.** Recorded as the standing
-option.
+**HELD until after phase 3, and the kernel floor is NOT the reason** —
+the target runs 6.18, so 6.12 costs nothing, and recording the floor as
+the reason would have left a false obstacle in front of a decision that
+does not have one.
+
+The reason to wait is sequencing: it is a **second implementation of
+brick mounting landing immediately after the first shipped a live
+defect**, and phase 3 is still ahead of it. Take it after phase 3, when
+the plan carries a hash and the mount path is otherwise stable.
+
+The demonstration above is the expensive part and it is done, so it stays
+attached to this entry rather than being rediscovered.
 
 **`LO_FLAGS_AUTOCLEAR` is the design decision in that list.** The loop device
 frees itself when its last reference goes, so there is no teardown path to
@@ -346,7 +355,35 @@ the loop device pool. `LOOP_CTL_GET_FREE` allocates from a global kernel
 pool; a mount namespace does not partition it. The mountpoint decision does
 not touch that, and nothing below should be read as saying it does.
 
-## Phase 3 — the plan carries a hash, not a path
+## Phase 3 — the plan carries a hash, not a path. **LANDED 2026-09-12.**
+
+**Landed. Where it differed from this text, in three places, because a
+plan read afterwards is read as a record:**
+
+- **The unit is 196 bytes, not 198.** This text was written before
+  `window_s` left the unit. Measured, not counted:
+  `sizeof(struct nw_unit)` from a compiled throwaway.
+- **`NW_E_BRICK` is RETIRED, not repurposed.** The bullet below proposes
+  changing its meaning to "not 32 bytes of hash", and that is not a check
+  that exists — every 32-byte value is a well-formed hash, so there is
+  nothing to reject. A code kept alive under a new meaning is the
+  version-namespace defect the `06` → `07` bump exists to avoid, at the
+  scale of one enum. Codes below it renumbered down.
+- **`plan.als` and `Plan.tla` needed no change.** The bullet below says
+  they "gain a `Hash` in place of a brick path"; neither had ever modelled
+  a path. Alloy's `sig Brick {}` is an opaque atom, TLA+ asks
+  `brick[i] # ""`, and both questions are unchanged by the field's width.
+  So invariant 3's four-place change reached two places for this change
+  specifically, and that is a property of *what* changed rather than a
+  weakening of the rule.
+
+**What replaced the deleted traversal check is in `HISTORY.md` §51**, at
+the length it needs: the check went because a hash cannot express a
+traversal, and the new one is that "no brick" is all-zero and must be
+scanned for to the last byte.
+
+### The original text of this phase
+
 
 `struct nw_unit`'s `brick[96]` becomes a 32-byte binary sha256 (`brick[32]`),
 `nw-sup` builds `/nw/bricks/<hex>.img`, and the plan stops carrying a path.

@@ -36,11 +36,23 @@ The boundary that does matter here is not between files, it is **trust**:
   at 200,000. Do not reintroduce a nested scan.
 - **Field lengths must match the struct.** Bug 12: a 32-byte scan over a
   128-byte field left most of `exec_path` unvalidated. Pass the length.
-- **Trailing bytes must be zero, and an empty optional field is still
-  checked.** A blank `brick` has every byte verified zero, for the same
-  reason `_pad` is: an unvalidated field cannot be given meaning later,
-  because an old blob carrying garbage would be accepted by a new checker
-  that reads it.
+- **Trailing bytes must be zero.** A NUL-terminated field has a tail after
+  its NUL, and every byte of it is verified zero, for the same reason
+  `_pad` is: an unvalidated field cannot be given meaning later, because an
+  old blob carrying garbage would be accepted by a new checker that reads
+  it. `name` and `exec_path` are the fields this is about.
+
+  **`brick` is NOT one of them, since phase 3.** It is a 32-byte sha256,
+  every bit significant, with no tail and no terminator — a nonzero byte
+  after the first does not mean "blank with garbage", it means a different
+  hash. The rule was lifted off it because its subject went, and
+  `HISTORY.md` §51 says so at length; what replaced it is sharper and is
+  the thing to preserve: **"no brick" is ALL-ZERO, so the checker must scan
+  every byte.** Reading `brick[0]` alone silently accepts one hash in 256
+  as "no brick" and starts a house on the machine root that the plan says
+  is in a brick. `nwcheck.c` ORs the whole field; the `hash-tail-only` case
+  in `test_checker_rejects_crafted_fields` sets only byte 31, and the
+  caller proof scans all 32.
 - **Prefer rejecting at bake time — but any rule the runtime relies on must
   be in `nwcheck.c` too.** The baker is not in the TCB and a blob can
   arrive from anywhere. The cross-field rules — a brick forces

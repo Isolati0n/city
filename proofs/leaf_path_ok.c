@@ -7,15 +7,22 @@
  * too, and the same include gives the other harnesses access to it. */
 #include "nwcheck.c"
 
-/* path_ok_len takes its field width as a parameter and nw_check calls it
- * at BOTH widths -- NW_PATH_LEN for exec_path and every bind, NW_BRICK_LEN
- * for a brick. This harness ran only at NW_PATH_LEN, while the caller
- * proof's stub assumed the accept-postcondition at whichever width it was
- * called with: the one place a stub assumed more than its leaf proof
- * delivered. Injecting `if (max != NW_PATH_LEN) return 1;` into
- * path_ok_len left this proof SUCCESSFUL. proofs/run.sh runs it at both
- * widths now. Found by tcb-review; bug 12's shape, which was also a length
- * that had to match the field. */
+/* path_ok_len takes its field width as a parameter, and it once mattered
+ * that nw_check called it at TWO -- NW_PATH_LEN for exec_path and every
+ * bind, NW_BRICK_LEN for a brick. This harness ran only at NW_PATH_LEN
+ * while the caller proof's stub assumed the accept-postcondition at
+ * whichever width it was called with: the one place a stub assumed more
+ * than its leaf proof delivered. Injecting
+ * `if (max != NW_PATH_LEN) return 1;` left this proof SUCCESSFUL. Found by
+ * tcb-review; bug 12's shape, which was also a length that had to match
+ * the field.
+ *
+ * Phase 3 (2026-09-12) retired the second width: a brick is a 32-byte hash
+ * and never reaches this function, so exec_path and binds are the only
+ * callers and both are NW_PATH_LEN. That mutant is no longer observable
+ * -- not because it was fixed, but because the width it exploited stopped
+ * existing. proofs/run.sh derives the list from blob.h rather than
+ * hardcoding one entry, so a second width would come back on its own. */
 #ifndef PROOF_PATH_MAX
 #define PROOF_PATH_MAX NW_PATH_LEN
 #endif

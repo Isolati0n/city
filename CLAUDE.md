@@ -482,7 +482,13 @@ The record, which is the argument:
 - **`path_ok_len`** validated a path that could contain `..`, under a comment
   and an invariant both asserting that a house cannot see outside its brick.
   A traversing brick baked clean, passed `nw-check`, booted, and logged
-  `lid brick` while rooted on the machine.
+  `lid brick` while rooted on the machine. *The guard added for it is still
+  there and still required — `exec_path` and binds are paths. Its **brick**
+  case was deleted on 2026-09-12, and that is not a regression: phase 3 made
+  a brick a 32-byte hash, which cannot express a traversal, so the input
+  class went rather than the check being dropped. `HISTORY.md` §51 carries
+  the argument, because a deleted security check with no record reads as
+  exactly the thing this list is about.*
 - **A test said it planted a hash collision and did not.** Its probe asked
   `nwcheck.c`'s real hash and then applied the slot mask itself — a second
   copy of an expression that also lives in `name_dup`. Change the derivation
@@ -492,6 +498,45 @@ The record, which is the argument:
   round found the packet handed to every reviewer carrying an **empty**
   environment block, because its fallback only ran on failure and `sed` on
   `/dev/null` succeeds.
+
+**A recovery mechanism turns a defect into a delay, and a test that asserts
+final state cannot see a delay.** This is a *variant* of the shape above and
+it is worth separating, because every case before it was a claim the code
+contradicted, and this one is a correct mechanism working exactly as designed
+while concealing a defect behind it.
+
+Phase 2 shipped with `LOOP_CTL_GET_FREE` treated as if it reserved an index.
+It does not, so concurrent brick houses collided and all but one got `EBUSY`.
+The restart budget then did its job: the loser restarted and succeeded. Two
+houses produced one failure on *every* run of the suite and the suite printed
+`ok`, because the test asserted the end state and the end state was correct.
+At eight houses the budget ran out and houses vanished; at `NW_MAX_UNITS`,
+6 to 15 of 64 ever attached — and the city still printed
+`closed houses_reaped=64 orphans=0`.
+
+Nothing lied. The budget is a hard total and behaved like one; the test
+asserted what it said it asserted. The defect lived in the gap between them.
+
+So the question to ask of **every retry, every budget, every fallback** in
+this tree is: *what does this convert a failure into, and would a test that
+checks the outcome still see it?* If the answer is "a delay" and "no", assert
+the intermediate — this suite now asserts zero `EBUSY` and zero restarts, not
+merely that every house ran. The second-order cost is the reason it matters:
+a budget spent on a transient race is a hard total a longrun house no longer
+has for a real crash.
+
+Two corollaries, both earned the expensive way:
+
+- **Put the test at the scale where the defect is visible, not the smallest
+  scale that reproduces the mechanism.** Two houses collide, but the budget
+  hides it; eight is where it shows. A test at two would have gone green
+  against the broken tree. Second time this has paid.
+- **Refuse a proposed check that cannot fail for the reason it names.** A
+  reviewer suggested an fd census would catch a dropped `O_CLOEXEC`. Both
+  controls were run: dropping `O_CLOEXEC` passes, dropping the `close()`
+  calls passes, because either alone keeps the table clean. That is correct
+  redundancy, and saying so beats inventing an assertion that appears to
+  separate them.
 
 Notice what is common. In every case the code was memory-safe, the tests were
 green, and the prose was confident. Nothing was reviewing the *relationship*

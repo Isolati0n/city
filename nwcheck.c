@@ -15,7 +15,6 @@ static const char *errs[] = {
     "reserved byte nonzero",
     "lids",
     "kind",
-    "brick path",
     "brick without NEWNS lid",
     "bind count",
     "bind unit index",
@@ -233,15 +232,25 @@ int nw_check(const void *blob, uint32_t len)
          * a restriction only when the root is a brick; on the machine root it
          * confines nothing, which is a lid that decides nothing while
          * claiming to. See the decision in nwsup.c's lid_landlock. */
-        if ((u[i].lids & NW_LID_LANDLOCK) && !u[i].brick[0])
+        /* ALL-ZERO IS "no brick", and it takes every byte to say so -- a
+         * hash is not NUL-terminated, so brick[0] alone means nothing.
+         * Compared without branching on content: any nonzero byte is a
+         * brick. */
+        int has_brick = 0;
+        for (int k = 0; k < NW_BRICK_HASH; k++)
+            has_brick |= u[i].brick[k];
+        if ((u[i].lids & NW_LID_LANDLOCK) && !has_brick)
             return NW_E_LLBRICK;
-        if (u[i].brick[0]) {
-            if (!path_ok_len(u[i].brick, NW_BRICK_LEN)) return NW_E_BRICK;
-            if (!(u[i].lids & NW_LID_NEWNS)) return NW_E_BRICKNS;
-        } else {
-            for (int k = 0; k < NW_BRICK_LEN; k++)
-                if (u[i].brick[k] != 0) return NW_E_BRICK;
-        }
+        if (has_brick && !(u[i].lids & NW_LID_NEWNS))
+            return NW_E_BRICKNS;
+        /* NO PATH CHECK, AND NW_E_BRICK IS GONE WITH IT. Phase 3 made this
+         * field 32 raw bytes of sha256, and there is no value of those 32
+         * bytes that is invalid: every one names a file under
+         * NW_BRICK_DIR. The `..` guard that used to live here is not
+         * relaxed, it is INAPPLICABLE -- the input class it defended
+         * against cannot be expressed any more. HISTORY.md records this,
+         * because a deleted security check reads as a regression to
+         * anyone who finds it without the reason. */
         /* The remaining spare byte must be zero. An unvalidated spare cannot
          * be given meaning later: an old blob carrying garbage would be
          * accepted by a new checker that reads it. */

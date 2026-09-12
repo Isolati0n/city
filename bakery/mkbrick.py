@@ -78,9 +78,12 @@ def sha256_file(path: str) -> str:
 
 
 def brick_suffix() -> str:
-    """NW_BRICK_SUFFIX from blob.h. Read, not spelled: the suffix is part of
-    the length budget NW_BRICK_LEN covers, and tests/run.py derives a stage
-    limit from the same pair. Three copies of ".img" is the drift class."""
+    """NW_BRICK_SUFFIX from blob.h. Read, not spelled: nw-sup composes the
+    image path from NW_BRICK_DIR, the hex hash and this suffix, so a second
+    copy of ".img" here is a house that mounts nothing. It is no longer a
+    LENGTH constraint -- phase 3 replaced brick[NW_BRICK_LEN] with a
+    32-byte hash, so the suffix costs no room in the blob -- and
+    tests/run.py's stage limit now derives from NW_PATH_LEN."""
     here = os.path.dirname(os.path.abspath(__file__))
     for line in open(os.path.join(here, "..", "blob.h")):
         f = line.split()

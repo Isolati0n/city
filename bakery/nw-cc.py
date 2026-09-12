@@ -25,7 +25,7 @@ import struct
 import sys
 import zlib
 
-NAME_LEN, PATH_LEN, BRICK_LEN = 32, 128, 96
+NAME_LEN, PATH_LEN, BRICK_HASH, BRICK_HEX = 32, 128, 32, 64
 MAX_UNITS, MAX_BINDS, FD_RESERVED, MAX_FDS = 64, 128, 8, 1024
 KIND_ONESHOT, KIND_LONGRUN = 0, 1
 KINDS = {"oneshot": KIND_ONESHOT, "longrun": KIND_LONGRUN}
@@ -82,21 +82,24 @@ def check(houses, binds):
                 "machine root the lid grants read and execute beneath / and "
                 "confines nothing")
         if h["brick"]:
-            if not path_clean(h["brick"]):
+            # PHASE 3: brick= IS A HASH. The `..` check that was here is gone
+            # because the thing it defended against cannot be written any
+            # more -- 64 hex characters have no separator and no relative
+            # component. The check below is a shape check, not a safety one:
+            # a wrong hash names a file that is not there and the house dies
+            # at `open brick image`, loudly, which is a different failure
+            # from a house rooted somewhere it should not be.
+            if not _is_hex64(h["brick"]):
                 raise SystemExit(
-                    f"house {h['name']}: brick= must be absolute with no '..' "
-                    "component; a brick that traverses out is a house rooted "
-                    "on the machine")
-            if len(h["brick"].encode("ascii")) >= BRICK_LEN:
-                raise SystemExit(f"house {h['name']}: brick= too long")
-            # A house cannot pivot into its own root without a private mount
-            # namespace. The lid is not added here on the plan's behalf: a
-            # lid nobody asked for is a lid nobody reviewed.
+                    f"house {h['name']}: brick= must be {BRICK_HEX} hex "
+                    f"characters (the sha256 of the image, as mkbrick "
+                    f"prints it), not a path. Phase 3 moved the plan from "
+                    f"a path to a hash; nw-sup composes the path itself.")
             if not (h["lids"] & LID_NEWNS):
                 raise SystemExit(
                     f"house {h['name']}: brick= needs lids=...,newns; a brick "
                     "is a root and pivoting without a private mount namespace "
-                    "would repoint the machine's")
+                    "would repoint the machine's root")
         elif h["binds"]:
             raise SystemExit(
                 f"house {h['name']}: bind= without brick=; there is no root "
@@ -116,7 +119,8 @@ def bake(path, houses):
     unit = b""
     for h in houses:
         unit += pad(h["name"], NAME_LEN) + pad(h["exec"], PATH_LEN)
-        unit += pad(h["brick"], BRICK_LEN)
+        unit += (bytes.fromhex(h["brick"]) if h["brick"]
+                 else b"\0" * BRICK_HASH)
         # kind (the byte that was "critical" until 2026-09-10), then _pad,
         # which must stay zero -- nwcheck.c rejects a nonzero spare.
         unit += struct.pack("<BBBB", h["kind"], h["budget"], h["lids"], 0)
@@ -125,7 +129,7 @@ def bake(path, houses):
         table += struct.pack("<H", u) + pad(p, PATH_LEN)
     # Must equal NW_MAGIC in blob.h. tests/run.py asserts that agreement;
     # the version moves when the layout moves -- see the comment there.
-    prefix = b"NWPLAN06" + struct.pack("<II", len(houses), len(binds))
+    prefix = b"NWPLAN07" + struct.pack("<II", len(houses), len(binds))
     crc = zlib.crc32(prefix + struct.pack("<I", 0) + unit + table) & 0xFFFFFFFF
     blob = prefix + struct.pack("<I", crc) + unit + table
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
@@ -134,6 +138,16 @@ def bake(path, houses):
     open(path + ".sha256", "w").write(digest + "\n")
     print(f"wrote {path} units={len(houses)} binds={len(binds)} "
           f"crc=0x{crc:08x} bytes={len(blob)} sha256={digest}")
+
+
+def _is_hex64(v):
+    """Exactly BRICK_HEX lowercase hex characters. Closed alphabet and fixed
+    length, so no separator and no relative component can appear -- that is
+    the whole phase-3 argument, and it is checked here as well as in
+    nwcheck.c because the baker is not in the TCB and a blob can arrive from
+    anywhere."""
+    return (isinstance(v, str) and len(v) == BRICK_HEX
+            and all(c in "0123456789abcdef" for c in v))
 
 
 def house(name, exe, kind, budget, lids, brick="", binds=()):

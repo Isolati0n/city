@@ -266,10 +266,14 @@ wanted() {
 echo "proofs: writing to $OUT"
 
 if wanted path_ok; then
-    # Both widths nw_check actually calls it at. One instantiation left the
-    # caller's stub assuming more than this proof delivered.
-    BRICK_LEN=$(blob_h blob.h NW_BRICK_LEN)
-    for w in "$(blob_h blob.h NW_PATH_LEN)" "$BRICK_LEN"; do
+    # Every width nw_check calls it at. There were TWO -- NW_PATH_LEN and
+    # NW_BRICK_LEN -- and running at one of them let a
+    # `if (max != NW_PATH_LEN) return 1;` mutant pass. Phase 3 made the
+    # brick a 32-byte hash, so nothing calls path_ok_len at any other
+    # width: exec_path and every bind are NW_PATH_LEN and there is no
+    # second one left to miss. Derive the list rather than writing it, so
+    # a future second width arrives here by itself.
+    for w in "$(blob_h blob.h NW_PATH_LEN)"; do
         expect PASS "leaf_path_ok_$w" $LEAF_PATH_UNW \
             -DPROOF_PATH_MAX=$w proofs/leaf_path_ok.c
         expect FAIL "leaf_path_ok_${w}_vacuity" $LEAF_PATH_UNW \

@@ -36,7 +36,16 @@ sig House {
 
 /* A brick is the house's own root: its own libraries and toolchain, at the
    same paths, invisible to every other house. Content-addressed, so two
-   houses may legitimately share one -- brick is lone, not disj. */
+   houses may legitimately share one -- brick is lone, not disj.
+
+   Phase 3 (2026-09-12) changed brick[96] to a 32-byte sha256 in blob.h and
+   this sig needed NOTHING, because it was already an opaque atom with no
+   structure: identity and sharing are all it ever modelled, and both
+   survived the change. docs/plans/01 predicted "plan.als and Plan.tla gain
+   a Hash in place of a brick path" -- neither file had ever modelled a
+   path, so the four-place drift of invariant 3 did not reach them here.
+   Recorded because a prediction of work that turned out to be unnecessary
+   reads, later, like work that was skipped. */
 sig Brick {}
 sig Path {}
 

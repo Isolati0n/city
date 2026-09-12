@@ -17,19 +17,36 @@
  * a rule for whoever changes the layout, not something the code enforces.
  * The asserts below say so in every message they print, because that is
  * the one moment a reader is guaranteed to be looking. */
-#define NW_MAGIC        "NWPLAN06"
+#define NW_MAGIC        "NWPLAN07"
 #define NW_NAME_LEN     32
 #define NW_PATH_LEN     128
-/* A brick is an IMAGE FILE as of phase 2, so the path carries a suffix and
-   the budget has to include it. The comment here said `"/nw/bricks/" + 64
-   hex + NUL` after that stopped being true, and tests/run.py re-derived its
-   stage-length limit from that stale arithmetic -- coming out four
-   characters too generous, so a 17-to-20 character stage passed the guard
-   and then failed at bake time with the exact message the guard exists to
-   prevent. Declared, not described, so the next reader derives from a
-   constant rather than from prose. `tcb-review`. */
+/* PHASE 3: THE PLAN CARRIES A HASH, NOT A PATH. `brick` is 32 raw bytes of
+   sha256 over the image file's contents, and nw-sup builds
+   NW_BRICK_DIR "/" <64 hex> NW_BRICK_SUFFIX itself. All-zero means no brick.
+
+   The point is not the 64 bytes saved. A path is a free-form string in the
+   TCB's input path, and `path_ok_len` had to defend it -- a brick that
+   traversed out with `..` baked clean, passed nw-check, booted, and logged
+   `lid brick` while rooted on the machine (CLAUDE.md, the characteristic
+   failure). A fixed-width hash CANNOT EXPRESS a traversal: there is no
+   separator, no relative component, and every one of the 2^256 values names
+   a file under one directory. The check is not removed, the input class it
+   defended against is.
+
+   The directory and suffix are declared, not described. nw-sup composes the
+   path, tests/run.py derives its stage limit, and bakery/mkbrick.py names
+   the file it writes -- three readers, one constant each, because prose
+   went stale here once already and the suite re-derived a wrong number from
+   it. */
+#define NW_BRICK_DIR    "/nw/bricks"
 #define NW_BRICK_SUFFIX ".img"
-#define NW_BRICK_LEN    96    /* "/nw/bricks/" + 64 hex + NW_BRICK_SUFFIX + NUL */
+#define NW_BRICK_HASH   32    /* raw sha256, not hex */
+/* Derived, not declared: the hex spelling is the same hash, so `64` written
+   here as a literal is a second copy of `32` and invariant 3's drift class
+   in miniature. nw-spawn sizes its hex buffer from this and nw-sup checks
+   the length it receives against it; a hash width change must not be able
+   to leave either behind. */
+#define NW_BRICK_HEX    (NW_BRICK_HASH * 2)
 #define NW_MAX_BINDS    128
 #define NW_MAX_UNITS    64
 #define NW_FD_RESERVED  8
@@ -102,7 +119,7 @@ _Static_assert((NW_DUP_SLOTS & (NW_DUP_SLOTS - 1)) == 0,
 struct nw_unit {
     char     name[NW_NAME_LEN];
     char     exec_path[NW_PATH_LEN];   /* resolved inside the brick, if any */
-    char     brick[NW_BRICK_LEN];      /* "" = no brick: shares the machine root */
+    uint8_t  brick[NW_BRICK_HASH];     /* all-zero = no brick: shares the machine root */
     uint8_t  kind;       /* NW_KIND_* — was 'critical' until 2026-09-10 */
     uint8_t  budget;     /* deaths for the life of nw-sup; 0 = no restart */
     uint8_t  lids;
@@ -208,22 +225,24 @@ struct nw_hdr {
     _Static_assert(_Generic(&((struct s *)0)->m, t (*)[n]: 1, default: 0), \
                    #s "." #m " retyped: same bytes, different meaning, " \
                    "bump NW_MAGIC")
-#define NW_UNIT_SIZE (NW_NAME_LEN + NW_PATH_LEN + NW_BRICK_LEN + 4)
+#define NW_UNIT_SIZE (NW_NAME_LEN + NW_PATH_LEN + NW_BRICK_HASH + 4)
 _Static_assert(sizeof(struct nw_unit) == NW_UNIT_SIZE,
                "unit size drifted: a field was added, removed or resized");
 NW_AT(nw_unit, name,      0);    NW_EXTENT(nw_unit, name,      NW_NAME_LEN);
 NW_AT(nw_unit, exec_path, 32);   NW_EXTENT(nw_unit, exec_path, NW_PATH_LEN);
-NW_AT(nw_unit, brick,     160);  NW_EXTENT(nw_unit, brick,     NW_BRICK_LEN);
-NW_AT(nw_unit, kind,      256);  NW_TYPE(nw_unit, kind,   uint8_t);
-NW_AT(nw_unit, budget,    257);  NW_TYPE(nw_unit, budget, uint8_t);
-NW_AT(nw_unit, lids,      258);  NW_TYPE(nw_unit, lids,   uint8_t);
-NW_AT(nw_unit, _pad,      259);  NW_TYPE(nw_unit, _pad,   uint8_t);
-/* The three arrays are char, not uint8_t: nwcheck.c hands them to
- * path_ok_len and name_ok as char *, and the extent asserts above are what
- * stop a member being shortened to make room for something else. */
+NW_AT(nw_unit, brick,     160);  NW_EXTENT(nw_unit, brick,     NW_BRICK_HASH);
+NW_AT(nw_unit, kind,      192);  NW_TYPE(nw_unit, kind,   uint8_t);
+NW_AT(nw_unit, budget,    193);  NW_TYPE(nw_unit, budget, uint8_t);
+NW_AT(nw_unit, lids,      194);  NW_TYPE(nw_unit, lids,   uint8_t);
+NW_AT(nw_unit, _pad,      195);  NW_TYPE(nw_unit, _pad,   uint8_t);
+/* name and exec_path are char: nwcheck.c hands them to path_ok_len and
+ * name_ok as char *. `brick` is uint8_t BECAUSE IT IS NO LONGER TEXT -- 32
+ * raw bytes, never printed, never parsed, never passed to a string
+ * function. The type assert is what stops it quietly becoming a string
+ * again, which is the change that would bring the traversal class back. */
 NW_ARR_TYPE(nw_unit, name,      char, NW_NAME_LEN);
 NW_ARR_TYPE(nw_unit, exec_path, char, NW_PATH_LEN);
-NW_ARR_TYPE(nw_unit, brick,     char, NW_BRICK_LEN);
+NW_ARR_TYPE(nw_unit, brick,     uint8_t, NW_BRICK_HASH);
 
 _Static_assert(sizeof(struct nw_bind) == 130,
                "bind size drifted: a field was added, removed or resized");
@@ -279,12 +298,16 @@ enum {
     NW_E_RSV = 8,
     NW_E_LIDS = 9,
     NW_E_KIND = 10,
-    NW_E_BRICK = 11,
-    NW_E_BRICKNS = 12,
-    NW_E_BINDS = 13,
-    NW_E_BINDIDX = 14,
-    NW_E_BINDPATH = 15,
-    NW_E_LLBRICK = 16,
+    /* NW_E_BRICK was 11 and is RETIRED, not renumbered around: phase 3 made
+       `brick` 32 raw bytes of hash, and there is no invalid value of those
+       bytes to report. The codes below shifted down by one, which is the
+       precedent this enum already set -- never assume a numeric value, read
+       the enum. */
+    NW_E_BRICKNS = 11,
+    NW_E_BINDS = 12,
+    NW_E_BINDIDX = 13,
+    NW_E_BINDPATH = 14,
+    NW_E_LLBRICK = 15,
     /* Terminator, not a code. nw_errstr's bound and the length of errs[] in
      * nwcheck.c are both derived from it, so the three things that must
      * agree -- last code, array length, bound -- become one number.

@@ -70,8 +70,12 @@ BindNeed == IF n = 0 THEN 0
                      ELSE Cardinality(binds[i]) + Rows[i - 1]
                  IN Rows[n]
 
-(* brick[i] = "" means the house shares the machine root. binds[i] is the
-   set of paths bound into that house's brick before it pivots. *)
+(* brick[i] = "" means the house shares the machine root -- the all-zero
+   hash, since phase 3 (2026-09-12) made brick a 32-byte sha256 rather than
+   a path. The model carries an opaque value either way and needed no
+   change: what it reasons about is "some brick or none", which is the same
+   question before and after. binds[i] is the set of paths bound into that
+   house's brick before it pivots; those ARE still paths. *)
 TypeOK ==
   /\ n \in 1..MaxUnits
   /\ kind \in [1..n -> {0, 1}]   (* 0 oneshot, 1 longrun; explicit, no default *)

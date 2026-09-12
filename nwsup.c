@@ -353,8 +353,34 @@ int main(int argc, char **argv)
     if ((e = getenv("NW_LIDS"))) lids = (unsigned)atoi(e);
     if ((e = getenv("NW_BUDGET"))) budget = (unsigned)atoi(e);
     if ((e = getenv("NW_KIND"))) kind = (unsigned)atoi(e);
-    const char *brick = getenv("NW_BRICK");
-    if (brick && !brick[0]) brick = NULL;
+    /* NW_BRICK IS 64 HEX CHARACTERS, AND THIS RE-VALIDATES THEM. The sealed
+     * plan carries 32 raw bytes, which cannot express a path traversal at
+     * all -- but nw-spawn has to turn them into text to cross an env var,
+     * and text is exactly what the traversal class needs. nw-sup reads its
+     * unit from the environment rather than from the blob (the same reason
+     * it re-checks NEWNS below), so without this check a hand-set NW_BRICK
+     * of "../../etc" would compose a path out of the brick directory and
+     * the phase-3 argument would be false in the one place it matters.
+     *
+     * Fixed length and a closed alphabet: no separator can appear, no
+     * relative component can appear, and the composed path is under
+     * NW_BRICK_DIR by construction. */
+    const char *hex = getenv("NW_BRICK");
+    char brickbuf[sizeof(NW_BRICK_DIR) + 1 + NW_BRICK_HEX
+                  + sizeof(NW_BRICK_SUFFIX)];
+    const char *brick = NULL;
+    if (hex && hex[0]) {
+        size_t hl = strlen(hex);
+        if (hl != NW_BRICK_HEX) die("brick hash length");
+        for (size_t k = 0; k < hl; k++)
+            if (!((hex[k] >= '0' && hex[k] <= '9') ||
+                  (hex[k] >= 'a' && hex[k] <= 'f')))
+                die("brick hash not hex");
+        int bn = snprintf(brickbuf, sizeof brickbuf, "%s/%s%s",
+                          NW_BRICK_DIR, hex, NW_BRICK_SUFFIX);
+        if (bn < 0 || (size_t)bn >= sizeof brickbuf) die("brick path");
+        brick = brickbuf;
+    }
     /* Landlock grants beneath the house's root, which is only a restriction
      * if that root is a brick. nw-check returns NW_E_LLBRICK; re-checked here
      * because nw-sup reads its unit from the environment. */

@@ -18,50 +18,68 @@ import zlib
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 STAGE = os.environ.get("NW_STAGE", "/tmp/nw-init-run")
 
-def _brick_suffix():
-    """NW_BRICK_SUFFIX from blob.h -- the same constant mkbrick.py reads."""
+def _blob_str(name):
+    """A string #define from blob.h, quotes stripped."""
     for line in open(os.path.join(ROOT, "blob.h")):
         f = line.split()
-        if len(f) >= 3 and f[0] == "#define" and f[1] == "NW_BRICK_SUFFIX":
+        if len(f) >= 3 and f[0] == "#define" and f[1] == name:
             return f[2].strip('"')
-    raise SystemExit("blob.h has no NW_BRICK_SUFFIX")
+    raise SystemExit(f"blob.h has no {name}")
+
+
+def _brick_dir():
+    return _blob_str("NW_BRICK_DIR")
+
+
+def _brick_suffix():
+    """NW_BRICK_SUFFIX from blob.h -- the same constant mkbrick.py reads.
+
+    Through _blob_str, which is the same parse _brick_dir uses. It was an
+    open-coded copy of that loop for half a day: two readers of blob.h in
+    one file, differing only in the name they look for, which is the shape
+    that lets one be fixed and the other left."""
+    return _blob_str("NW_BRICK_SUFFIX")
 
 
 def _stage_limit():
-    """How long NW_STAGE may be, derived rather than declared.
+    """How long NW_STAGE may be.
 
-    make_brick builds "{STAGE}/nw/bricks/{64 hex}{NW_BRICK_SUFFIX}", and
-    NW_BRICK_LEN is sized for the production path. Whatever is left is the
-    slack a test stage may use. Past that, baking fails on the third test
-    with `house locked: brick= too long`, which names brick= and says nothing
-    about the stage -- so the reader looks at the plan. Stated as a
-    precondition instead: found by the control agent, whose own documented
-    recipe (mktemp -d) exceeded it.
+    PHASE 3 REMOVED THE REASON THIS EXISTED. The limit was the slack left
+    in `brick[96]` after "/nw/bricks/" and a 64-character hash, because
+    make_brick built "{STAGE}/nw/bricks/{hash}" and a long stage overflowed
+    the field -- surfacing at bake time as `brick= too long`, which names
+    brick= and says nothing about the stage. The plan carries 32 raw bytes
+    now and no stage path reaches it at all.
 
-    THE SUFFIX IS READ, NOT ASSUMED. Phase 2 made bricks image files and this
-    derivation kept subtracting only the hash, coming out four characters too
-    generous: a 17-to-20 character stage passed this guard and then failed at
-    bake time with the exact message the guard exists to prevent. The default
-    /tmp/nw-init-run is 16, sitting one character inside the true limit, which
-    is why nothing noticed. harness.md tells a read-only reviewer to pick a
-    short distinct name under /tmp, and 17-20 is what that looks like.
-    `tcb-review`."""
-    want = {"NW_BRICK_LEN": None, "NW_BRICK_SUFFIX": None}
+    What still bounds the stage is `exec_path[128]`, which the suite fills
+    with "{STAGE}/nw/bin/<fixture>". Derived from that instead, with the
+    longest fixture name the tree actually has rather than a guess.
+
+    (The old derivation also subtracted the hash and not ".img", coming out
+    four characters too generous until 2026-09-12. Both the arithmetic and
+    the field it was about are gone; this is a different bound.)"""
+    plen = None
     for line in open(os.path.join(ROOT, "blob.h")):
         f = line.split()
-        if len(f) >= 3 and f[0] == "#define" and f[1] in want:
-            want[f[1]] = f[2]
-    for k, v in want.items():
-        if v is None:
-            raise SystemExit(f"blob.h has no {k}")
-    return (int(want["NW_BRICK_LEN"]) - len("/nw/bricks/") - 64
-            - len(want["NW_BRICK_SUFFIX"].strip('"')) - 1)
+        if len(f) >= 3 and f[0] == "#define" and f[1] == "NW_PATH_LEN":
+            plen = int(f[2])
+    if plen is None:
+        raise SystemExit("blob.h has no NW_PATH_LEN")
+    # BIN is defined below this guard, so the path is spelled out here.
+    # On a tree that has never been staged the directory is absent; 16 is
+    # the fallback and is longer than any fixture name in the tree today,
+    # so it errs toward refusing a stage that would have worked rather
+    # than accepting one that would not.
+    binp = os.path.join(STAGE, "nw", "bin")
+    longest = (max((len(n) for n in os.listdir(binp)), default=16)
+               if os.path.isdir(binp) else 16)
+    return plen - len("/nw/bin/") - longest - 1
 
 
 if len(STAGE) > _stage_limit():
     raise SystemExit(
         f"NW_STAGE is {len(STAGE)} characters and the limit is "
-        f"{_stage_limit()} (derived from NW_BRICK_LEN in blob.h): {STAGE}\n"
+        f"{_stage_limit()} (derived from NW_PATH_LEN in blob.h): {STAGE}\n"
         f"A longer stage makes every brick path overflow brick[] and the "
         f"suite fails at bake time naming brick=, not the stage.")
 # The staged tree mirrors the production layout and differs only in prefix:
@@ -1614,14 +1632,21 @@ def make_brick(ident, mirrors=()):
     # The image is what buys the seal, and the seal is the reason phase 2
     # exists: a directory brick is writable by the house that roots in it
     # unless a lid says otherwise. See test_brick_image_is_sealed.
-    brick = f"{STAGE}/nw/bricks/{h.hexdigest()}{_brick_suffix()}"
+    # PHASE 3 RETURNS THE HASH, not the path. nw-sup composes
+    # NW_BRICK_DIR/<hex>NW_BRICK_SUFFIX itself, so the image has to land
+    # at that exact name on the MACHINE root -- the same reason the
+    # Makefile creates /nw/mnt there. The stage is not the machine root in
+    # the lab, and NW_BRICK_DIR is absolute.
+    hexd = h.hexdigest()
+    brick = f"{_brick_dir()}/{hexd}{_brick_suffix()}"
+    os.makedirs(_brick_dir(), exist_ok=True)
     subprocess.run(["rm", "-f", brick], check=False)
     r = run(["mkfs.erofs", "-zlz4", brick, tmp])
     expect(r.returncode == 0 and os.path.exists(brick),
            f"mkfs.erofs failed packing {ident}; erofs_available() should "
            f"have skipped this test before here\n{r.out}{r.err}")
     subprocess.run(["rm", "-rf", tmp], check=False)
-    return brick
+    return hexd
 
 
 _EROFS = None
@@ -1828,13 +1853,21 @@ def test_path_traversal_refused():
     through, so exec_path, brick and bind are all covered by one check. The
     baker refuses too, independently: it is not in the TCB.
 
-    This closes traversal and NOT symlinks -- see docs/options/07."""
+    This closes traversal and NOT symlinks -- see docs/options/07.
+
+    PHASE 3 DELETED THE BRICK CASE, and that is a narrowing of the INPUT,
+    not of the check. `brick` is 32 raw bytes of sha256 now; there is no
+    value of those bytes that means "../..", because there is no separator
+    and no relative component to write. exec_path and bind are still paths
+    and are still checked here. HISTORY.md records the deletion, because a
+    removed security check reads as a regression to anyone who finds it
+    without the reason."""
     esc = f"{WORK}/esc.city"
-    brick = f"{STAGE}/nw/bricks/deadbeef"
+    # A REAL HASH, because brick= is one now. The traversal cases that used
+    # to live here for `brick` are gone; see the note in the docstring.
+    brick = "de" * 32
 
     for line, why in (
-        (f"house one /bin/brick kind=oneshot lids=newns,seccomp "
-         f"brick={brick}/../..\n", "brick"),
         (f"house one /bin/brick kind=oneshot lids=newns,seccomp "
          f"brick={brick} bind=/etc/../etc\n", "bind"),
         (f"house one /bin/../bin/brick kind=oneshot lids=newns,seccomp "
@@ -1846,9 +1879,24 @@ def test_path_traversal_refused():
         expect("no '..' component" in (p.out + p.err),
                f"{why} reason\n{p.out}{p.err}")
 
-    # The checker must refuse it on its own, from a blob the baker would not
-    # emit: bake a clean one, write ".." into the brick field by hand, repair
-    # the CRC exactly as a hand-rolled baker would.
+    # THE BRICK CASE IS NOT MISSING, IT IS INEXPRESSIBLE. Phase 3 made the
+    # field 32 raw bytes, so there is no byte string to write into it that
+    # means "../..". Asserted from the other side, because "we deleted a
+    # test" is not evidence: the baker must refuse a brick= that is a path
+    # at all, which is the input the old case was built from.
+    open(esc, "w").write(
+        f"house one /bin/brick kind=oneshot lids=newns,seccomp "
+        f"brick={STAGE}/nw/bricks/deadbeef/../..\n")
+    p = run(["python3", CC, "--city", esc, "--out", f"{WORK}/nope.blob"])
+    expect(p.returncode != 0, f"baker accepted a path as brick=\n{p.out}{p.err}")
+    expect("hex characters" in (p.out + p.err),
+           f"the baker must refuse a path-shaped brick= for being the wrong "
+           f"SHAPE, not for containing '..' -- the traversal check is gone "
+           f"and this is what replaced it\n{p.out}{p.err}")
+
+    # The checker must refuse a crafted blob on its own, from one the baker
+    # would not emit. exec_path is the field that is still a path, so it is
+    # the one crafted here.
     good = f"{WORK}/esc-ok.blob"
     open(esc, "w").write(
         f"house one /bin/brick kind=oneshot lids=newns,seccomp "
@@ -1856,32 +1904,31 @@ def test_path_traversal_refused():
     p = run(["python3", CC, "--city", esc, "--out", good])
     expect(p.returncode == 0, f"bake\n{p.out}{p.err}")
 
-    BRICK_OFF, BRICK_LEN = 20 + 32 + 128, 96   # hdr + name + exec_path
+    EXEC_OFF = 20 + int(blob_h("NW_NAME_LEN"))     # hdr + name
+    EXEC_LEN = int(blob_h("NW_PATH_LEN"))
     d = bytearray(open(good, "rb").read())
-    expect(bytes(d[BRICK_OFF:BRICK_OFF + len(brick)]) == brick.encode(),
-           "brick is not where the layout says it is")
-    evil = (brick + "/../..").encode()
-    expect(len(evil) < BRICK_LEN, "crafted brick too long for the field")
-    d[BRICK_OFF:BRICK_OFF + BRICK_LEN] = evil + b"\x00" * (BRICK_LEN - len(evil))
+    expect(bytes(d[EXEC_OFF:EXEC_OFF + 10]) == b"/bin/brick",
+           "exec_path is not where the layout says it is")
+    evil = b"/bin/../../etc/x"
+    d[EXEC_OFF:EXEC_OFF + EXEC_LEN] = evil + b"\x00" * (EXEC_LEN - len(evil))
     d[16:20] = b"\x00\x00\x00\x00"
     d[16:20] = struct.pack("<I", zlib.crc32(bytes(d)) & 0xFFFFFFFF)
     bad = f"{WORK}/esc.blob"
     open(bad, "wb").write(bytes(d))
 
     r = run([f"{BIN}/nw-check", bad])
-    expect(r.returncode != 0, "nw-check accepted a traversing brick")
-    expect("brick path" in (r.out + r.err), f"reason\n{r.out}{r.err}")
+    expect(r.returncode != 0, "nw-check accepted a traversing exec_path")
+    expect("exec_path" in (r.out + r.err), f"reason\n{r.out}{r.err}")
 
-    # And it must not merely fail later at mount: the city must not boot.
+    # And it must not merely fail later at exec: the city must not boot.
     rc, out = boot(plan=bad, hold=400)
-    # The reason, not just the halt. halt_now() has many call sites in
-    # pid1.c -- "logger fork", "plan size", "signalfd" -- so bare "HALT" is
-    # satisfied by any boot failure, including one that never validated the
-    # plan. Found by `control`.
-    expect("nw-check reject: brick path" in out and "HALT: plan" in out,
+    expect("nw-check reject: exec_path" in out and "HALT: plan" in out,
            f"a traversing plan must be refused by name, not merely halt on"
            f"\n{out}")
-    print("ok path-traversal-refused")
+    print("ok path-traversal-refused (exec_path and bind; the brick "
+          "case is gone because a 32-byte hash cannot express a "
+          "traversal -- the baker refusing a path-shaped brick= is "
+          "what stands in its place)")
 
 
 def test_brick_image_is_sealed():
@@ -2014,7 +2061,7 @@ def test_brick_needs_newns():
     -- checked here against a blob the baker would never emit."""
     city = f"{WORK}/brick-nons.city"
     open(city, "w").write(
-        f"house solo /bin/brick kind=oneshot lids=seccomp brick=/nw/bricks/x\n")
+        f"house solo /bin/brick kind=oneshot lids=seccomp brick=aa00bb11cc22dd33ee44ff5566778899aabbccddeeff00112233445566778899\n")
     p = run(["python3", CC, "--city", city, "--out", f"{WORK}/nope.blob"])
     expect(p.returncode != 0, "brick without newns should fail the bake")
     expect("needs lids=...,newns" in (p.out + p.err), f"reason\n{p.out}{p.err}")
@@ -2024,11 +2071,17 @@ def test_brick_needs_newns():
     good = f"{WORK}/brick-ok.blob"
     open(city, "w").write(
         f"house solo /bin/brick kind=oneshot lids=newns,seccomp "
-        f"brick=/nw/bricks/x\n")
+        f"brick=aa00bb11cc22dd33ee44ff5566778899aabbccddeeff00112233445566778899\n")
     p = run(["python3", CC, "--city", city, "--out", good])
     expect(p.returncode == 0, f"bake\n{p.out}{p.err}")
     d = bytearray(open(good, "rb").read())
-    lids_off = 20 + 32 + 128 + 96 + 2          # hdr + name + exec + brick + kind + budget; lids follows
+    # DERIVED, not written. This was `20 + 32 + 128 + 96 + 2` and the 96
+    # was `brick`, which phase 3 made 32 -- so the offset walked off the
+    # end of the blob and the test crashed with an IndexError instead of
+    # failing. blob.h's own NW_AT asserts pin this in C; nothing pinned the
+    # Python copy, which is invariant 3's drift class in the harness.
+    lids_off = (20 + int(blob_h("NW_NAME_LEN")) + int(blob_h("NW_PATH_LEN"))
+                + int(blob_h("NW_BRICK_HASH")) + 2)
     expect(d[lids_off] & 4, "expected the NEWNS bit where the layout says")
     d[lids_off] &= ~4
     d[16:20] = b"\x00\x00\x00\x00"
@@ -2250,7 +2303,7 @@ def test_dupname_refused():
     n = int(blob_h("NW_MAX_UNITS"))
     expect(n >= 4, f"this test needs at least 4 units, blob.h says {n}")
     NAME, PATH, BRICK = (int(blob_h(x)) for x in
-                         ("NW_NAME_LEN", "NW_PATH_LEN", "NW_BRICK_LEN"))
+                         ("NW_NAME_LEN", "NW_PATH_LEN", "NW_BRICK_HASH"))
     HDR = 20
     USZ = NAME + PATH + BRICK + 4
 
@@ -2426,13 +2479,13 @@ def test_checker_rejects_crafted_fields():
     reason string is asserted, not just the exit code: a checker that
     rejected for a different reason would satisfy `returncode != 0`."""
     NAME, PATH, BRICK = (int(blob_h(x)) for x in
-                         ("NW_NAME_LEN", "NW_PATH_LEN", "NW_BRICK_LEN"))
+                         ("NW_NAME_LEN", "NW_PATH_LEN", "NW_BRICK_HASH"))
     HDR = 20
     KIND_OFF = HDR + NAME + PATH + BRICK      # kind, then budget, lids, _pad
     LIDS_OFF = KIND_OFF + 2                   # lids is the third byte of the trailer
 
     city = f"{WORK}/crafted.city"
-    brick = f"{STAGE}/nw/bricks/deadbeef"
+    brick = "de" * 32   # a hash, not a path (phase 3); never booted, only checked
     good = f"{WORK}/crafted-ok.blob"
     # THREE units, and every case below is crafted on the LAST one. A
     # one-unit blob pins each check for u[0] only: changing `u[i].kind` to
@@ -2460,19 +2513,14 @@ def test_checker_rejects_crafted_fields():
            f"{base[KIND_OFF]} {base[LIDS_OFF]}")
 
     def craft(why, edits):
+        # Every case is a plain list of (offset, byte). There WAS a setup
+        # branch here keyed on `why.startswith("dirtyblank")`, and when the
+        # cases it served were deleted in phase 3 it became a branch nothing
+        # could enter -- while `hash-tail-only`, written to depend on
+        # something like it, silently got the unmodified brick instead and
+        # its control passed. A setup step selected by matching a test's
+        # NAME is invisible when the name changes; an edit list is not.
         d = bytearray(base)
-        if why.startswith("dirtyblank"):
-            # Clear EVERY unit's brick and the lid that requires one, so the
-            # only thing wrong with this blob is the victim's dirty padding.
-            # Clearing only the victim's left `u[0].brick[k]` in place of
-            # `u[i].brick[k]` passing: unit 0 still had a brick, so the
-            # wrong index rejected anyway and the test could not tell the
-            # difference. A rejection for the right reason by accident is
-            # the thing a control is for.
-            for k in range(NUNITS):
-                bo = HDR + k * USZ + NAME + PATH
-                d[bo:bo + BRICK] = b"\x00" * BRICK
-                d[HDR + k * USZ + NAME + PATH + BRICK + 2] = 1
         for off, val in edits:
             d[off] = val
         d[16:20] = b"\x00\x00\x00\x00"
@@ -2491,19 +2539,27 @@ def test_checker_rejects_crafted_fields():
     LEGAL_LIDS = 1 | 2 | 4 | 8          # seccomp landlock newns newnet
     BRICK_OFF = HDR + VICTIM * USZ + NAME + PATH
     cases = [
-        # A blank brick must be zero to the field width. Deleting that check
-        # left the suite, the coverage floor AND the caller proof green --
-        # gcov marks `if (...) return NW_E_BRICK;` covered on every unit
-        # with a blank brick without the return ever being taken, and the
-        # proof only ever asserted brick[0]. An unvalidated field cannot be
-        # given meaning later: an old blob carrying garbage would be
-        # accepted by a new checker that reads it. Bug 1's shape, found by
-        # tcb-review, which also noted the incentive to delete it -- that
-        # 96-iteration loop is most of the caller proof's runtime.
-        ("dirtyblank", [(BRICK_OFF + 1, ord("x"))], "brick path",
-         "a blank brick with a nonzero byte after it"),
-        ("dirtyblank-last", [(BRICK_OFF + BRICK - 1, 1)], "brick path",
-         "a blank brick with a nonzero byte in its last position"),
+        # THE TWO "dirty blank" CASES ARE GONE, and this is what replaced
+        # them. They asserted that a blank brick is zero to the field
+        # width, because a NUL-terminated path left an unvalidated tail and
+        # an old blob's garbage could be given meaning by a newer checker.
+        # A 32-byte hash has no tail: every bit is significant, and a
+        # nonzero byte does not mean "blank with garbage", it means a
+        # different hash. The input class went, so the check went with it.
+        #
+        # What still matters, and is sharper: "no brick" is ALL-ZERO, so
+        # the checker must look at every byte. A `has_brick` that tested
+        # brick[0] alone would read any hash beginning with a zero byte --
+        # one in 256 of them -- as "no brick", silently starting a house on
+        # the machine root that the plan says is in a brick. That is the
+        # lid-says-one-thing-code-does-another shape, and it is why this
+        # case sets the LAST byte and clears NEWNS: it can only be refused
+        # if the scan reached byte 31.
+        ("hash-tail-only",
+         [(BRICK_OFF + k, 0) for k in range(BRICK - 1)]
+         + [(BRICK_OFF + BRICK - 1, 1), (LIDS_OFF, 1)],
+         "brick without NEWNS lid",
+         "a brick whose hash is nonzero only in its last byte"),
     ] + [
         (f"kind{k}", [(KIND_OFF, k)], "kind",
          f"kind={k}, outside the two the runtime knows")
@@ -3148,7 +3204,7 @@ def test_baker_writes_the_declared_layout():
       declaring `lids=seccomp` produced a house with no filter. Nothing but
       the byte positions can catch that one."""
     NAME, PATH, BRICK = (int(blob_h(x)) for x in
-                         ("NW_NAME_LEN", "NW_PATH_LEN", "NW_BRICK_LEN"))
+                         ("NW_NAME_LEN", "NW_PATH_LEN", "NW_BRICK_HASH"))
     HDR = 20
     USZ = NAME + PATH + BRICK + 4
     city = f"{WORK}/layout.city"
@@ -3221,7 +3277,7 @@ def test_blob_size_ceiling():
       not aborted on.
     """
     NAME, PATH, BRICK = (int(blob_h(x)) for x in
-                         ("NW_NAME_LEN", "NW_PATH_LEN", "NW_BRICK_LEN"))
+                         ("NW_NAME_LEN", "NW_PATH_LEN", "NW_BRICK_HASH"))
     nu, nb = int(blob_h("NW_MAX_UNITS")), int(blob_h("NW_MAX_BINDS"))
     HDR, USZ, BSZ = 20, NAME + PATH + BRICK + 4, 2 + PATH
     biggest = HDR + nu * USZ + nb * BSZ
@@ -3229,7 +3285,9 @@ def test_blob_size_ceiling():
     # A maximal plan: every unit has a brick (a bind requires one) and the
     # bind table is full. The baker refuses a bind whose unit has no brick,
     # so this is the shape, not a crafted blob.
-    brick = f"{STAGE}/nw/bricks/deadbeef"
+    # A hash, not a path -- phase 3. Any 64 hex chars: this plan is never
+    # booted, only sized, so the image behind it need not exist.
+    brick = "de" * 32
     city = f"{WORK}/maxblob.city"
     with open(city, "w") as f:
         for i in range(nu):

@@ -126,21 +126,31 @@ int main(void)
             __CPROVER_assert(u[k].exec_path[0] == '/',
                              "accepted: exec_path is absolute");
             __CPROVER_assert(u[k]._pad == 0, "accepted: spare byte is zero");
-            __CPROVER_assert(u[k].brick[0] == 0 || (u[k].lids & NW_LID_NEWNS),
+            /* "Has a brick" is ANY nonzero byte of the hash, and these
+             * two assertions must say so rather than reading brick[0].
+             *
+             * They did read brick[0], which was right while a brick was a
+             * NUL-terminated path -- brick[0] == 0 was exactly "blank" --
+             * and became wrong the moment phase 3 made it a 32-byte hash,
+             * where one hash in 256 begins with a zero byte. Those hashes
+             * would have satisfied both assertions vacuously while
+             * nwcheck.c rejected them, so the proof would have gone on
+             * SUCCEEDING against a checker mutated to scan brick[0] alone.
+             * The same mutant is pinned in the suite by the
+             * `hash-tail-only` case in test_checker_rejects_crafted_fields.
+             *
+             * The companion assertion here -- "a blank brick is zero to
+             * the field width" -- is DELETED rather than repaired, and
+             * `HISTORY.md` says why: a path had an unvalidated tail after
+             * its NUL and a hash has none, so the input class the check
+             * existed for is gone. Its subject, not the check, is what
+             * disappeared. */
+            int has_brick = 0;
+            for (int i = 0; i < NW_BRICK_HASH; i++)
+                has_brick |= u[k].brick[i];
+            __CPROVER_assert(!has_brick || (u[k].lids & NW_LID_NEWNS),
                              "accepted: a brick implies the NEWNS lid");
-            /* A blank brick is zero to the field width. This was asserted
-             * nowhere -- only brick[0] was -- so deleting the check that
-             * enforces it left this proof, the suite and the 99% coverage
-             * floor all green, while a blob with garbage in brick[1..]
-             * validated. An unvalidated field cannot be given meaning
-             * later. tcb-review. */
-            int blank_is_zero = 1;
-            for (int i = 1; i < NW_BRICK_LEN; i++)
-                if (u[k].brick[i] != 0) blank_is_zero = 0;
-            __CPROVER_assert(u[k].brick[0] != 0 || blank_is_zero,
-                             "accepted: a blank brick is zero to the field "
-                             "width");
-            __CPROVER_assert(!(u[k].lids & NW_LID_LANDLOCK) || u[k].brick[0],
+            __CPROVER_assert(!(u[k].lids & NW_LID_LANDLOCK) || has_brick,
                              "accepted: landlock implies a brick");
             __CPROVER_assert(u[k].kind == NW_KIND_ONESHOT
                              || u[k].kind == NW_KIND_LONGRUN,

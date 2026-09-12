@@ -4226,3 +4226,246 @@ And "PID 1 is its own session on real hardware" was a kind-1 sentence
 with nothing behind it — nothing in the tree calls `setsid`. The
 conclusion was right and the premise was invented; replaced with the
 check that actually supports it.
+
+## 50. Bricks phase 2: the image mounts, and shipped a live defect (2026-09-12)
+
+`0000e47`, based on `e88fd25`. `lid_brick()` stopped bind-mounting a
+directory onto itself and now attaches an erofs image to a loop device and
+mounts it on `NW_BRICK_MNT`. Phase 1 had packed the images since
+2026-09-11; this is the half that reads them.
+
+Recorded first, because it is the part worth carrying: **the capability
+check was printed before the code was written, not after.** Three things
+the phase needs — `mkfs.erofs` packs an image, the image attaches to a loop
+device, the loop device mounts — checked in that order, on this machine,
+with their output quoted. All three passed here. That is one environment,
+which is the exact position `lid-landlock` was in for its whole life, so
+the suite skips loudly by name where any of the three is missing rather
+than printing green.
+
+### The defect: `LOOP_CTL_GET_FREE` reports, it does not reserve
+
+Found by `tcb-review` and `fd-auditor` independently, reproduced before it
+was fixed. Every brick house runs `lid_brick()` concurrently in its own
+mount namespace, and they all ask the kernel for a free loop index at the
+same time. The ioctl answers with an index that is free *now*; it takes no
+claim on it. So they are all told the same number, one `LOOP_CONFIGURE`
+wins and the rest get `EBUSY`.
+
+Measured on the shipped code: at two brick houses one failed on every run
+and the restart budget hid it. At eight, houses were permanently lost. At
+`NW_MAX_UNITS`, **6 to 15 of 64 attached** — while PID 1 printed
+`closed houses_reaped=64 orphans=0`.
+
+That line is the whole lesson, and it is a variant of the characteristic
+failure with a new mechanism in it:
+
+> **A recovery mechanism converts a defect into a delay, and a test that
+> asserts final state cannot see a delay.**
+
+The restart budget is a recovery mechanism. At two houses it hid the race
+completely: the house died, was restarted, won the second draw, and every
+assertion about the final state held. Nothing was wrong with the test
+except that it looked at the end. The fix in the test is not a better
+assertion about the end — it is to assert **zero restarts and zero
+`EBUSY`**, which is the thing the budget was converting away.
+
+The fix in the code is a retry that re-does `GET_FREE` each attempt,
+bounded by `NW_MAX_UNITS` because that is derived: at most that many houses
+can contend, so that many attempts is enough for every one of them to have
+taken a device. Nothing sleeps — losing means another house won that index,
+which is progress.
+
+Control: restore the single unretried attempt and the eight-house test goes
+red naming the shortfall, `N of 8 brick houses never ran`. `N` is **not** a
+fixed number and this is a race, so the figure to carry is the range across
+runs — 5 to 6 of 8 ever ran — not whichever line one run printed. With the
+retry: 64 of 64 at `NW_MAX_UNITS`, zero `EBUSY`, zero restarts.
+
+Two fixes were rejected and the reasons belong here. An index derived from
+the unit's table position (`BASE + i` on a device number) is bugs 9 and 13
+in a new costume — a compile-time number beside a dynamic allocation.
+Serialising the attach in `nw-spawn` breaks `LO_FLAGS_AUTOCLEAR`'s anchor
+and invariant 5.
+
+### The magnitude lesson, applied before the bug instead of after
+
+The concurrency test is pinned at **eight** brick houses rather than two.
+Two reproduces the mechanism; eight is where it is visible without the
+budget laundering it. That is the same finding as §49's drain — a property
+tested only at the size where it holds by luck — arriving one round early,
+which is the first time this repository has spent it in advance rather than
+paid for it.
+
+Stated generally, because it is cheap to get right and expensive to get
+wrong: **when a defect's visibility depends on concurrency or scale, the
+test goes at the scale where it is visible, not the smallest scale that
+reproduces the mechanism.**
+
+### Two things measured rather than read
+
+- **`max_loop=8` is a preallocation, not a ceiling.** It was reported as a
+  hard limit. Measured by binding devices rather than by reading the
+  parameter: 4096 attached on a kernel reporting 8. The module parameter
+  says how many nodes exist at load; `/dev/loop-control` creates more.
+- **Two houses cannot collide on one mountpoint**, which is what let the
+  mountpoint be an existing empty directory (`/nw/mnt`, created by dawn)
+  rather than a tmpfs. Verified in the code before it was depended on:
+  `nw-sup` unshares `CLONE_NEWNS` *and* remounts `/` `MS_REC|MS_PRIVATE`
+  before `lid_brick()` runs. The unshare alone would not have been enough,
+  and checking for it alone would have been the wrong check.
+
+### And the suite reported success while crashing
+
+On a clone without `mkfs.erofs`, `make_brick` raised a bare
+`FileNotFoundError`. `erofs_available()` existed, was correct, and **three
+of its four callers did not consult it** — the silence failure in the
+suite's own guard rail. The guard now lives inside `make_brick()`, which
+raises `Unavailable(why)` that `main()` turns into a named skip derived
+from the test's own function name, so a new brick test gets the skip for
+free and cannot forget it.
+
+The accompanying report said the crashed run exited **0**. It does not, and
+saying so is the point of this paragraph rather than a footnote: measured
+here, `python3 tests/run.py` exited 1 and `make test` exited 2. What was
+true is that nothing in the output *read* as a failure — a traceback is not
+an announcement — and whether a non-zero exit survives a wrapper is not a
+property this suite should inherit. `main()` now catches anything that is
+not `SystemExit`, prints `FAIL: <test> raised an unhandled exception`, and
+exits non-zero deliberately. Control: inject `open("/nonexistent/...")`
+into a test and the run ends `FAIL: hash-pin crashed`, exit 1.
+
+### A reviewer's check that could not fail for the reason it named
+
+`fd-auditor` proposed that the new descriptor census in `houses/brick.c`
+catches a dropped `O_CLOEXEC`. It does not. Both controls were run —
+dropping `O_CLOEXEC`, and dropping the explicit `close()` calls — and the
+census passes under each, because either mechanism alone keeps the table
+clean. That is correct redundancy and it is worth having; what it is not is
+a check that fails when `O_CLOEXEC` goes.
+
+Refusing it is the same discipline as the controls themselves, from the
+other side: **a check that cannot fail for the reason it names is the
+mechanism-that-reads-as-working, proposed rather than inherited.** Cheaper
+to refuse than to remove later, and the refusal is recorded because the
+proposal was reasonable and will be made again.
+
+The census also cost a bisect worth keeping: it killed the house with
+`status=18176` (71 << 8). Suspicion went to `fstat` routing through
+`statx`; the actual cause was glibc's `readlink()` issuing `__NR_readlink`
+on x86-64 while the allow-list carries only `__NR_readlinkat`. Fixed by
+calling the permitted syscall directly — **not** by widening the filter,
+which is what `runtime.md` requires and what the suite's `socket()` test
+would have caught anyway.
+
+## 51. Bricks phase 3: the plan carries a hash, and a security check was deleted (2026-09-12)
+
+`brick[96]` becomes `brick[32]`, a raw sha256 rather than a path.
+`NW_MAGIC` goes `NWPLAN06` → `NWPLAN07`; `struct nw_unit` goes 260 → 196
+bytes. `nw-sup` composes `NW_BRICK_DIR "/" <64 hex> NW_BRICK_SUFFIX`
+itself. No runtime behaviour changes — this is a format change, landed
+separately from phase 2 deliberately so that a failure has one candidate
+cause.
+
+*196, not the 198 `docs/plans/01` predicted. The plan was written before
+`window_s` left the unit.*
+
+### The check that disappeared, and why that is not a regression
+
+**`test_path_traversal_refused`'s brick case is deleted, and
+`NW_E_BRICK` is retired from the enum rather than renumbered around.**
+
+A reader who finds a deleted security check reads it as a regression, and
+that framing is the whole value of writing this down: **the check did not
+disappear because it stopped mattering. Its input class disappeared.**
+
+A brick used to be a free-form path, and a path can say `..`. The guard in
+`path_ok_len` rejected one, and it had to — `path_ok_len` validated a path
+containing `..` for years under a comment asserting a house cannot see
+outside its brick, and a traversing brick baked clean, passed `nw-check`,
+booted, and logged `lid brick` while rooted on the machine. That is in
+this file already.
+
+A 32-byte hash cannot express a traversal. There is no string, no
+separator, no component, and no filesystem asked to interpret it: `nw-sup`
+re-validates 64 hex characters and composes the path itself, so every byte
+the plan supplies is `[0-9a-f]`. The category of input the check existed to
+refuse is not *rejected* now, it is *unrepresentable*. That is the outcome
+`CLAUDE.md` asks for — prefer designing the problem out over checking for
+it — and `docs/options/07` predicted exactly this when it said the fix is
+to stop carrying free-form paths.
+
+**The `..` guard itself stays**, and must: `exec_path` and every bind are
+still paths, and there the guard is the right answer rather than a stopgap.
+It is only the brick that left its jurisdiction.
+
+`NW_E_BRICK` is retired rather than repurposed. `docs/plans/01` proposed
+changing its meaning to "not 32 bytes of hash", which is not a check that
+exists: every 32-byte value is a well-formed hash, so there is nothing to
+reject. A code kept alive with a new meaning is the version-namespace
+defect that the `NWPLAN06` → `07` bump exists to avoid, at the scale of one
+enum. Codes below it renumbered down; `nwcheck.c`'s `errs[]` and the
+`_Static_assert` that pairs them keep the two in step, and the enum is read
+rather than assumed, per `plan.md`.
+
+### The check that replaced it, and the mutant that made it necessary
+
+Deleting a check and adding none would be a net loss, and the replacement
+is sharper than what went:
+
+**"No brick" is ALL-ZERO, so the checker must look at every byte.** A
+`has_brick` that tested `brick[0]` alone reads any hash beginning with a
+zero byte — one in 256 of them — as "no brick", and silently starts a house
+on the machine root that the plan says is in a brick. Same shape as a lid
+that logs and does nothing: the plan lying.
+
+`test_checker_rejects_crafted_fields` gains a `hash-tail-only` case that
+sets **only the last byte** of the hash and clears NEWNS, so it can be
+refused only if the scan reached byte 31. Control:
+`int has_brick = u[i].brick[0];` in `nwcheck.c` →
+`FAIL: nw-check accepted a brick whose hash is nonzero only in its last
+byte`.
+
+**That control failed to fail the first time, and the reason is the
+finding.** `craft()` carried a setup branch selected by
+`why.startswith("dirtyblank")`, which cleared every unit's brick. The cases
+it served were the two "dirty blank" ones — deleted in this phase, because
+a NUL-terminated path has an unvalidated tail after its NUL and a hash has
+none, which is the same input-class argument as above. With them gone the
+branch was unreachable, and the new case, written as though something like
+it still ran, quietly got the unmodified `de…de` brick instead: byte 0 was
+nonzero, so the `brick[0]` mutant rejected it for the right reason by
+accident. **A setup step selected by matching a test's NAME is invisible
+when the name changes.** The branch is gone; every case is now a plain list
+of `(offset, byte)`.
+
+### The proofs had the same brick[0] proxy, and it was right until today
+
+`proofs/caller_nw_check.c` asserted `u[k].brick[0] == 0 ||
+(lids & NW_LID_NEWNS)`. That was correct while a brick was a
+NUL-terminated path — `brick[0] == 0` *was* "blank" — and became wrong the
+moment the field became a hash, in the same silent direction: one hash in
+256 satisfies it vacuously, so the proof would have gone on SUCCEEDING
+against the mutant the suite now catches. Both brick assertions there scan
+the full 32 bytes.
+
+`proofs/run.sh` ran `leaf_path_ok` at two widths because `nw_check` called
+`path_ok_len` at two, and running it at one had previously let a
+`if (max != NW_PATH_LEN) return 1;` mutant pass. There is one width now.
+The mutant is not fixed, it is **unobservable**, for the same reason the
+traversal case is — and the list is still derived from `blob.h` rather than
+written out, so a second width would come back on its own.
+
+### What did not move
+
+`plan.als` and `Plan.tla` needed no change. `docs/plans/01` predicted they
+would "gain a `Hash` in place of a brick path"; neither had ever modelled a
+path. Alloy's `sig Brick {}` is an opaque atom whose only content is
+identity and sharing, and TLA+'s `brick[i] # ""` asks "some brick or none".
+Both questions are unchanged by the field's width. Recorded in both files,
+because a prediction of work that turned out to be unnecessary reads, later,
+like work that was skipped.
+
+The fd arithmetic did not move either, and could not: it depends on unit
+count, not field widths. Invariant 3's four-place change reached `blob.h`
+and `bakery/nw-cc.py` and stopped there for this change specifically.
