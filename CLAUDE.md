@@ -597,7 +597,22 @@ without a stated expectation is unfalsifiable in use — you cannot tell a
 clean run from a broken matcher. The `which`-matches-English false
 positive that shipped in the first version was found *only* because the
 expected count was four and the run said seven; three rounds of using it
-had not surfaced it.
+had not surfaced it. (This is the one count this file keeps on purpose:
+it is a *calibration*, and being wrong makes a run visibly inexplicable
+rather than quietly misleading — the same exception as a count inside a
+test assertion.)
+
+**A known gap, left open deliberately, with the sequence for closing
+it.** `COUNTED` in `tools/prereport.py` has no `hit`, which is why
+"exactly one hit" passed the checker in a bullet ending "rather than
+counting the hits" (`HISTORY.md` §60). Widening the matcher is not a
+one-word change, because **the calibration above is what makes the tool
+falsifiable and any new word may move it** — and `4e22204` predates the
+`prereport` target, so that number cannot be cheaply re-measured. So
+when this is picked up, in this order: re-measure against a commit the
+target can actually run on, write the new expectation down here, *then*
+add the word. Doing it the other way leaves a tool with an expectation
+nobody can reproduce, which is worse than the gap.
 
 **Run `make prereport` before you write the report.** It reads the diff
 you are about to report on and asks five questions that have each cost a
@@ -707,6 +722,23 @@ Two habits follow from this:
   it repeated.** Every other defect in this file's record was found by
   somebody re-running something; this one round-tripped through a
   reviewer whose job was to catch it.
+
+  **An ORDINAL is worse than a count, and `HISTORY.md` proved it on
+  itself.** "Fourth instance" and "Sixth instance" were written in
+  sections about counts in prose, with no fifth recorded under that
+  name. An ordinal is a count that *also* asserts an ordering, so it
+  can be wrong in two ways, and neither is checkable without re-reading
+  everything it counts — which is precisely the work nobody does.
+  Name the instance; do not number it.
+
+  **A HEADING is the easiest count to leave stale**, and it earned its
+  own line: "Two traps that have already caught someone" got a third
+  trap added directly beneath it, by the same diff that acked a count
+  elsewhere in that section as harmless English. Every other count in
+  prose sits *adjacent* to the thing that invalidates it. A heading sits
+  above it and has scrolled out of view by the time the addition is
+  written, so the author never re-reads the sentence they are
+  falsifying. Do not put a number in a heading.
 - **When something is removed, re-file the rule rather than deleting it.**
   Move it to kind 2 or kind 3 with the reasoning intact. A rule deleted is a
   rule someone re-derives badly later.
@@ -956,6 +988,19 @@ shape this file names as the durable kind.)
   time and being caught later — it is a rule that was never true of the
   change that shipped it.
 
+  **And the density is the measurement, not an anecdote.** The round
+  after that was a diff whose entire content was rules about writing
+  prose; `claims` found it broke those rules repeatedly, twice inside
+  the sentences stating them — the tally is in `HISTORY.md` §60, where a
+  count belongs because that episode is closed and dated. **A diff made
+  only of rules is the maximum density this failure can reach**, which
+  makes it the cleanest instrument for measuring the pattern rather than
+  merely noticing it: the same defects spread across a month read as
+  carelessness, and in one diff about carefulness they cannot. Treat a
+  prose-only or rules-only change as the *highest*-risk kind, not the
+  lowest, and dispatch `claims` against it as you would `tcb-review`
+  against a TCB change.
+
   **And look at how they are caught.** Every one was found **by running
   something, never by reading** — including the times the author had
   just finished writing the rule down, and including the ones the author
@@ -995,6 +1040,17 @@ shape this file names as the durable kind.)
   So the question to ask of any mechanism is not "does it pass?" but
   **"when did it last fire, and what made it fire?"** If the answer is
   "never", that is the finding — not the reassurance it resembles.
+
+  **The converse is a result worth recording when it happens.** On
+  2026-09-12 `tools/review-gate.sh` printed `REVIEW OWED BEFORE PUSH:
+  prose:claims`, a commit was held unpushed because of it, and the
+  review it forced came back non-empty. That is the first time that gate
+  has been the reason something waited. **A mechanism that has fired
+  once with a non-empty result is in a different category from one that
+  has never fired** — its value is measured rather than assumed, and the
+  argument for keeping it stops being an argument. Note the date the
+  first firing happens, for every mechanism here; it is the only
+  evidence that separates a working guard from a decorative one.
 
 ## The rule that matters most
 

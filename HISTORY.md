@@ -5671,3 +5671,81 @@ reviewer against the change that introduces the rule, before the push.
 `tools/review-gate.sh` said `REVIEW OWED BEFORE PUSH: prose:claims` and
 the commit was held unpushed until this round landed, which is the
 first time that gate has been the reason something waited.
+
+## 61. Four generalisations out of §60, and one gap with a sequence attached (2026-09-12)
+
+§60 was the record of a review round. This is what came out of it as
+*rules*, which is the part that outlives the episode.
+
+### Density is a measurement, not an anecdote
+
+A diff made only of rules is the **maximum density** the weakest-rule
+failure can reach, which makes it the cleanest instrument for measuring
+the pattern rather than merely noticing it. The same defects spread
+across a month read as carelessness; in one diff about carefulness they
+cannot. So `CLAUDE.md` now says to treat a prose-only or rules-only
+change as the **highest**-risk kind and dispatch `claims` against it the
+way `tcb-review` is dispatched against a TCB change — the opposite of
+the intuition that a diff touching no code is the safe one.
+
+The tally stays here rather than in `CLAUDE.md`. A count belongs in a
+record, where the episode is closed and dated; the brief points at it.
+
+### An ordinal is worse than a count
+
+"Fourth instance" and "Sixth instance", with no fifth under that name,
+were written in the sections *about* counts in prose. The reason this
+is a distinct rule rather than an example of the old one: **an ordinal
+is a count that also asserts an ordering, so it can be wrong in two
+ways, and neither is checkable without re-reading everything it
+counts** — which is exactly the work nobody does, which is why the
+ordinals drifted in the first place. Name the instance; do not number
+it.
+
+### A heading is the easiest count to leave stale
+
+"Two traps that have already caught someone", with a third added
+directly beneath it by the same diff. Worth its own line because the
+mechanism differs from every other stale count here: **every other
+count in prose sits adjacent to the thing that invalidates it. A
+heading sits above it, and has scrolled out of view by the time the
+addition is written**, so the author never re-reads the sentence they
+are falsifying. Do not put a number in a heading.
+
+### The prereport gap, with the order of operations for closing it
+
+`COUNTED` in `tools/prereport.py` has no `hit`, which is why "exactly
+one hit" passed the checker inside a bullet ending "rather than
+counting the hits". Left open on purpose, and the reasoning is the part
+to keep:
+
+- the calibration number in `CLAUDE.md` is what makes the tool
+  falsifiable at all, and **any new word may move it**;
+- `4e22204` predates the `prereport` target, so that number cannot be
+  cheaply re-measured;
+- changing a matcher inside a correction round is unreviewed work
+  smuggled into a fix.
+
+So the sequence, written down so the next person does not have to
+re-derive it: **re-measure against a commit the target can actually
+run on, write the new expectation down, then add the word.** The other
+order leaves a tool carrying an expectation nobody can reproduce, which
+is worse than the gap it closes.
+
+### And the gate fired, which is a result
+
+`tools/review-gate.sh` printed `REVIEW OWED BEFORE PUSH: prose:claims`,
+a commit was held unpushed because of it, and the review it forced came
+back non-empty. First time that gate has been the reason something
+waited.
+
+This is the converse of the silence rule and it deserves the same
+weight. **A mechanism that has fired once with a non-empty result is in
+a different category from one that has never fired**: its value is
+measured rather than assumed, and the argument for keeping it stops
+being an argument. `CLAUDE.md` now asks for the date of first firing to
+be noted for every mechanism here, because that date is the only thing
+separating a working guard from a decorative one — and this file's
+record is full of guards that read as working and had never fired:
+`lid-landlock`, the first `rules-hook.sh`, the TLC probes at
+`MaxFds = 16`, a control that passes.
