@@ -42,6 +42,19 @@ sections after this one and are deliberately not numbered here.
    **PID 1 has no restart budget and must not grow one** — `grep` for
    `budget`, `restart` or `respawn` in `pid1.c` returns nothing. Budgets live
    in `nw-sup`; see invariant 4.
+
+   Annotated for `tools/checkbrief.py`. `mount(` rather than `mount`,
+   because the bare form has hits here and they are the comments this
+   paragraph is about — scope an absence to syntax prose cannot produce
+   (`docs/checkbrief.md`):
+   <<absent-in:pid1.c:mount(>>
+   <<absent-in:pid1.c:budget>>
+   <<absent-in:pid1.c:restart>>
+   <<absent-in:pid1.c:respawn>>
+   <<absent-in:pid1.c:malloc>>
+   These pin the absences only. "No parsing, no recursion" has no token
+   whose absence means it, and is not annotated rather than annotated
+   badly.
 2. **No compile-time file descriptor numbers alongside dynamic allocation.**
    This produced bugs 5, 9 and 13. Sweep `/proc/self/fd`; do not hardcode.
 3. **Limits are derived, never declared twice.** `NW_MAX_UNITS` feeds the
@@ -123,7 +136,18 @@ sections after this one and are deliberately not numbered here.
 
    The budget belongs to `nw-sup`, where it is **a hard total of deaths for
    that supervisor's life** — `int deaths` in `nwsup.c`, compared against
-   `budget`, never reset by a time window. `window_s` left the blob on
+   `budget`, never reset by a time window.
+   <<filecontains:nwsup.c:int deaths = 0>>
+   <<count:nwsup.c:deaths++:1>>
+   <<count:nwsup.c:deaths > (int)budget:1>>
+   <<count:nwsup.c:deaths = 0:1>>
+   The last one is how "never reset" is pinned, and it is a **count**
+   rather than an absence for a reason: `deaths = 0` must appear exactly
+   once, at the declaration. A reset added anywhere makes it two and
+   contradicts. An `absent-in` could not express this, and `window_s` —
+   the obvious token — has a hit in this very file, in the comment
+   recording its removal, so annotating it would report a contradiction
+   while the claim is true. `docs/checkbrief.md`. `window_s` left the blob on
    2026-09-11 (`HISTORY.md` §35, D18): deaths slower than the window were
    unbounded, so a house could die forever. Budgets are **never nested**: bug 3 was a
    supervisor giving up, PID 1 restarting it with a fresh budget, and the pair
@@ -163,6 +187,16 @@ sections after this one and are deliberately not numbered here.
    Order is fixed and is not a style choice: namespaces, then the brick pivot,
    then Landlock, then seccomp. The allow-list has no `mount`, no `unshare`
    and no `pivot_root`, so a house sealed first could not enter its own root.
+   <<absent-in:lids.c:__NR_mount>>
+   <<absent-in:lids.c:__NR_unshare>>
+   <<absent-in:lids.c:__NR_pivot_root>>
+   <<filecontains:lids.c:strict_allow>>
+   <<filecontains:nwcheck.c:NW_E_BRICKNS>>
+   The `__NR_` prefix is the scoping: bare `mount` and `unshare` appear in
+   this file's prose and in the comment explaining why they are excluded.
+   **The ORDER is not annotated** — it is a property of the sequence of
+   calls in `nwsup.c` and no token's presence or absence expresses it.
+   `test_brick_is_a_root` and the seccomp test are what pin it.
    There is **one** allow-list and a house does not choose it; the second
    profile that briefly existed is `HISTORY.md` §23.
 
