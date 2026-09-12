@@ -63,3 +63,13 @@ prose-count	houses/brick.c	* so every write is one whole line and a bounded read
 prose-count	houses/brick.c	/* Built into one buffer and emitted as ONE padded line -- it was
 # false positive: English prose about the file's own location, not an assertion
 unpaired-absence	tools/landlock-assertions-dryrun.py	boot output. NOT A TEST, and deliberately not in tests/run.py.
+# the comment's own next clause says nothing pins it; that is the honest form
+mechanism-claim	houses/brick.c	* THE GATE IS LOAD-BEARING AND NOTHING PINS IT. `control` removed it
+# false positive: English prose in a record, not an assertion
+unpaired-absence	HISTORY.md	brief, not in the TCB, which is this repository's most common defect
+# paired: the same test then requires trunc_root/trunc_bind to hold specific
+# values, which only a probe that ran can produce. This rejects the fixture's
+# own "I could not probe" answer so it cannot read as either outcome.
+unpaired-absence	tests/run.py	expect(not v.startswith("unprobed"),
+# set arithmetic in a tool, not a test assertion; a non-empty result exits 2
+unpaired-absence	tools/landlock-assertions-dryrun.py	if n not in emits)

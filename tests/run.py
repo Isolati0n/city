@@ -1727,7 +1727,13 @@ def make_brick(ident, mirrors=(), exe="unit-brick"):
     # /w is a writable-probe target: houses/brick.c writes a byte into an
     # EXISTING file to show the layer is writable, and it must not be /id,
     # which every other assertion reads.
-    files = {"id": ident.encode() + b"\n", "w": b"-\n"}
+    #   /u  a file the REMOVE_FILE probe unlinks -- nothing reads it
+    #   /d  an empty directory the REMOVE_DIR probe rmdirs. Both are
+    #       baked rather than created by the house, because MAKE_REG and
+    #       MAKE_DIR are withheld at a landlock root: a probe that had
+    #       to create its own target could not run in the one house it
+    #       exists for.
+    files = {"id": ident.encode() + b"\n", "w": b"-\n", "u": b"remove-me\n"}
     tmp = tempfile.mkdtemp(dir=WORK)
     os.makedirs(f"{tmp}/bin")
     # WHICH FIXTURE, because a house that pivots into its brick can only
@@ -1738,6 +1744,7 @@ def make_brick(ident, mirrors=(), exe="unit-brick"):
     os.chmod(f"{tmp}/bin/brick", 0o755)
     for rel, data in files.items():
         open(f"{tmp}/{rel}", "wb").write(data)
+    os.makedirs(f"{tmp}/d")
     for m in mirrors:
         os.makedirs(f"{tmp}{m}", exist_ok=True)
 
@@ -2709,7 +2716,21 @@ def test_landlock_confines():
              "the lid cannot be exercised here at all")
         return
 
+    # RESET THE BIND DIRECTORY, for the same reason stage_layers() resets
+    # a layer: the probes below create probe.dev, probe.d, probe.lnk and
+    # friends inside it and deliberately never unlink (unlink is not in
+    # the seccomp allow-list and a fixture tidying up is not a unit that
+    # needs a syscall). Nothing in run.py cleans WORK -- only `make
+    # stage`'s rm -rf does -- and both territory rules prescribe `make
+    # stage` THEN `python3 tests/run.py`, so running run.py twice on one
+    # stage is the documented workflow. Without this, mknod returns
+    # EEXIST on the second run and the suite reports
+    # `mknod_bind_fifo=denied(17)` as a lid regression. Found by
+    # `tcb-review`, in the commit that added harness.md's section on
+    # durable fixture state -- the rule broken by the change introducing
+    # it, again.
     shared = f"{WORK}/ll-shared"
+    shutil.rmtree(shared, ignore_errors=True)
     os.makedirs(shared, exist_ok=True)
     open(f"{shared}/token", "w").write("token-from-the-machine\n")
     brick = make_brick("landlock-brick", mirrors=(shared,))
@@ -2868,6 +2889,14 @@ def test_landlock_confines():
     # lid-landlock failure one level in.
     tr = field("trunc_root").get("sealed", "")
     tb = field("trunc_bind").get("sealed", "")
+    # `unprobed(N)` is the fixture saying it could not make the target
+    # non-empty first, which it does so that a no-op truncate cannot
+    # answer for the right. Treat it as a failure at either ABI: a
+    # probe that did not probe must not read as either answer.
+    for k, v in (("trunc_root", tr), ("trunc_bind", tb)):
+        expect(not v.startswith("unprobed"),
+               f"{k}={v}: the fixture could not write a byte before "
+               f"truncating, so the probe never ran\n{out}")
     if abi >= 3:
         expect(tr == "denied(13)",
                f"a landlock house TRUNCATED a file in its own brick: "
@@ -2884,15 +2913,64 @@ def test_landlock_confines():
                f"at ABI {abi} the kernel has no TRUNCATE right to "
                f"withhold, so truncation must be unrestricted; "
                f"trunc_root={tr} means something else refused it\n{out}")
+        # PRESENCE, not value. The branch has no opinion about the bind
+        # half below ABI 3, and without this a fixture that stopped
+        # emitting trunc_bind at all would be accepted here -- the
+        # unpaired-absence shape one level in. `control`.
+        expect(tb.startswith("ok"),
+               f"trunc_bind={tb!r}: at ABI {abi} truncation is "
+               f"unrestricted everywhere, so the bind half must still "
+               f"be emitted and must succeed\n{out}")
         trunc = (f"trunc UNENFORCEABLE at ABI {abi} (the right arrived at "
                  f"ABI 3), observed {tr} -- this run is NOT evidence "
                  f"about the withholding")
+    # THE FIVE RIGHTS THAT CHANGED NO FIELD UNTIL NOW, and one of them
+    # is the premise the whole TRUNCATE argument rests on.
+    #
+    # `root` withholds ten rights. Five were probed (MAKE_REG via
+    # wr_root, MAKE_CHAR via mknod_root, MAKE_FIFO, MAKE_SOCK,
+    # TRUNCATE); adding any of the other five back to the root grant
+    # left every assertion in this test green. REMOVE_FILE is the one
+    # that matters: "REMOVE_FILE is withheld precisely so the house
+    # cannot unlink its own exec path" is the premise nwsup.c,
+    # invariant 6 and HISTORY 57 all argue the truncate withholding
+    # from, and it was carried by a comment. `control` found it by
+    # grepping the fixture for `unlink` and getting one hit, in a
+    # comment, whose stated reason (the seccomp allow-list) is about a
+    # house this test does not boot.
+    #
+    # The bind side is the paired positive for four of the five: `rw`
+    # grants MAKE_DIR, MAKE_SYM, REMOVE_FILE and REMOVE_DIR, and never
+    # grants MAKE_BLOCK. So the same probe must come back refused at
+    # the root and allowed in the bind for four of them, and refused in
+    # both for the block device -- which is also the other half of the
+    # failure string above, which named MAKE_BLOCK while the probe
+    # beside it was char-only.
+    for op in ("mkdir", "symlink", "mkblock", "unlink", "rmdir"):
+        rv = field(f"st_root_{op}").get("sealed", "")
+        expect(rv == "denied(13)",
+               f"a landlock house performed {op} beneath its own root: "
+               f"st_root_{op}={rv}. All five are withheld at the root; "
+               f"denied(13) is EACCES from Landlock and anything else "
+               f"means something other than the lid answered\n{out}")
+    for op in ("mkdir", "symlink", "unlink", "rmdir"):
+        bv = field(f"st_bind_{op}").get("sealed", "")
+        expect(bv.startswith("ok"),
+               f"{op} must succeed inside a declared bind, or the root "
+               f"refusal above proves nothing: st_bind_{op}={bv}\n{out}")
+    bb = field("st_bind_mkblock").get("sealed", "")
+    expect(bb == "denied(13)",
+           f"a block device was created inside a declared bind: "
+           f"st_bind_mkblock={bb}. MAKE_BLOCK, like MAKE_CHAR, is "
+           f"handled and granted nowhere\n{out}")
+
     print(f"ok landlock-confines (ABI {abi}; wr_existing={wrx} into the "
           f"layer, mknod_root={mk} fifo={field('mknod_root_fifo')['sealed']} "
           f"sock={field('mknod_root_sock')['sealed']}, create refused at "
           f"the root ({wr}) but allowed in a bind ({mkb}); in a bind the "
           f"device node is still refused ({bd}) while fifo and socket "
-          f"are allowed; {trunc})")
+          f"are allowed; mkdir/symlink/unlink/rmdir refused at the root "
+          f"and allowed in the bind, mkblock refused in both; {trunc})")
 
 
 def c_name_slots(names):

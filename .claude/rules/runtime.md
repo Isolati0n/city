@@ -170,14 +170,27 @@ binds. `MAKE_REG` is withheld too, so a landlock house modifies what its
 brick shipped with and creates nothing new under `/`.
 
 `TRUNCATE` was granted with the write for one round and is withheld
-again: an emptied exec path copies up into the durable layer and no
-boot recovers, which is the same unrecoverable state `REMOVE_FILE` is
-withheld to prevent — so granting one and withholding the other
-protected nothing. It is still granted **inside a declared bind**,
-which is machine-side and outside the layer. The consequence for a
-house: `open(..., O_TRUNC)` and `ftruncate` beneath `/` fail with
-EACCES; rewrite in place, or declare a bind. Enforced only at ABI ≥ 3,
-because the right does not exist below that.
+again: an emptied file copies up into the durable layer and no boot
+recovers, which is the same unrecoverable state `REMOVE_FILE` is
+withheld to prevent — so granting one and withholding the other is
+incoherent. It is still granted **inside a declared bind**, which is
+machine-side and outside the layer. The consequence for a house:
+`open(..., O_TRUNC)` and `ftruncate` beneath `/` fail with EACCES;
+rewrite in place, or declare a bind. Enforced only at ABI ≥ 3, because
+the right does not exist below that.
+
+**It does not close the durable-mask class, and the first telling said
+it did.** `WRITE_FILE` stays granted and reaches the identical state by
+overwriting a brick file in place — measured on a real overlay, eight
+bytes over an ELF header, no truncate and no unlink, and every later
+mount of the same sealed image plus the same layer is unrunnable while
+the image stays byte-identical. Nor can a house do it to its own exec
+path: that is `ETXTBSY` while it runs, so the reachable target is a
+shared library or a data file the brick shipped. What the withholding
+closes is the zero-length route and the accidental `O_TRUNC` rewrite.
+**The recovery below is still the only answer to the class**, and
+making the class unrepresentable means stopping the layer shadowing the
+image's executables at all — a design change, not a rights change.
 `CLAUDE.md` invariant 6, `HISTORY.md` §56 and §57.
 
 **A LAYER CAN MASK ITS BRICK, DURABLY.** "Reads fall through to the sealed

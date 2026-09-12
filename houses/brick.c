@@ -277,8 +277,11 @@ static void report_mknod(const char *key, const char *path)
     }
     /* A FIFO AND A SOCKET TOO. The claim names three nouns -- "no device
      * nodes, sockets or fifos" -- and only the first was probed:
-     * granting MAKE_FIFO, MAKE_SOCK, MAKE_DIR or MAKE_SYM at the root
-     * left every assertion green. Both go through the same mknod(2)
+     * granting MAKE_FIFO or MAKE_SOCK at the root left every assertion
+     * green. MAKE_DIR, MAKE_SYM, MAKE_BLOCK, REMOVE_FILE and
+     * REMOVE_DIR were in that same list and are report_structure()'s
+     * below, so do not read this sentence as a census of what is
+     * covered -- read the probes. Both go through the same mknod(2)
      * this function already calls, so neither needs a syscall the line
      * above does not, and in particular the SOCKET probe does not need
      * `socket` -- which is absent from the seccomp allow-list and whose
@@ -310,9 +313,20 @@ static void report_mknod(const char *key, const char *path)
  * `id=brick-two` into `id=xrick-two`. /w is the file make_brick bakes
  * for exactly this, and no assertion reads its contents.
  *
- * Gated like report_mknod: landlock only. If the right leaks, a probe
- * firing in every brick house would truncate /w inside nine durable
- * layers where nothing reads the answer. */
+ * Gated on NW_LID_LANDLOCK, for the reason report_mknod is: a probe
+ * firing in every brick house would truncate /w inside every durable
+ * layer on the machine, where nothing reads the answer. It does NOT
+ * carry report_mknod's second gate -- `openat` and `close` are in
+ * strict_allow, so seccomp does not kill this one -- and saying "gated
+ * like report_mknod" described a gating this function does not have.
+ * `claims`.
+ *
+ * THE GATE IS LOAD-BEARING AND NOTHING PINS IT. `control` removed it
+ * and /w went to zero bytes in every layer while every brick test
+ * still printed ok. It is fixture hygiene rather than TCB, and the
+ * damage self-heals through stage_layers()'s once-per-run reset, so
+ * the honest record is that this is a mechanism with no control and
+ * not that it is covered. */
 static void report_truncate(const char *key, const char *path)
 {
     const char *lv = getenv("NW_LIDS");
@@ -321,6 +335,25 @@ static void report_truncate(const char *key, const char *path)
         nw_emit("%s %s=skipped-nolandlock", me, key);
         return;
     }
+    /* NON-EMPTY FIRST. The bind-side target is a file the house created
+     * moments earlier and is zero bytes long; if the kernel ever
+     * short-circuits a no-op truncate, `ok` would come back without the
+     * TRUNCATE right being consulted and the pair that is supposed to
+     * pin the withholding would be half vacuous. One byte removes the
+     * question. A failure here is reported rather than ignored, because
+     * silently probing an empty file is exactly the state this avoids. */
+    int w = open(path, O_WRONLY);
+    if (w < 0) {
+        nw_emit("%s %s=unprobed(%d)", me, key, errno);
+        return;
+    }
+    if (write(w, "z", 1) != 1) {
+        int e = errno;
+        close(w);
+        nw_emit("%s %s=unprobed(%d)", me, key, e);
+        return;
+    }
+    close(w);
     int fd = open(path, O_WRONLY | O_TRUNC);
     if (fd < 0) {
         nw_emit("%s %s=denied(%d)", me, key, errno);
@@ -328,6 +361,70 @@ static void report_truncate(const char *key, const char *path)
     }
     close(fd);
     nw_emit("%s %s=ok(0)", me, key);
+}
+
+/* THE FIVE RIGHTS NOTHING PROBED, and one of them is the premise of the
+ * whole truncate argument.
+ *
+ * `root` withholds REMOVE_DIR, REMOVE_FILE, MAKE_CHAR, MAKE_DIR,
+ * MAKE_REG, MAKE_SOCK, MAKE_FIFO, MAKE_BLOCK, MAKE_SYM and TRUNCATE.
+ * Until this function, five of those changed no field any fixture
+ * emitted, so adding them back to the root grant left the suite green.
+ * REMOVE_FILE is the one that matters: "the house cannot unlink its own
+ * exec path" is the premise the TRUNCATE withholding is argued from,
+ * and it was carried by a comment rather than by a test. `control`.
+ *
+ * Run at the root and inside a declared bind, because `rw` grants
+ * MAKE_DIR, MAKE_SYM, REMOVE_FILE and REMOVE_DIR and still never grants
+ * MAKE_BLOCK. So the bind run is the paired positive for four of them
+ * and a second refusal for the fifth.
+ *
+ * The targets at the root are files make_brick bakes for this and
+ * nothing else reads: /u for the unlink, /d for the rmdir.
+ *
+ * No seccomp gate: `mkdir`, `symlink`, `unlink`, `rmdir` and `mknod`
+ * are all absent from strict_allow, so this must never run in a house
+ * that wears seccomp -- and it does not, because the landlock gate
+ * comes first and no unit in the suite declares both. That is a
+ * coincidence of the plans, not a guarantee, so the seccomp gate is
+ * here too. */
+static void report_structure(const char *key, const char *dir,
+                             const char *unlink_me, const char *rmdir_me)
+{
+    const char *lv = getenv("NW_LIDS");
+    int lids = lv ? atoi(lv) : 0;
+    if (!(lids & 2)) {
+        nw_emit("%s %s=skipped-nolandlock", me, key);
+        return;
+    }
+    if (lids & 1) {
+        nw_emit("%s %s=skipped-seccomp", me, key);
+        return;
+    }
+    char p[512];
+
+    snprintf(p, sizeof p, "%s/probe.d", dir);
+    int r = mkdir(p, 0700);
+    nw_emit("%s %s_mkdir=%s(%d)", me, key, r == 0 ? "ok" : "denied",
+            r == 0 ? 0 : errno);
+
+    snprintf(p, sizeof p, "%s/probe.lnk", dir);
+    r = symlink("/id", p);
+    nw_emit("%s %s_symlink=%s(%d)", me, key, r == 0 ? "ok" : "denied",
+            r == 0 ? 0 : errno);
+
+    snprintf(p, sizeof p, "%s/probe.blk", dir);
+    r = mknod(p, S_IFBLK | 0600, makedev(7, 0));
+    nw_emit("%s %s_mkblock=%s(%d)", me, key, r == 0 ? "ok" : "denied",
+            r == 0 ? 0 : errno);
+
+    r = unlink(unlink_me);
+    nw_emit("%s %s_unlink=%s(%d)", me, key, r == 0 ? "ok" : "denied",
+            r == 0 ? 0 : errno);
+
+    r = rmdir(rmdir_me);
+    nw_emit("%s %s_rmdir=%s(%d)", me, key, r == 0 ? "ok" : "denied",
+            r == 0 ? 0 : errno);
 }
 
 int main(int argc, char **argv)
@@ -364,6 +461,7 @@ int main(int argc, char **argv)
      * margin here, not a coincidence. */
     report_truncate("trunc_root", "/w");
     report_mknod("mknod_root", "/probe.dev");
+    report_structure("st_root", "", "/u", "/d");
     if (b && b[0]) {
         char q[512];
         snprintf(q, sizeof q, "%s/mk.tmp", b);
@@ -397,6 +495,17 @@ int main(int argc, char **argv)
         char dv[512];
         snprintf(dv, sizeof dv, "%s/probe.dev", b);
         report_mknod("mknod_bind", dv);
+        /* The bind's own unlink and rmdir targets, created here rather
+         * than staged: MAKE_REG and MAKE_DIR are granted in a bind, so
+         * the house can make what it is about to remove. At the root
+         * it cannot, which is why those two are baked into the brick. */
+        char um[512], rd[512];
+        snprintf(um, sizeof um, "%s/probe.rm", b);
+        int t = open(um, O_WRONLY | O_CREAT, 0600);
+        if (t >= 0) close(t);
+        snprintf(rd, sizeof rd, "%s/probe.rmd", b);
+        mkdir(rd, 0700);
+        report_structure("st_bind", b, um, rd);
     }
     fflush(stdout);
     return 0;

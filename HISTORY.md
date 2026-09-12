@@ -5241,9 +5241,10 @@ where it must answer three ways at once: `rw` grants `MAKE_FIFO` and
 the bind run shows the fifo and the socket succeeding — which is what
 makes the root refusals evidence — while the device node is refused in
 the bind too. That last is invariant 6's "device nodes are refused even
-in a bind", written down in §56 as a known exception and **exercised by
-nothing until now.** A documented exception with no test is a sentence,
-which is this repository's whole subject.
+in a bind", written down in §26 — `nwsup.c` has carried the comment
+since 2026-09-10 and §56 only restated it — and **exercised by nothing
+until now.** A documented exception with no test is a sentence, which
+is this repository's whole subject.
 
 The fifo assertion also went from `startswith("denied")` to
 `== "denied(13)"`. The round that added it had just finished removing
@@ -5277,3 +5278,203 @@ confirms the three new probe calls can report a positive at all —
 `fifo=ok(0)`, `sock=ok(0)`, `trunc=ok(0) size=0` on an unrestricted
 filesystem. That establishes the probes are capable of the answer they
 are asserted *not* to give; it establishes nothing about the lid.
+
+## 58. Three reviewers on the truncate withholding: a red trunk, a false premise, and a premise nothing tested (2026-09-12)
+
+`tcb-review`, `control` and `claims` against §57 as committed. The
+change itself survives; almost nothing said about it did.
+
+### `make test` was red on the commit that was reported as done
+
+`.claude/rules/harness.md`'s new section named `` `runtime.md` `` in
+prose. `install-agents.sh --check` treats a backticked filename in a
+brief as a reference and fails when it does not resolve, and that gate
+runs *before* `nw-check` and before `tests/run.py`:
+
+```
+sh install-agents.sh --check
+install-agents: FAIL harness.md names `runtime.md`, which does not exist
+make: *** [Makefile:166: test] Error 1
+```
+
+Found independently by `tcb-review` and `claims`. The cause is not the
+typo, it is the method: the suite was run as `python3 tests/run.py`
+after a bare `make stage`, and the gate that broke was one of the three
+steps `make test` runs around it. §57 said "the tree builds", which was
+true and is not the suite. **`make test`, not its middle step** — and
+this is the staging trap's sibling: a result obtained by running part
+of the gate is a result about part of the tree. Fixed by spelling the
+path the way `CLAUDE.md` does.
+
+### The justification was false, and two reviewers reached it from opposite ends
+
+§57 argued that withholding `TRUNCATE` "restores the immunity"
+`landlock` had before the write grant. It does not. `WRITE_FILE`, which
+the grant keeps, reaches the identical durable state by overwriting a
+brick file **in place** — no truncate, no unlink, no create:
+
+```
+--- exec before:               house ran
+--- poke (WRITE_FILE only):    write=8(0) size_before=785240
+--- exec after:                cannot execute binary file: Exec format error  (rc=126)
+--- size after (no truncate):  785240 in merged, lower and upper
+--- simulate reboot: remount same lower (sealed) + same durable upper
+                               cannot execute binary file  (rc=126)
+--- the sealed lower is untouched:  house ran
+```
+
+And the scenario the prose led with could never happen at all:
+
+```
+truncate(self)=-1 errno=26(Text file busy)
+open(self,O_WRONLY|O_TRUNC)=-1 errno=26(Text file busy)
+open(self,O_WRONLY)=-1 errno=26(Text file busy)
+```
+
+A running executable is `ETXTBSY`. A **mapped, in-use shared library**
+is not, and one write over its ELF magic ends every later boot:
+`error while loading shared libraries: invalid ELF header`, rc=127.
+
+`.claude/rules/runtime.md` had said this all along — "the overlay can
+also whiteout and **overwrite**" — and `harness.md` gained a section in
+the same commit recording a one-byte overwrite masking a brick durably
+inside the test suite. Two statements of the mechanism in the tree, one
+of them added by the commit whose prose contradicted it.
+
+**What the withholding actually buys**, and this is now what the tree
+says: it closes the zero-length route and the accidental
+`open(..., O_TRUNC)` rewrite. The class stays open through
+`WRITE_FILE`, and the recovery in `runtime.md` is still the only answer
+to it. Closing the class means stopping the layer shadowing the image's
+executables at all — mount the layer at a declared subtree, or make the
+brick's executables not copy-up-able — which is a design change, not a
+rights change, and is not taken here.
+
+### The premise was carried by a comment
+
+"`REMOVE_FILE` is withheld precisely so the house cannot unlink its own
+exec path" is what the whole truncate argument is argued *from*, in
+four files. `control` grepped the fixture for it:
+
+```
+$ grep -n "unlink\|rmdir\|mkdir\|symlink\|S_IFBLK\|rename" houses/brick.c
+373:        /* No unlink: `unlink`/`unlinkat` are not in the seccomp
+```
+
+One hit, in a comment, whose stated reason is about a house this test
+does not boot — the landlock house wears no seccomp. So
+`root |= LANDLOCK_ACCESS_FS_REMOVE_FILE` changed no field any fixture
+emitted, and five of the ten rights withheld at the root were unprobed:
+`REMOVE_FILE`, `REMOVE_DIR`, `MAKE_DIR`, `MAKE_SYM`, `MAKE_BLOCK`. The
+sharpest was `MAKE_BLOCK`, **named in the failure string of the
+assertion added beside it** while the probe was char-only.
+
+`report_structure()` probes all five, at the root and inside a bind,
+where `rw` grants four of them and still grants `MAKE_BLOCK` nowhere —
+so the bind run is the paired positive for four and a second refusal
+for the fifth. The unlink and rmdir targets are baked into the brick
+(`/u`, `/d`) because `MAKE_REG` and `MAKE_DIR` are withheld at a
+landlock root: a probe that had to create its own target could not run
+in the one house it exists for.
+
+### The dry-run did not do the check its docstring claimed
+
+`tools/landlock-assertions-dryrun.py` said it establishes that "the
+assertions parse the field names the fixture actually emits". It never
+opened `houses/brick.c`; its `GOOD` table was a third hand-written copy
+pinning agreement between the tool and the test. `control` renamed the
+socket field in the fixture only and got byte-identical output and exit
+0 — the exact round the tool exists to save. It derives the field names
+from the fixture's `nw_emit` format strings now, and the same control
+gives:
+
+```
+fields the test/dry-run read that the fixture cannot emit: ['mknod_bind_sock', 'mknod_root_sock']
+MISMATCH -- fix the names before reading anything below
+rc=2
+```
+
+Invariant 3's failure mode, two levels up: a second copy of something
+that also lives somewhere else, in the tool written to catch copies
+disagreeing.
+
+### The new probe broke the rule the same commit wrote down
+
+`harness.md` gained "durable fixture state: reset once per run" in the
+commit whose new bind-side probes create `probe.dev`, `.fifo`, `.sock`
+in a directory nothing cleans, and never unlink. `mknod` on an existing
+path is `EEXIST`, so the documented workflow — `make stage` then
+`python3 tests/run.py`, run twice — gives:
+
+```
+first suite run on a fresh stage:   mknod_bind_fifo=ok(0)
+second run.py on the SAME stage:    mknod_bind_fifo=denied(17)
+```
+
+which the assertion reports as a lid regression. **Sixth instance of
+"a rule is at its weakest in the change that introduces it"**, and the
+first where the rule and its violation are in one diff. The test
+rmtrees the bind directory now, the same shape `stage_layers()` uses.
+
+### Smaller, all from the same pass
+
+- `nwsup.c`'s new grant note said `TRUNCATE` "is the one right in `rw`
+  that this grant deliberately drops". `root` also withholds every
+  `MAKE_` and `REMOVE_` right `rw` grants. The stale-comment class the
+  same function's header apologises for, reintroduced by the same
+  commit, further down the same file.
+- The sentence §57 calls out as the previous round's defect — "granting
+  write back gives away nothing that was being protected" — was still
+  in `nwsup.c`, unmodified, carrying the retired "a path outside the
+  declared binds is unreachable" wording as well. Corrected in the
+  brief, not in the TCB, which is this repository's most common defect
+  and was committed while describing itself.
+- `nwsup.c`'s header said a house cannot "create, delete, rename or
+  truncate … except inside a declared bind". `REFER` is unhandled, so
+  cross-directory rename and hard links are refused *everywhere*,
+  binds included. `CLAUDE.md` said so; the TCB did not.
+- §57's "all three errnos were EACCES" is not supported by the `ok`
+  line printed above it, which holds two — and the fifo assertion at
+  that commit was `startswith("denied")`, which could not have
+  distinguished EPERM from EACCES. A count, in a record, contradicted
+  by its own quoted evidence.
+- `harness.md`'s new section counted its own list ("two of them break a
+  test silently") in the file whose rule is never to put a count here,
+  and over-claimed "silently" for an answer its next paragraph says
+  produces a failure.
+- The ABI<3 branch accepted a fixture that stopped emitting
+  `trunc_bind` at all. It asserts presence now.
+- `report_truncate`'s target in a bind was a zero-length file, so a
+  kernel that short-circuits a no-op truncate would have returned `ok`
+  without consulting the right. The fixture writes a byte first and
+  reports `unprobed(N)` if it cannot, which both branches reject.
+
+### The one thing a count was right for
+
+`claims` disproved §57's claim that the withholding cannot be annotated
+for `tools/checkbrief.py`. The reasoning was that the claim is about
+*which variable* holds `LANDLOCK_ACCESS_FS_TRUNCATE`, which no
+presence or absence check expresses — true, and it misses that every
+mutation changing which variables hold it changes the token's **count**:
+
+```
+control 1: grant it at the root   -> 'LANDLOCK_ACCESS_FS_TRUNCATE' 3 times, expected 2  exit=1
+control 2: drop it from `rw`      -> 'LANDLOCK_ACCESS_FS_TRUNCATE' 1 times, expected 2  exit=1
+```
+
+Both of §57's own named controls, caught. It matters here beyond
+tidiness: the pin the prose preferred is `test_landlock_confines`'s
+truncate pair, which **cannot run on a machine without Landlock**,
+while the annotation runs everywhere. And the paragraph that stated the
+count in prose now states it as the annotation, where being wrong turns
+`make checkbrief` red instead of quietly misleading a reader — which is
+the exception `CLAUDE.md`'s count rule already names.
+
+### Still unrun
+
+Every assertion in §57 and in this section is unexercised against a
+real lid: this kernel has no Landlock. `tools/landlock-assertions-dryrun.py`
+covers twenty mutations plus the ABI branch and the field-name
+cross-check, and it is synthetic by construction. The `TRUNCATE`
+withholding itself has been executed by no kernel in this project's
+record.

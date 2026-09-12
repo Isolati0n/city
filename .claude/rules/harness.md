@@ -395,8 +395,12 @@ Writable layers are the first thing in this tree that survives a test.
 Everything before them lived in the stage or in `WORK` and went away
 with it; a layer is durable by design, keyed by a declared id, and
 sitting on the machine root. So the suite has to decide *when* it wipes
-one, and the three candidate answers are not equivalent — two of them
-break a test silently.
+one, and the candidate answers below are not equivalent. (This sentence
+counted them, in the file whose own rule is never to put a count here —
+and the count was of the list directly beneath it, which is the shape
+`CLAUDE.md` says survives review. It also called both wrong answers
+silent, which the next paragraph's own wording contradicts: a failure
+against correct code is not silent.)
 
 **Per boot is wrong, and it is the tempting one.** Production never
 wipes a layer, so a harness that does is testing something the machine
@@ -424,8 +428,8 @@ the capability guard above, for the same reason.
 before it bit anyone in production.** A probe wrote one byte over `/id`,
 the write copied up into the layer, and every subsequent run of
 `test_brick_is_a_root` read `id=xrick-one` from a *correct* brick. The
-durable-mask failure `runtime.md` records, arriving through the test
-suite. Two things generalise from it:
+durable-mask failure `.claude/rules/runtime.md` records, arriving
+through the test suite. Two things generalise from it:
 
 - **Durable state under test needs a reset whose granularity matches
   production's, not the test's convenience.** Ask what the machine does

@@ -301,11 +301,17 @@ static void lid_brick(const char *brick, const char *layer,
  * fixed-descriptor-number class wearing a third costume.
  *
  * WHAT THIS LID RESTRICTS, as of 2026-09-12: a house **cannot create,
- * delete, rename or truncate anything beneath its root, except inside a
+ * delete or truncate anything beneath its root, except inside a
  * declared bind.** Write IS granted at the root -- see the note at the
  * grant -- so the bind table is the policy input for *structure* rather
  * than for write. Truncate is on the restricted side because it reaches
  * the same durable state as delete; that is argued at the grant too.
+ *
+ * RENAME is not in that sentence, because the exception does not apply
+ * to it: REFER is not handled at all, so cross-directory rename and
+ * hard links are refused EVERYWHERE, binds included, and only a
+ * same-directory rename is possible in a bind. `CLAUDE.md` said this
+ * and this file did not. `claims`.
  *
  * This said "nothing grants write beneath the root, so a house cannot
  * write into its own brick" until the grant changed eighty lines below
@@ -387,11 +393,23 @@ static void lid_landlock(char *const *binds, int nbinds)
      * and erofs: `wr_root=denied(13)` where a read-only image gives
      * `denied(30)`.
      *
-     * Granting write back gives away nothing that was being protected.
-     * The root is a private overlay no other house can see, and the
-     * things this lid actually provides are untouched: the MAKE_ rights
-     * stay withheld, so no device nodes, no sockets, no fifos; and the
-     * scoping stays, so a path outside the declared binds is unreachable.
+     * WHAT GRANTING WRITE BACK COSTS, stated rather than denied. This
+     * said "gives away nothing that was being protected", and that is
+     * false: WRITE_FILE beneath the root lets a house overwrite, in
+     * place, any file its brick shipped, and the overwrite copies up
+     * into the DURABLE layer. Measured on a real overlay -- eight bytes
+     * over an ELF header, no truncate and no unlink, and every later
+     * mount of the same sealed lower plus the same upper gives
+     * `cannot execute binary file` while the lower stays byte-identical.
+     * Its own exec path is ETXTBSY while it runs; a shared library in
+     * the brick is not. `tcb-review` and `claims`, independently.
+     *
+     * The things this lid does provide are untouched: the MAKE_ and
+     * REMOVE_ rights stay withheld at the root, so no device nodes, no
+     * sockets, no fifos, nothing created or deleted. Not "a path
+     * outside the declared binds is unreachable" -- that is the
+     * BRICK's property, not this lid's, and CLAUDE.md retired the
+     * wording in the round that put it here.
      *
      * NOTE WHAT ELSE THE MAKE_ RIGHTS COST, because it is a consequence
      * and not an oversight: MAKE_REG is one of them, so a landlock house
@@ -402,19 +420,37 @@ static void lid_landlock(char *const *binds, int nbinds)
      * wanted, MAKE_REG has to be granted here deliberately and invariant
      * 6 has to say so.
      *
-     * TRUNCATE IS WITHHELD, and it is the one right in `rw` that this
-     * grant deliberately drops. It was granted for one round beside a
+     * TRUNCATE IS WITHHELD. It is what this round drops; `root` also
+     * withholds the MAKE_ and REMOVE_ rights that `rw` grants, so do
+     * not read this as `root == rw & ~TRUNCATE`. (It said exactly that
+     * for one round, and it was wrong by every one of those rights --
+     * the stale-comment class this function's own header apologises
+     * for, reintroduced by the same commit further down the same file.)
+     * It was granted for one round beside a
      * comment saying the grant gave nothing away, while the same commit
-     * set the cost out in full elsewhere in this file: a house can
-     * truncate its own exec path or a library inside its brick, the
-     * zero-length file copies up into the DURABLE layer, and every boot
-     * afterwards is `FAIL exec house errno=2` until someone deletes the
-     * layer and re-stages. REMOVE_FILE is withheld precisely so the
-     * house cannot unlink that file; truncating it reaches the same
+     * set the cost out in full elsewhere in this file: truncating a
+     * file the brick shipped empties it into the DURABLE layer, and
+     * every boot afterwards reads the empty file until someone deletes
+     * the layer and re-stages. REMOVE_FILE is withheld precisely so the
+     * house cannot unlink such a file; truncating it reaches the same
      * unrecoverable state by another route, so withholding one and
-     * granting the other protects nothing. Before the write grant,
-     * `landlock` was the single lid set immune to that failure, and
-     * this restores the immunity.
+     * granting the other is incoherent. That is the whole argument, and
+     * it is narrower than the one first written here in two ways, both
+     * measured afterwards:
+     *
+     *   NOT its own exec path. A running executable is ETXTBSY, with
+     *   or without O_TRUNC, so that scenario could never happen by any
+     *   of the three routes. A shared library the brick shipped has no
+     *   such protection and is the reachable target.
+     *
+     *   NOT a restored immunity. WRITE_FILE, which this grant keeps,
+     *   reaches the identical durable state by overwriting in place --
+     *   see the paragraph above. This closes the zero-length route and
+     *   the accidental O_TRUNC rewrite; the CLASS stays open, and
+     *   `.claude/rules/runtime.md`'s recovery is still the only answer
+     *   to it. Making it unrepresentable means stopping the layer
+     *   shadowing the image's executables at all, which is a design
+     *   change and is not this.
      *
      * The cost is real and is not hidden: `open(..., O_TRUNC)` and
      * `ftruncate` on a file the brick already contains now fail with

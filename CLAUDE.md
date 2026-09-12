@@ -236,17 +236,35 @@ sections after this one and are deliberately not numbered here.
    No *other* house can see the overlay, so nothing is exposed by it.
 
    `TRUNCATE` was granted for one round, beside a sentence saying the
-   grant gave nothing away, in the same commit that documented the cost
-   nine lines earlier: a landlock house can truncate its own exec path
-   or a library in its brick, the empty file copies up into the
-   **durable** layer, and every boot thereafter is `FAIL exec house
-   errno=2` until the layer is deleted and re-staged. `REMOVE_FILE` is
-   withheld precisely so the house cannot *unlink* that file, and
-   truncating reaches the same unrecoverable state by another route —
-   so withholding one while granting the other protected nothing.
-   `landlock` was the single lid set immune to the durable-mask failure
-   before the write grant, and withholding `TRUNCATE` restores that.
-   `tcb-review` found the cost; the decision is `HISTORY.md` §57.
+   grant gave nothing away, in the same commit that set the cost out in
+   full: truncating a file the brick shipped empties it into the
+   **durable** layer, and every boot thereafter reads the empty file
+   until the layer is deleted and re-staged. `REMOVE_FILE` is withheld
+   precisely so the house cannot *unlink* such a file, and truncating
+   reaches the same unrecoverable state by another route — so
+   withholding one while granting the other is incoherent. That is the
+   argument, and the decision is `HISTORY.md` §57.
+
+   **It is narrower than it was first written, in two ways that were
+   measured after the sentence was published.**
+
+   *Not its own exec path.* A running executable is `ETXTBSY`, with or
+   without `O_TRUNC`, so that scenario — the one the prose led with —
+   could never happen by any of the three routes. A shared library the
+   brick shipped has no such protection and is the reachable target.
+
+   *Not a restored immunity.* `WRITE_FILE`, which this grant keeps,
+   reaches the identical durable state by overwriting a brick file in
+   place: measured on a real overlay, eight bytes over an ELF header,
+   no truncate and no unlink, and every later mount of the same sealed
+   image plus the same layer is unrunnable while the image stays
+   byte-identical. Withholding `TRUNCATE` closes the zero-length route
+   and the accidental `O_TRUNC` rewrite. **The class stays open**, and
+   the recovery in `.claude/rules/runtime.md` is still the only answer
+   to it. Making it unrepresentable means stopping the layer shadowing
+   the image's executables at all, which is a design change and is not
+   this one. `tcb-review` and `claims` reproduced it independently, each
+   from the other direction.
 
    The cost of the withholding, stated rather than discovered:
    `open(..., O_TRUNC)` and `ftruncate` on a file the brick shipped now
@@ -262,14 +280,26 @@ sections after this one and are deliberately not numbered here.
    on the ABI and *names the branch in its `ok` line* rather than
    printing the same green for a machine that cannot enforce it.
 
-   Not annotated for `tools/checkbrief.py`, deliberately.
-   `LANDLOCK_ACCESS_FS_TRUNCATE` appears in `nwsup.c` twice — in
-   `handled` and in the bind grant `rw` — both of which must stay, so
-   neither its presence nor its absence expresses the claim. The claim
-   is about which of two variables the token is *in*, and no token says
-   that. `test_landlock_confines`'s truncate pair is what pins it, and
-   the pair is the pin: the root half alone is satisfied by a lid that
-   granted truncate nowhere.
+   Annotated after all, and the first attempt at this paragraph said it
+   could not be. `LANDLOCK_ACCESS_FS_TRUNCATE` must stay in `handled`
+   (or the right is unrestricted everywhere) and in the bind grant
+   `rw`, and must not appear in `root` — which is a claim about *which*
+   variables hold it, so neither `filecontains` nor `absent-in` says
+   it. A **count** does, because every mutation that changes which
+   variables hold it changes how many times the token appears:
+   <<count:nwsup.c:LANDLOCK_ACCESS_FS_TRUNCATE:2>>
+   `claims` ran both of the controls named below against it and got
+   `contradicted`, exit 1, from each — granting it at the root makes
+   three, withholding it in binds makes one. That is weaker than
+   naming the variables and it is not nothing, and it is the reason
+   this paragraph no longer states a count in prose: the count is the
+   annotation, where being wrong turns `make checkbrief` red.
+
+   It matters more than usual here because the pin the prose prefers —
+   `test_landlock_confines`'s truncate pair — **cannot run on a machine
+   without Landlock**, and the annotation runs everywhere. The pair is
+   still the real pin, and it is the *pair*: the root half alone is
+   satisfied by a lid that granted truncate nowhere.
 
    **The Landlock lid is for a house in a brick**, and requires one
    (`NW_E_LLBRICK`). It grants read, execute and **write** beneath the
@@ -281,9 +311,12 @@ sections after this one and are deliberately not numbered here.
    **So what the lid provides is not "the house cannot write". It is: a
    house cannot create, delete, rename or truncate anything beneath its
    root, except inside a declared bind.** The `MAKE_*`, `REMOVE_*` and
-   `TRUNCATE` rights are withheld at the root and granted in binds,
-   which makes the bind table the policy input for *structure* rather
-   than for write. Truncate sits on the structure side because it
+   `TRUNCATE` rights are withheld at the root, and granted in binds
+   **except for `MAKE_CHAR` and `MAKE_BLOCK`, which are granted
+   nowhere** — the exception two paragraphs down, said here so the
+   generalisation and its exception do not contradict each other in one
+   section. That makes the bind table the policy input for *structure*
+   rather than for write. Truncate sits on the structure side because it
    reaches the same durable state as delete, not because it resembles
    one.
 
