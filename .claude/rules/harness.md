@@ -324,7 +324,12 @@ characterise. Found by grepping for the literal after the fix, not by
 running: at the rungs where it bites, the city dies first and the death
 exit hides it.
 
-### Three traps this found, all in the probe rather than the code
+### The traps this found, all in the probe rather than the code
+
+*(This heading counted them. It heads a bullet list, in the file whose
+own rule now says not to put a number in a heading, 311 lines below the
+heading that rule was derived from — and it was not stale yet, which is
+the point: a heading count is a violation before it is an error.)*
 
 Worth reading before you write a large-N test, because each one produced
 a confident wrong answer first.

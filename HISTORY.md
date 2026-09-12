@@ -5749,3 +5749,139 @@ separating a working guard from a decorative one — and this file's
 record is full of guards that read as working and had never fired:
 `lid-landlock`, the first `rules-hook.sh`, the TLC probes at
 `MaxFds = 16`, a control that passes.
+
+## 62. `claims` on the generalisations: the reasoning was wrong where it was most confident (2026-09-12)
+
+§61 wrote four rules out of §60's round. `claims` found defects in
+every one of them, and two were falsified by controls the previous
+round had not thought to run. The round that added "treat a rules-only
+diff as the highest-risk kind" was itself the evidence for it, again.
+
+### The blocker did not exist
+
+§61 said `4e22204` predates the `prereport` target, so the calibration
+"cannot be cheaply re-measured", and built a whole order-of-operations
+on that. The literal half is true and the conclusion is false — the
+script reads a diff on stdin and the target is only a pipe:
+
+```
+$ git show 4e22204:Makefile | grep -n prereport; echo "exit=$?"
+exit=1
+$ grep -n -A2 "^prereport" Makefile
+182:prereport:
+183:	@git diff $(PREREPORT_BASE) | python3 tools/prereport.py --diff -
+$ git diff 4e22204^ 4e22204 | python3 tools/prereport.py --diff - | head -1
+pre-report: 4 to look at. These are heuristics, not errors.
+```
+
+One command, and it reproduces the stated `4`. The procedure written
+to work around the blocker had a *harder* first step than the route
+that works. **Reasoning from what a `make` target cannot do, to what
+the program behind it cannot do** — the target was the thing examined
+and the script was the thing being described.
+
+### And the stated cause of the gap was not the cause
+
+§61 blamed `COUNTED` for missing `hit`. Control — add the word, re-run
+on the diff that shipped the sentence — and it still does not fire.
+The gate is upstream: `prose-count` returns early unless
+`_is_comment(line)`, whose mark is `^\s*[#*]` plus the C forms. So in
+a markdown brief the shape sees headings and `**bold-lead**` lines, and
+**a `- **bullet**` line — the dominant form in `CLAUDE.md` — is never
+examined.** Verified directly:
+
+```
+'  and `grep` for `unlink` returned exactly o' comment= False
+'- **A claim with parts** covers four rights' comment= False
+'**The partial-gate trap.** `make test` is no' comment= True
+'## Three traps this found'                    comment= True
+```
+
+Whether a count in a brief is caught depends on **where the line
+wraps**. That is a mechanism reading as working, in the tool bought to
+catch this project's mechanisms that read as working. Still not fixed
+here — a matcher change is its own change and inherits the same
+standard — but it is now recorded at its real size, and the sequence
+is: widen the gate, re-measure with the command above, write the
+number down, dispatch a reviewer.
+
+### The ordinal rule undercounted its own evidence
+
+§61 said the ordinals were "written in sections about counts in
+prose". They are in the Landlock and truncate sections; the claim was
+inherited from §60 and restated in two more places. Worse for the
+argument, the survey missed a **second series**:
+
+```
+$ grep -n "survived-by-not-being-moved" HISTORY.md .claude/rules/*.md
+HISTORY.md:4010:here. Sixth instance of survived-by-not-being-moved, in a file that
+.claude/rules/harness.md:382:survived-by-not-being-moved shape, which this repository has now
+```
+
+A "Sixth instance" with no first through fifth recorded anywhere, which
+also disagrees with `harness.md`'s "five separate files" for the same
+pattern. It is the *stronger* example, and it was missed because the
+survey grepped for the word "instance" in the series it already knew
+about rather than for the **pattern name**. Grep for what the ordinal
+counts, not for the ordinal.
+
+### A superlative one paragraph after its own counterexample
+
+"Every other count in prose sits *adjacent* to the thing that
+invalidates it" — written directly below a bullet describing an
+ordinal series spanning sections, where the missing fifth is adjacent
+to nothing. `harness.md`'s "a correction applied to the top of a
+section and not its foot" is a third such shape. The heading is the
+sharpest case, not the only one, and the rule says so now.
+
+### The heading rule was violated in the governed files the same day
+
+```
+$ grep -nE "^#{1,6} .*\b(one|two|three|four|five|six|...|[0-9]+)\b" CLAUDE.md .claude/rules/*.md
+.claude/rules/harness.md:327:### Three traps this found, all in the probe rather than the code
+```
+
+Heading exactly three bullets, in the same file as the heading the rule
+was derived from, 311 lines below it — and **not stale yet**, which is
+the instructive part: a heading count is a violation before it is an
+error. Corrected. The rule now states its exemptions precisely, because
+the bare form condemned two headings that are fine: a date is not a
+count, and neither is a number naming a closed historical fact that
+counts nothing beneath it (`plan.md`'s "one territory and not three").
+`HISTORY.md` is exempt throughout as a record.
+
+### FIRING is not the same as being OBEYED
+
+§61 called 2026-09-12 the first firing of `tools/review-gate.sh`. §31
+of this file already recorded the real first:
+
+```
+$ grep -n "review-gate\|REVIEW OWED" HISTORY.md | head -3
+2025:  pushed. `tools/review-gate.sh` keys a review record to the *content* of the
+2299:it.** `CLAUDE.md` says dispatch before you push, and `tools/review-gate.sh`
+```
+
+— "These three commits were pushed with the gate showing a review
+owed", 2026-09-11. The gate fired and was routed around, which is the
+silence rule's own case and looks identical to the gate not existing.
+
+So the question the silence rule asks has **three** answers, not two,
+and the version §61 wrote could not tell the middle one from the good
+one: never fired (decorative); fired and was routed around (worse,
+because the record now shows a guard that was consulted); fired and
+changed what happened (the only one where value is measured). Dating
+the first firing is not enough — date the first time it changed an
+outcome.
+
+### And the density claim was rhetoric wearing a measurement's clothes
+
+"The density is the measurement, not an anecdote" computes no density,
+for this diff or any other, and sat immediately below a different
+superlative about the same pattern. The surviving claim needs no
+quantity: *the same defects spread across a month read as carelessness,
+and in one diff about carefulness they cannot.* The dispatch table's
+`claims` row now names `.claude/rules/*.md` and `HISTORY.md` and says
+a prose-only diff is the highest-risk kind — which is where that
+instruction belongs, rather than as a third copy of a trigger in prose
+four hundred lines away, in the file that says a second copy of a
+roster rots the way a second copy of a limit does.
