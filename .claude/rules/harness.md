@@ -356,6 +356,39 @@ correction applied to the top of a section and not its foot is the
 survived-by-not-being-moved shape, which this repository has now
 produced in five separate files. `claims`.*
 
+## A capability guard belongs in the helper, not at each call site
+
+`erofs_available()` was written, was correct, and **three of its four
+callers did not consult it**. On a machine without `mkfs.erofs` the suite
+crashed with a bare `FileNotFoundError` instead of skipping — while the
+environment block two screens above printed the right warning. That is the
+silence failure from `CLAUDE.md` in the suite's own guard rail: the
+mechanism worked perfectly and was simply not reached.
+
+**So the guard lives in `make_brick()`**, which raises `Unavailable(why)`,
+and `main()` turns that into a named skip using the test's own function
+name. A new brick test gets the skip for free and cannot forget it. The
+same move also makes a stray skip name structurally impossible, because the
+name is derived rather than typed.
+
+**And a crash is a failure, announced as one.** `main()` catches anything
+that is not `SystemExit` (which is `expect()`'s own path), prints
+`FAIL: <test> raised an unhandled exception`, and exits non-zero
+deliberately. It previously escaped as a traceback: the interpreter does
+exit non-zero on that — measured, 1 direct and 2 through `make` — but
+nothing in the output read as a failure, and whether that survives a
+wrapper is not a property this suite should inherit. Control: inject
+`open("/nonexistent/...")` into a test and the run ends
+`FAIL: hash-pin crashed`, exit 1.
+
+**The general shape, because it has now arrived from both sides.** A
+capability difference between the lab and somewhere else looks like a code
+defect when the lab has *less* than the machine (`/nw/mnt` absent, every
+brick test failing at `mount ... errno=2`), and looks like a *pass* when
+the lab has more than another environment. The second is worse, and both
+are answered the same way: ask the question the code under test asks, in
+one place, and make not-asking impossible rather than remembered.
+
 ## A note for reviewers working read-only
 
 `make STAGE=<path> test` needs a **short** stage path: `tests/run.py`

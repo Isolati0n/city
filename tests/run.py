@@ -12,6 +12,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import traceback
 import zlib
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -130,6 +131,27 @@ def pid1_grace_ms():
 PID1_GRACE_MS = pid1_grace_ms()
 
 SKIPPED = []
+
+
+class Unavailable(Exception):
+    """This machine cannot exercise the test that is running.
+
+    Raised from a HELPER rather than checked at each call site, and that is
+    the whole point. `erofs_available()` existed and three of the four
+    `make_brick()` callers did not consult it, so on a machine without
+    `mkfs.erofs` the suite crashed instead of skipping -- while the
+    environment block printed the correct warning two screens above. A guard
+    that every caller must remember is the "correct and routed around" shape
+    in CLAUDE.md: it worked perfectly and was simply not reached.
+
+    main() turns this into a named skip using the TEST'S OWN name, which
+    also makes a stray skip name structurally impossible: the name is
+    derived from the function rather than typed.
+    """
+
+    def __init__(self, why):
+        super().__init__(why)
+        self.why = why
 
 
 def skip(name, why):
@@ -1535,6 +1557,12 @@ def make_brick(ident, mirrors=()):
     will not mkdir into a brick, so the empty directories have to be baked in
     here, which is exactly the constraint a real baker works under."""
     import hashlib, shutil
+    # THE GUARD LIVES HERE so no caller can forget it. Every brick is an
+    # image as of phase 2, so every make_brick() needs all three erofs
+    # capabilities; asking here means a new test gets the skip for free.
+    why = erofs_available()
+    if why:
+        raise Unavailable(why)
     files = {"id": ident.encode() + b"\n"}
     tmp = tempfile.mkdtemp(dir=WORK)
     os.makedirs(f"{tmp}/bin")
@@ -1789,10 +1817,9 @@ def test_brick_image_is_sealed():
     which is what nw-sup did before this phase, and the write succeeds.
     docs/plans/01 records both, measured.
     """
-    why = erofs_available()
-    if why:
-        skip("brick-image-is-sealed", why)
-        return
+    # No erofs guard here: make_brick() raises Unavailable and main() turns
+    # it into a named skip. One mechanism, not one per call site -- three of
+    # the four callers forgot the explicit version.
     brick = make_brick("sealed-one")
     city = f"{WORK}/sealed.city"
     open(city, "w").write(
@@ -3532,8 +3559,35 @@ def main():
     passed = []
     for t in tests:
         before = len(SKIPPED)
-        t()
         name = t.__name__[len("test_"):].replace("_", "-")
+        try:
+            t()
+        except Unavailable as u:
+            # A capability this machine does not have. Named skip, using the
+            # test's own name, so counts_as_passed() below excludes it and
+            # the stray-name check cannot fire on it.
+            skip(name, u.why)
+        except SystemExit:
+            # expect()'s FAIL path. Already loud, already non-zero; let it go.
+            raise
+        except BaseException:
+            # ANY OTHER EXCEPTION IS A FAILURE, ANNOUNCED AS ONE. This used
+            # to escape main() as a bare traceback. The interpreter does exit
+            # non-zero on that -- measured here, 1 direct and 2 through make
+            # -- but the run said nothing that reads as a failure, and
+            # whether the code survives a wrapper is not a property this
+            # suite should be inheriting. A crash is now indistinguishable
+            # from a FAIL in both the output and the exit status, on purpose.
+            #
+            # It is the silence rule from CLAUDE.md applied to the runner
+            # itself: the question is not "did it pass" but "what would this
+            # look like if it had not run at all", and a traceback amid a
+            # green-looking log is exactly that.
+            print(f"FAIL: {name} raised an unhandled exception -- a crash "
+                  f"is a failure, not a skip and not a pass:",
+                  file=sys.stderr)
+            traceback.print_exc()
+            raise SystemExit(f"FAIL: {name} crashed")
         # A test that skipped itself did not pass. Counting it as passed is
         # the same defect the skip machinery exists to prevent, one layer up:
         # tools/coverage-merge.sh reported landlock-confines as "covered
