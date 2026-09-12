@@ -5477,7 +5477,12 @@ real lid: this kernel has no Landlock. `tools/landlock-assertions-dryrun.py`
 covers twenty mutations plus the ABI branch and the field-name
 cross-check, and it is synthetic by construction. The `TRUNCATE`
 withholding itself has been executed by no kernel in this project's
-record.
+record. **(True when written and retired the next day — §59 carries
+the ABI-7 run. The pointer is here because a reader arriving at this
+section by search gets a present-perfect sentence with no way to know
+it has an expiry; `claims` flagged it rather than editing a record,
+which is the right call and is why the sentence stands with a pointer
+instead of being rewritten.)**
 
 ## 59. ABI 7 settles it, and the bind half is a real grant (2026-09-12)
 
@@ -5539,11 +5544,11 @@ pin, measured rather than argued.**
   more are added. The new claim is the sharp one: 2026-09-12 produced
   the first case where **the rule and its violation are in one diff** —
   not a rule decaying and being caught later, but a rule that was never
-  true of the change that shipped it. And every instance so far was
-  found by a reviewer or by re-running something, **never by the
-  author**, including when the author had just written the rule down.
-  That is the argument against "be more careful": careful is the state
-  they were all written in.
+  true of the change that shipped it. And every instance was found **by
+  running something, never by reading**, including when the author had
+  just written the rule down. That is the argument against "be more
+  careful": careful is the state they were all written in. (This said
+  "never by the author" for the length of one commit; see §60.)
 
 Two smaller ones filed beside the characteristic failure, because each
 is a general shape rather than a bug:
@@ -5559,3 +5564,110 @@ is a general shape rather than a bug:
   comment, in the right file, explaining why `unlink` is not probed for
   a reason that applies to a house the test does not boot — while the
   claim it stood in for was load-bearing in four files.
+
+## 60. `claims` on a prose-only diff: six defects in prose about being careful with prose (2026-09-12)
+
+§59's diff touched no C and no tests. It was a round of writing rules
+down. `claims` found six things wrong with it, and the distribution is
+the finding: **every one is an instance of a rule stated elsewhere in
+the same two files.**
+
+### The false half of a true sentence
+
+The new `CLAUDE.md` bullet said every instance of "a rule is at its
+weakest in the change that introduces it" was found by a reviewer and
+**not one by the author**. `HISTORY.md` §54 carries the heading:
+
+```
+$ grep -n "all mine, all found by running" HISTORY.md
+5054:### Four defects in writing the fixture, all mine, all found by running
+```
+
+and the probe-over-`/id` instance — item three of the bullet's own list
+— is inside that section. Author's fixture, author's run, author's
+finding, in a heading that says so.
+
+What survives is the half that was already load-bearing: **every one
+was found by running something, never by reading.** The sentence
+reached past that for a more dramatic claim about *who*, and the
+dramatic version was the falsifiable one. Worth keeping as a shape:
+when a true observation is generalised one notch further than the
+evidence, the notch is where it breaks, and the original was already
+the stronger argument.
+
+### Counts, in the bullets about counts
+
+- "`grep` for `unlink` in the fixture returned **exactly one hit**",
+  four lines above "`control` found it by grepping for the behaviour
+  and reading what came back **rather than counting the hits**". True
+  at `16a763b`; already stale against the tree the sentence describes,
+  because this round's own `report_structure()` added several. And
+  `make prereport` does not catch it — `hit` is not in its `COUNTED`
+  list — so the ack added that round records that someone looked at the
+  *other* count.
+- `.claude/rules/harness.md`'s section heading **"Two traps that have
+  already caught someone"**, with a third trap added directly beneath
+  it by the same diff. A heading is the easiest count to leave behind:
+  nobody re-reads it while adding to what it heads.
+- `CLAUDE.md`'s **"Two corollaries worth stating"**, heading a list
+  that held seven bullets before this round and nine after.
+- "the same claim was half-covered **twice in a row**", and
+  `runtime.md`'s "**TWO SECTIONS DOWN**" — a positional count, and
+  wrong as well as fragile, since there is no intervening heading.
+
+All removed rather than corrected to larger numbers, which is what the
+rule prescribes and is the whole reason it prescribes it.
+
+### The ordinals were already broken, inside this record
+
+```
+$ grep -n "Fourth instance\|Sixth instance" HISTORY.md
+5116:  first thing an agent reads in that file. Fourth instance of *a rule is
+5414:which the assertion reports as a lid regression. **Sixth instance of
+```
+
+No fifth is recorded under that name. So `HISTORY.md` was running a
+count in prose across sections, for the pattern *about* counts in
+prose, and had lost one. The ordinals are retired; the instances are
+named in `CLAUDE.md` and that list is the list.
+
+### A quotation attributed to the wrong document
+
+The bullet said invariant 6 claims "no device nodes, sockets or fifos".
+It does not — the three-noun enumeration is `nwsup.c`'s grant comment
+and `runtime.md`'s restatement; invariant 6 states it generically as
+the withheld `MAKE_*` rights. This **sharpens** the bullet's own point:
+the enumeration and the generalisation live in different files, so a
+reader checking either alone sees a covered claim.
+
+### A coverage claim that moved between two trees mid-paragraph
+
+The which-rights-were-probed split is exactly right for `16a763b` and
+false for `73e8a47` one commit earlier, where `MAKE_SOCK` had no probe
+and `TRUNCATE` was not a withheld right at all — while the preceding
+sentences narrate the `73e8a47` state. Each half is true where it is
+anchored and the paragraph never says it moved. **A coverage claim
+with no commit attached is read against whichever tree the reader is
+holding**, which is a new entry in the same family as "a green suite is
+evidence only against a stated environment". It names its tree now.
+
+### And the one the reviewer was right not to touch
+
+§58 ends "The `TRUNCATE` withholding itself has been executed by no
+kernel in this project's record" — true when written, retired by §59
+the next day. `claims` flagged it rather than editing it, which is
+correct for a record; a pointer to §59 was added instead of a rewrite.
+
+### Why this round is worth a section at all
+
+Nothing here was a code defect, and the suite was green throughout. The
+value is the distribution: **a diff whose entire content was rules
+about prose violated the prose rules six times**, including twice in
+the sentences stating them. That is not carelessness that better
+attention would have fixed — it is the weakest-rule pattern operating
+on a diff made entirely of rules, which is the limiting case of it. The
+defence was the one the pattern's own bullet prescribes: dispatch the
+reviewer against the change that introduces the rule, before the push.
+`tools/review-gate.sh` said `REVIEW OWED BEFORE PUSH: prose:claims` and
+the commit was held unpushed until this round landed, which is the
+first time that gate has been the reason something waited.

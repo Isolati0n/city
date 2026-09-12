@@ -76,3 +76,8 @@ unpaired-absence	tools/landlock-assertions-dryrun.py	if n not in emits)
 # false positive: "not one step" is English, and the steps below it are
 # enumerated rather than counted -- adding a sixth ages nothing
 prose-count	.claude/rules/harness.md	**The partial-gate trap.** `make test` is not one step. It stages, runs
+# false positive: English prose reporting what a grep returned, not an assertion
+unpaired-absence	CLAUDE.md	invariant 6; `claims` grepped and the string is not in this file
+# false positive: prose naming a gap in prereport's own matcher; verified by
+# reading COUNTED in tools/prereport.py, which has no `hit`
+unpaired-absence	HISTORY.md	`make prereport` does not catch it — `hit` is not in its `COUNTED`

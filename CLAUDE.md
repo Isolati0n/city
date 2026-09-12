@@ -826,7 +826,10 @@ lid and did nothing. `path-traversal-refused` was believed only after deleting
 the component check made it fail. Do that every time. A test that has never
 been seen failing is a test that has never been tested.
 
-Two corollaries worth stating, because both have been got wrong:
+Corollaries worth stating, each because it has been got wrong. (This
+read "two corollaries" while the list beneath it grew past that and
+kept growing — a count of the list directly below it, which is the
+shape this file names as the durable kind.)
 
 - **A green suite is evidence only against a stated environment.** The
   Landlock lid never worked, in any environment, for its whole life: every
@@ -845,17 +848,30 @@ Two corollaries worth stating, because both have been got wrong:
   only removing both fails it. Ask what single change would still leave it
   passing.
 - **A claim with parts is covered when every part is, and reads as
-  covered when one is.** Invariant 6 claims "no device nodes, sockets or
-  fifos". The fixture probed the first noun; granting `MAKE_FIFO` or
-  `MAKE_SOCK` at the root left the suite green. That was found, a fifo
-  probe was added — and the socket still was not, so the same claim was
-  half-covered twice in a row. The general case is worse: of the rights
-  the lid withholds at a house's root, `MAKE_REG`, `MAKE_CHAR`,
-  `MAKE_FIFO`, `MAKE_SOCK` and `TRUNCATE` were probed while
-  `MAKE_DIR`, `MAKE_SYM`, `MAKE_BLOCK`, `REMOVE_FILE` and `REMOVE_DIR`
-  changed no field any fixture emitted, so adding any of them back to
-  the grant passed. **`MAKE_BLOCK` was named in the failure string of
-  the assertion standing beside it**, whose probe was char-only — the
+  covered when one is.** The three-noun claim is `nwsup.c`'s grant
+  comment and `.claude/rules/runtime.md`'s restatement of it — "no
+  device nodes, sockets or fifos" — and *not* invariant 6, which states
+  it generically as the withheld `MAKE_*` rights. (The bullet said
+  invariant 6; `claims` grepped and the string is not in this file
+  except where this bullet quotes it. Sharpens the point rather than
+  blunting it: the enumeration and the generalisation live in different
+  files, so a reader checking either one alone sees a covered claim.)
+  The fixture probed the first noun, and granting `MAKE_FIFO` or
+  `MAKE_SOCK` at the root left the suite green. A fifo probe was then
+  added and the socket still was not, so the same claim came back
+  half-covered a second time.
+
+  **The general case, at `16a763b` — name the tree, because the split
+  moves.** Of the rights that commit's lid withholds at a house's root,
+  `MAKE_REG`, `MAKE_CHAR`, `MAKE_FIFO`, `MAKE_SOCK` and `TRUNCATE` were
+  probed, while `MAKE_DIR`, `MAKE_SYM`, `MAKE_BLOCK`, `REMOVE_FILE` and
+  `REMOVE_DIR` changed no field any fixture emitted — so adding any of
+  those back to the grant passed. One commit earlier the split is
+  different again (`MAKE_SOCK` unprobed, `TRUNCATE` not withheld at
+  all), which is why the sentence names its tree: a coverage claim with
+  no commit attached is read against whichever tree the reader is
+  holding. **`MAKE_BLOCK` was named in the failure string of the
+  assertion standing beside it**, whose probe was char-only — the
   sentence and the check disagreeing inside one `expect()`. `control`.
 
   So when a claim enumerates, enumerate the probe. The reading to
@@ -868,9 +884,9 @@ Two corollaries worth stating, because both have been got wrong:
   fixture as a *comment standing in for a probe*: "REMOVE_FILE is
   withheld precisely so the house cannot unlink its own exec path" was
   the premise the whole truncate argument rested on, in several files,
-  and `grep` for `unlink` in the fixture returned exactly one hit — a
-  comment, explaining why the probe was absent, for a reason (the
-  seccomp allow-list) that applies to a house the test does not boot.
+  and `grep` for `unlink` in the fixture returned nothing but a comment,
+  explaining why the probe was absent, for a reason (the seccomp
+  allow-list) that applies to a house the test does not boot.
   A true comment, in the right file, answering a question nobody asked.
   `control` found it by grepping for the behaviour and reading what came
   back rather than counting the hits.
@@ -927,6 +943,12 @@ Two corollaries worth stating, because both have been got wrong:
   the instances are named instead, which is what the rule prescribes and
   what makes the next one cheap to add.)*
 
+  **Do not number these.** `HISTORY.md` labelled one "Fourth instance"
+  and a later one "Sixth", with no fifth recorded under that name —
+  the count-in-prose failure occurring inside the record of the
+  count-in-prose failure. The instances above are named; the ordinals
+  are retired. `claims`.
+
   **The strongest form arrived on 2026-09-12: the rule and its violation
   in ONE DIFF.** `harness.md`'s new section and the probes that break it
   were the same commit, and the section's own worked example is a fixture
@@ -934,14 +956,25 @@ Two corollaries worth stating, because both have been got wrong:
   time and being caught later — it is a rule that was never true of the
   change that shipped it.
 
-  **And look at who catches them.** Every one so far was found by a
-  reviewer or by re-running something, and **not one by the author**,
-  including the times the author had just finished writing the rule
-  down. That is the argument against "be more careful": careful is the
-  state these were written in. The defence is mechanical — run the new
-  rule's own check against the change that introduces it, the way `make
-  prereport` is run on its own diff, and dispatch the reviewer *before*
-  the push rather than after.
+  **And look at how they are caught.** Every one was found **by running
+  something, never by reading** — including the times the author had
+  just finished writing the rule down, and including the ones the author
+  found themselves. That is the argument against "be more careful":
+  careful is the state they were all written in, and reading them again
+  in that state is what does not work.
+
+  *(This said "not one by the author", which is false and was caught by
+  `claims` within the round: `HISTORY.md` §54 carries the heading "Four
+  defects in writing the fixture, all mine, all found by running", and
+  the probe-over-`/id` instance is inside it. Author-found by running,
+  which is the half that matters. Reviewers found some and the author
+  found others; what none of them was, was found by re-reading. The
+  sentence reached for the more dramatic claim and lost the durable
+  one.)*
+
+  The defence is mechanical — run the new rule's own check against the
+  change that introduces it, the way `make prereport` is run on its own
+  diff, and dispatch the reviewer *before* the push rather than after.
 
 - **Silence is the expensive failure, not noise.** A mechanism that is
   correct and routed around is worse than a broken one, because it looks

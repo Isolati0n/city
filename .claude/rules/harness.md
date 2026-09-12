@@ -13,7 +13,12 @@ that is exactly why the suite is the largest source file in this project,
 larger than any file in the trusted core.
 Read `houses/` rather than any list of fixtures written down here.
 
-## Two traps that have already caught someone
+## Traps that have already caught someone
+
+*(This heading said "Two traps". A third was added directly beneath it
+in the same diff that acked a count elsewhere in the same section as
+harmless English — a heading is the easiest count to leave behind,
+because nobody re-reads it while adding to what it heads. `claims`.)*
 
 **The staging trap.** The suite runs binaries from `/tmp/nw-init-run`, not
 from the source tree. `make` rebuilds the tree; **`make stage` is what

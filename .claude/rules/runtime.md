@@ -192,8 +192,8 @@ Making the class unrepresentable means stopping the layer shadowing
 the image's executables at all — a design change, not a rights change.
 `CLAUDE.md` invariant 6, `HISTORY.md` §56, §57 and §58.
 
-**THE CLASS IS OPEN, AND THE RECOVERY TWO SECTIONS DOWN IS THE ONLY
-ANSWER TO IT.** Not a footnote and not an aside: there is no lid set
+**THE CLASS IS OPEN, AND THE RECOVERY BELOW IS THE ONLY ANSWER TO
+IT.** Not a footnote and not an aside: there is no lid set
 that prevents a brick house durably masking its own image, and nothing
 in the tree detects one that has. `landlock` is the narrowest and it
 narrows the routes, not the outcome. So when a house that booted
