@@ -389,6 +389,53 @@ the lab has more than another environment. The second is worse, and both
 are answered the same way: ask the question the code under test asks, in
 one place, and make not-asking impossible rather than remembered.
 
+## Durable fixture state: reset ONCE PER RUN, never per boot
+
+Writable layers are the first thing in this tree that survives a test.
+Everything before them lived in the stage or in `WORK` and went away
+with it; a layer is durable by design, keyed by a declared id, and
+sitting on the machine root. So the suite has to decide *when* it wipes
+one, and the three candidate answers are not equivalent — two of them
+break a test silently.
+
+**Per boot is wrong, and it is the tempting one.** Production never
+wipes a layer, so a harness that does is testing something the machine
+will not do. The concrete cost is a test that cannot be written: a
+durability-across-reboot test is two `boot()` calls on one blob, and
+per-boot reset wipes between them, so the second boot reads an empty
+layer and the test either fails against correct code or, worse, passes
+because "absent" was what it expected. That is the harness being *less*
+capable than the machine — the mirror of the section above, and the
+direction that produces a false failure rather than a false pass.
+
+**Per test is wrong differently:** it is unenforceable. It is the line a
+new brick test forgets, and forgetting it is invisible until some later
+test reads a value a previous one left behind.
+
+**Once per suite process, per id, is the one that holds.** First
+sighting of an id resets it; every later sighting does not. Each test
+starts from a pristine layer without inheriting the previous suite
+*run*, and a test that boots the same plan twice keeps what the first
+boot wrote. It lives inside `stage_layers()`, which is the only creator,
+so a new brick test gets it without knowing it exists — the same move as
+the capability guard above, for the same reason.
+
+**The evidence that this is not hypothetical is that it bit the harness
+before it bit anyone in production.** A probe wrote one byte over `/id`,
+the write copied up into the layer, and every subsequent run of
+`test_brick_is_a_root` read `id=xrick-one` from a *correct* brick. The
+durable-mask failure `runtime.md` records, arriving through the test
+suite. Two things generalise from it:
+
+- **Durable state under test needs a reset whose granularity matches
+  production's, not the test's convenience.** Ask what the machine does
+  between two of these events. If the machine does nothing, the harness
+  doing something is a difference you will debug later as a code defect.
+- **A probe must not write where an assertion reads.** That one is
+  `CLAUDE.md`'s "a rule is at its weakest in the change that introduces
+  it": the fixture that demonstrated a layer is writable did so over the
+  file every other assertion in the test reads.
+
 ## A note for reviewers working read-only
 
 `tests/run.py` refuses an over-long `NW_STAGE` at startup. The bound comes

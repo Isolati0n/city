@@ -2682,10 +2682,13 @@ def test_landlock_confines():
 
       the house started            -- it can read and execute its own brick
       it can write a declared bind -- the plan said that path was its to write
-      it CAN write its root        -- WRITE_FILE and TRUNCATE are granted
-                                      beneath / since 2026-09-12; the
-                                      brick itself is untouched because
-                                      writes land in the layer
+      it CAN write its root        -- WRITE_FILE is granted beneath /
+                                      since 2026-09-12; the brick itself
+                                      is untouched because writes land in
+                                      the layer
+      it CANNOT truncate it        -- TRUNCATE is withheld, because an
+                                      emptied exec path copies up into the
+                                      durable layer and no boot recovers
 
     The third is the confinement. Without it this is a test that the house
     started, which proves nothing about what it can touch.
@@ -2695,7 +2698,10 @@ def test_landlock_confines():
     change it back to `ro` and wr_existing becomes denied(13), failing
     the first. The variable is `root` now, not `ro` -- this sentence said
     `ro` after the grant changed, which is the same stale-docstring shape
-    as the one in nwsup.c the same round had to fix."""
+    as the one in nwsup.c the same round had to fix. For the truncate
+    pair the control is `root | LANDLOCK_ACCESS_FS_TRUNCATE`, which
+    makes trunc_root ok; dropping TRUNCATE from `rw` makes trunc_bind
+    denied and shows the bind half is not answering for the root."""
     abi = landlock_abi()
     if abi is None:
         skip("landlock-confines",
@@ -2792,22 +2798,101 @@ def test_landlock_confines():
            f"mknod_root={mk}. denied(1) is EPERM -- the house lacks "
            f"CAP_MKNOD and the lid is proving nothing; `ok` means the "
            f"MAKE_ rights leaked\n{out}")
-    # AND A FIFO, because the claim names three nouns and only one was
-    # probed: granting MAKE_FIFO, MAKE_SOCK, MAKE_DIR or MAKE_SYM at the
-    # root left every assertion here green.
-    mkf = field("mknod_root_fifo").get("sealed", "")
-    expect(mkf.startswith("denied"),
-           f"a landlock house created a FIFO at its root: "
-           f"mknod_root_fifo={mkf}\n{out}")
+    # AND A FIFO AND A SOCKET, because the claim names three nouns and
+    # only one was probed: granting MAKE_FIFO, MAKE_SOCK, MAKE_DIR or
+    # MAKE_SYM at the root left every assertion here green.
+    #
+    # ERRNO-EXACT, for the reason the line above is. `startswith`
+    # ("denied") was what this asserted for one round, in the same test
+    # where conflating denied(1) and denied(13) had just been called out
+    # as the defect -- the correction was applied to the noun it was
+    # found on and not to the one added beside it, which is this
+    # repository's most common shape. A fifo or a socket inode needs no
+    # capability at all, so EPERM here would mean something other than
+    # Landlock refused, and that is precisely what must not pass.
+    for noun, key in (("FIFO", "mknod_root_fifo"),
+                      ("SOCKET", "mknod_root_sock")):
+        v = field(key).get("sealed", "")
+        expect(v == "denied(13)",
+               f"a landlock house created a {noun} at its root, or it "
+               f"was refused by something other than the lid: {key}={v}. "
+               f"denied(13) is EACCES from Landlock; `ok` means the "
+               f"MAKE_ rights leaked\n{out}")
+    # THE PAIRED POSITIVE, and an asymmetry the invariant claims and
+    # nothing checked. `denied` above is satisfied by a probe that could
+    # not have succeeded anywhere -- a house without CAP_MKNOD, a
+    # read-only root, a fixture that never reached the call. In a
+    # declared bind `rw` grants MAKE_FIFO and MAKE_SOCK and still never
+    # grants MAKE_CHAR, so the same probe must answer three ways: the
+    # device node refused in a bind too, the fifo and socket allowed.
+    # That is invariant 6's "device nodes are refused EVEN IN A BIND",
+    # which was written down as a known exception and never exercised.
+    bd = field("mknod_bind").get("sealed", "")
+    expect(bd == "denied(13)",
+           f"a device node was created inside a declared bind: "
+           f"mknod_bind={bd}. MAKE_CHAR and MAKE_BLOCK are handled and "
+           f"granted nowhere -- see invariant 6\n{out}")
+    for noun, key in (("FIFO", "mknod_bind_fifo"),
+                      ("SOCKET", "mknod_bind_sock")):
+        v = field(key).get("sealed", "")
+        expect(v.startswith("ok"),
+               f"a {noun} must be creatable in a declared bind, or the "
+               f"root refusal above proves nothing about the lid: "
+               f"{key}={v}\n{out}")
+
     wr = field("wr_root").get("sealed", "")
     mkb = field("mk_bind").get("sealed", "")
     expect(wr == "denied(13)" and mkb.startswith("ok"),
            f"the lid no longer DISCRIMINATES: creating a file must be "
            f"refused at the root (MAKE_REG withheld) and allowed in a "
            f"declared bind. Got wr_root={wr} mk_bind={mkb}\n{out}")
+
+    # TRUNCATE, WITHHELD AT THE ROOT AND GRANTED IN A BIND -- and this
+    # pair is the whole evidence for it. Withholding it at the root
+    # would be satisfied by a lid that granted truncate nowhere, and by
+    # a house that could not reach the file at all; the bind half is
+    # what separates those from the claim.
+    #
+    # Why it is withheld: WRITE_FILE lets a house overwrite its exec
+    # path, TRUNCATE lets it empty it, and an empty exec path copies up
+    # into the DURABLE layer -- `FAIL exec house errno=2` on every boot
+    # until the layer is deleted and re-staged. REMOVE_FILE is withheld
+    # to stop exactly that by the unlink route, so granting TRUNCATE
+    # protected nothing. `CLAUDE.md` invariant 6, `HISTORY.md` 57.
+    #
+    # THE ABI BRANCH IS NAMED, not silently taken. LANDLOCK_ACCESS_FS_
+    # TRUNCATE arrived at ABI 3; below that the kernel cannot express
+    # the right, nwsup.c does not put it in `handled`, and truncation is
+    # unrestricted. A machine at ABI 1 or 2 would otherwise report a
+    # green line for a property its kernel cannot enforce -- the
+    # lid-landlock failure one level in.
+    tr = field("trunc_root").get("sealed", "")
+    tb = field("trunc_bind").get("sealed", "")
+    if abi >= 3:
+        expect(tr == "denied(13)",
+               f"a landlock house TRUNCATED a file in its own brick: "
+               f"trunc_root={tr}. That copies a zero-length file up into "
+               f"the durable layer; on the exec path it is unrecoverable "
+               f"without deleting the layer. TRUNCATE is withheld at the "
+               f"root since 2026-09-12\n{out}")
+        expect(tb.startswith("ok"),
+               f"truncate must still be granted inside a declared bind, "
+               f"or the root half above is vacuous: trunc_bind={tb}\n{out}")
+        trunc = f"trunc_root={tr} trunc_bind={tb}"
+    else:
+        expect(tr.startswith("ok"),
+               f"at ABI {abi} the kernel has no TRUNCATE right to "
+               f"withhold, so truncation must be unrestricted; "
+               f"trunc_root={tr} means something else refused it\n{out}")
+        trunc = (f"trunc UNENFORCEABLE at ABI {abi} (the right arrived at "
+                 f"ABI 3), observed {tr} -- this run is NOT evidence "
+                 f"about the withholding")
     print(f"ok landlock-confines (ABI {abi}; wr_existing={wrx} into the "
-          f"layer, mknod_root={mk}, and create refused at the root "
-          f"({wr}) but allowed in a bind ({mkb}))")
+          f"layer, mknod_root={mk} fifo={field('mknod_root_fifo')['sealed']} "
+          f"sock={field('mknod_root_sock')['sealed']}, create refused at "
+          f"the root ({wr}) but allowed in a bind ({mkb}); in a bind the "
+          f"device node is still refused ({bd}) while fifo and socket "
+          f"are allowed; {trunc})")
 
 
 def c_name_slots(names):

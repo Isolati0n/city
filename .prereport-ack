@@ -61,3 +61,5 @@ unpaired-absence	HISTORY.md	- **`unlink` is not in it either**, which killed the
 prose-count	houses/brick.c	* so every write is one whole line and a bounded read can only return
 # false positive: describes the line beneath it, not a count that can age
 prose-count	houses/brick.c	/* Built into one buffer and emitted as ONE padded line -- it was
+# false positive: English prose about the file's own location, not an assertion
+unpaired-absence	tools/landlock-assertions-dryrun.py	boot output. NOT A TEST, and deliberately not in tests/run.py.

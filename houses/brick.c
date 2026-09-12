@@ -275,15 +275,59 @@ static void report_mknod(const char *key, const char *path)
     } else {
         nw_emit("%s %s=denied(%d)", me, key, errno);
     }
-    /* A FIFO TOO. The claim is "no device nodes, sockets or fifos" and
-     * only the first noun was probed: granting MAKE_FIFO, MAKE_SOCK,
-     * MAKE_DIR or MAKE_SYM at the root left every assertion green.
-     * mknod with S_IFIFO needs no syscall the line above does not. */
+    /* A FIFO AND A SOCKET TOO. The claim names three nouns -- "no device
+     * nodes, sockets or fifos" -- and only the first was probed:
+     * granting MAKE_FIFO, MAKE_SOCK, MAKE_DIR or MAKE_SYM at the root
+     * left every assertion green. Both go through the same mknod(2)
+     * this function already calls, so neither needs a syscall the line
+     * above does not, and in particular the SOCKET probe does not need
+     * `socket` -- which is absent from the seccomp allow-list and whose
+     * absence a live test pins. A socket INODE is a filesystem object;
+     * making one is MAKE_SOCK, not a network operation. */
     char f[512];
     snprintf(f, sizeof f, "%s.fifo", path);
     int fr = mknod(f, S_IFIFO | 0600, 0);
     nw_emit("%s %s_fifo=%s(%d)", me, key, fr == 0 ? "ok" : "denied",
             fr == 0 ? 0 : errno);
+    char sk[512];
+    snprintf(sk, sizeof sk, "%s.sock", path);
+    int sr = mknod(sk, S_IFSOCK | 0600, 0);
+    nw_emit("%s %s_sock=%s(%d)", me, key, sr == 0 ? "ok" : "denied",
+            sr == 0 ? 0 : errno);
+}
+
+/* TRUNCATE AN EXISTING FILE. Separate from report_write_existing because
+ * Landlock separates them: WRITE_FILE lets a house overwrite bytes in
+ * place, TRUNCATE lets it shorten the file to nothing. The second is
+ * what reaches the durable-mask state -- truncate the exec path, the
+ * zero-length file copies up into the layer, and the house never starts
+ * again -- so it is withheld at the root and granted in a bind, and this
+ * probe is the only thing that can tell the two grants apart.
+ *
+ * NOT THE EXEC PATH, and not /id. A probe that demonstrates a
+ * destructive capability by being destructive to the evidence is the
+ * mistake this fixture already made once, writing over /id and turning
+ * `id=brick-two` into `id=xrick-two`. /w is the file make_brick bakes
+ * for exactly this, and no assertion reads its contents.
+ *
+ * Gated like report_mknod: landlock only. If the right leaks, a probe
+ * firing in every brick house would truncate /w inside nine durable
+ * layers where nothing reads the answer. */
+static void report_truncate(const char *key, const char *path)
+{
+    const char *lv = getenv("NW_LIDS");
+    int lids = lv ? atoi(lv) : 0;
+    if (!(lids & 2)) {
+        nw_emit("%s %s=skipped-nolandlock", me, key);
+        return;
+    }
+    int fd = open(path, O_WRONLY | O_TRUNC);
+    if (fd < 0) {
+        nw_emit("%s %s=denied(%d)", me, key, errno);
+        return;
+    }
+    close(fd);
+    nw_emit("%s %s=ok(0)", me, key);
 }
 
 int main(int argc, char **argv)
@@ -313,6 +357,12 @@ int main(int argc, char **argv)
      * a plain file is the pair that shows the scoping still discriminates
      * -- refused at the root, allowed in a declared bind. */
     report_write_existing("wr_existing", "/w");
+    /* AFTER the write probe, on the same file: if truncation is refused
+     * -- which is what the lid claims since TRUNCATE was withheld -- /w
+     * still holds what wr_existing put there, and if it is allowed the
+     * damage lands on a file no assertion reads. Order is the safety
+     * margin here, not a coincidence. */
+    report_truncate("trunc_root", "/w");
     report_mknod("mknod_root", "/probe.dev");
     if (b && b[0]) {
         char q[512];
@@ -326,6 +376,27 @@ int main(int argc, char **argv)
          * scratch and goes with it. Measured the other way first --
          * status 18176 again, in the house that HAS binds. */
         if (fd >= 0) close(fd);
+        /* THE OTHER HALF OF THE TRUNCATE PAIR. Withholding TRUNCATE at
+         * the root says nothing on its own -- a lid that granted no
+         * truncate anywhere would satisfy trunc_root just as well, and
+         * so would one that could not reach the file. Granted in a
+         * declared bind and refused at the root is the claim, so both
+         * are probed. */
+        if (fd >= 0) report_truncate("trunc_bind", q);
+        /* THE PAIRED POSITIVE for the three nouns, and an asymmetry
+         * worth pinning while it is here. `rw` grants MAKE_FIFO and
+         * MAKE_SOCK in a declared bind and never grants MAKE_CHAR or
+         * MAKE_BLOCK anywhere, so this one call answers three ways at
+         * once: the device node is refused in a bind too, the fifo and
+         * the socket are allowed. Without it, `denied` at the root is
+         * satisfied by a probe that could not have succeeded anywhere
+         * -- the unpaired-absence shape harness.md spends a section on.
+         *
+         * The name differs from the root probe's, so a reader of the
+         * log cannot confuse the two answers. */
+        char dv[512];
+        snprintf(dv, sizeof dv, "%s/probe.dev", b);
+        report_mknod("mknod_bind", dv);
     }
     fflush(stdout);
     return 0;

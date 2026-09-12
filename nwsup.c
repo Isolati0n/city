@@ -301,10 +301,11 @@ static void lid_brick(const char *brick, const char *layer,
  * fixed-descriptor-number class wearing a third costume.
  *
  * WHAT THIS LID RESTRICTS, as of 2026-09-12: a house **cannot create,
- * delete or rename anything beneath its root, except inside a declared
- * bind.** Write and truncate ARE granted at the root -- see the note at
- * the grant -- so the bind table is the policy input for *structure*
- * rather than for write.
+ * delete, rename or truncate anything beneath its root, except inside a
+ * declared bind.** Write IS granted at the root -- see the note at the
+ * grant -- so the bind table is the policy input for *structure* rather
+ * than for write. Truncate is on the restricted side because it reaches
+ * the same durable state as delete; that is argued at the grant too.
  *
  * This said "nothing grants write beneath the root, so a house cannot
  * write into its own brick" until the grant changed eighty lines below
@@ -399,9 +400,35 @@ static void lid_landlock(char *const *binds, int nbinds)
      * is a coherent rule and it is narrower than what a bare brick house
      * gets. It is what was asked for; if creating files in the layer is
      * wanted, MAKE_REG has to be granted here deliberately and invariant
-     * 6 has to say so. */
-    const uint64_t root = (ro | LANDLOCK_ACCESS_FS_WRITE_FILE
-                              | LANDLOCK_ACCESS_FS_TRUNCATE) & handled;
+     * 6 has to say so.
+     *
+     * TRUNCATE IS WITHHELD, and it is the one right in `rw` that this
+     * grant deliberately drops. It was granted for one round beside a
+     * comment saying the grant gave nothing away, while the same commit
+     * set the cost out in full elsewhere in this file: a house can
+     * truncate its own exec path or a library inside its brick, the
+     * zero-length file copies up into the DURABLE layer, and every boot
+     * afterwards is `FAIL exec house errno=2` until someone deletes the
+     * layer and re-stages. REMOVE_FILE is withheld precisely so the
+     * house cannot unlink that file; truncating it reaches the same
+     * unrecoverable state by another route, so withholding one and
+     * granting the other protects nothing. Before the write grant,
+     * `landlock` was the single lid set immune to that failure, and
+     * this restores the immunity.
+     *
+     * The cost is real and is not hidden: `open(..., O_TRUNC)` and
+     * `ftruncate` on a file the brick already contains now fail with
+     * EACCES, so a landlock house rewrites a file in place or not at
+     * all. A house that needs to shorten a file wants a declared bind,
+     * where TRUNCATE is granted -- a bind is machine-side and outside
+     * the layer, so nothing there can mask the brick.
+     *
+     * ONLY AT ABI >= 3. Below that the kernel cannot express the right,
+     * it is not in `handled`, and truncation is unrestricted -- the
+     * withholding is a property of the kernel as well as of this line,
+     * which is why the suite prints the ABI it ran at and names the
+     * branch. */
+    const uint64_t root = (ro | LANDLOCK_ACCESS_FS_WRITE_FILE) & handled;
     ll_beneath(rfd, "/", root);
     for (int i = 0; i < nbinds; i++)
         ll_beneath(rfd, binds[i], rw);

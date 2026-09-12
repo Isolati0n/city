@@ -5171,3 +5171,109 @@ the machine root after a single run. Gated on `NW_LID_LANDLOCK` now —
 it runs where it is read. And `nw_emit()` clamped to 63 bytes silently;
 the root listing is built into a 256-byte buffer before reaching it, so
 a cut line could read as a complete one. It marks the cut.
+
+## 57. TRUNCATE withheld, and the nouns that were never probed (2026-09-12)
+
+§56 granted write beneath a landlock house's root and granted
+`TRUNCATE` with it, beside a sentence saying the grant gave nothing
+away — nine lines below a paragraph in the same commit setting out
+exactly what it gave away. The operator took the decision the paragraph
+was written to make possible: withhold it.
+
+**The argument is that the two withholdings were incoherent together.**
+`REMOVE_FILE` is withheld so a landlock house cannot unlink its own exec
+path; truncating that file to zero reaches the same state — the empty
+file copies up into the **durable** layer, and every boot afterwards is
+`FAIL exec house errno=2` until the layer is deleted and re-staged
+(§54, and the recovery is in `.claude/rules/runtime.md`). Withholding
+the unlink route while granting the truncate route protects nothing.
+Before the write grant, `landlock` was the single lid set immune to the
+durable-mask failure; it is again.
+
+The cost is stated rather than discovered: `open(..., O_TRUNC)` and
+`ftruncate` beneath `/` now fail with EACCES, so a landlock house
+rewrites a file in place or declares a bind. `TRUNCATE` stays in the
+bind grant — a bind is machine-side, outside the layer, and nothing
+there can mask the brick.
+
+**Enforced only at ABI ≥ 3**, because the right did not exist before
+that and `nwsup.c` masks `handled` by the ABI the kernel reports. A
+machine at ABI 1 or 2 cannot enforce the withholding at all, so
+`test_landlock_confines` branches and *names the branch in its `ok`
+line* rather than printing the same green either way — the
+`lid-landlock` failure (a test passing down a branch the environment
+forced) one level in, refused before it could happen.
+
+### What the round before this one could not see
+
+The live run that settled §56 came back from the operator's machine at
+ABI 7:
+
+```
+ok landlock-confines (ABI 7; wr_existing=ok(0) into the layer,
+   mknod_root=denied(13), and create refused at the root (denied(13))
+   but allowed in a bind (ok(0)))
+```
+
+Assertion 1 succeeding is the answer to the open question of §56: the
+write grant took, and **overlayfs copy-up does not count as a
+`MAKE_REG`.** That had been argued from kernel source by `tcb-review`
+and labelled HYPOTHESIS; it is measured now. All three errnos were
+EACCES rather than EPERM, so Landlock did the refusing and not a
+missing capability.
+
+### The three nouns, and the paired positive that was missing
+
+Invariant 6 claims "no device nodes, sockets or fifos". The fifo probe
+landed in §56; the **socket** was never probed, and both root-side
+refusals were unpaired — `denied` at the root is satisfied by a house
+without `CAP_MKNOD`, by a root that is read-only, and by a fixture that
+never reached the call.
+
+A socket inode is a filesystem object, not a network operation:
+`mknod(path, S_IFSOCK, 0)` makes one, so probing it needs no syscall the
+device-node probe does not already use and in particular does not need
+`socket`, whose absence from the seccomp allow-list a live test pins.
+
+The pairing came from the same probe fired **inside a declared bind**,
+where it must answer three ways at once: `rw` grants `MAKE_FIFO` and
+`MAKE_SOCK` and never grants `MAKE_CHAR` or `MAKE_BLOCK` anywhere. So
+the bind run shows the fifo and the socket succeeding — which is what
+makes the root refusals evidence — while the device node is refused in
+the bind too. That last is invariant 6's "device nodes are refused even
+in a bind", written down in §56 as a known exception and **exercised by
+nothing until now.** A documented exception with no test is a sentence,
+which is this repository's whole subject.
+
+The fifo assertion also went from `startswith("denied")` to
+`== "denied(13)"`. The round that added it had just finished removing
+exactly that conflation from `mknod_root` — denied(1) is EPERM and
+denied(13) is EACCES, opposite readings — and then reintroduced it in
+the noun added beside the one being fixed. Same shape as §52's sweep
+reaching two of five sites, at the granularity of two adjacent lines.
+
+### Why this one is not annotated for `tools/checkbrief.py`
+
+`LANDLOCK_ACCESS_FS_TRUNCATE` appears in `nwsup.c` twice and both must
+stay: once in `handled` (handle it or it is not restricted at all) and
+once in the bind grant `rw`. The claim is about which of two variables
+the token is *in*, and neither `filecontains` nor `absent-in` nor a
+count expresses that. Not annotated, rather than annotated badly —
+`CLAUDE.md` invariant 1's own rule about "no parsing, no recursion".
+
+What pins it is the truncate **pair** in `test_landlock_confines`, and
+the pair is the pin: the root half alone would be satisfied by a lid
+that granted truncate nowhere, or by a house that could not reach the
+file. Control: `root | LANDLOCK_ACCESS_FS_TRUNCATE` makes `trunc_root`
+ok; dropping `TRUNCATE` from `rw` makes `trunc_bind` denied.
+
+### Not exercised on the machine that wrote it
+
+This kernel has no Landlock (`landlock_create_ruleset` → ENOSYS), so
+`test_landlock_confines` skips by name here and **every line of this
+round's test work is unrun.** What was verified locally is narrower and
+worth stating exactly: the tree builds, and a standalone program
+confirms the three new probe calls can report a positive at all —
+`fifo=ok(0)`, `sock=ok(0)`, `trunc=ok(0) size=0` on an unrestricted
+filesystem. That establishes the probes are capable of the answer they
+are asserted *not* to give; it establishes nothing about the lid.

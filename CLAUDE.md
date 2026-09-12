@@ -232,19 +232,44 @@ sections after this one and are deliberately not numbered here.
    erofs — `wr_root=denied(13)`, EACCES from the lid, where a read-only
    image gives `denied(30)`.
 
-   Write is granted beneath the root now. No *other* house can see the
-   overlay, so nothing is exposed by it — **but it does give one thing
-   away, and the same commit that claimed otherwise documented the cost
-   nine lines earlier.** `TRUNCATE` is granted too, so a landlock house
-   can truncate its own exec path or a library in its brick, and that
-   copies up into the **durable** layer: `FAIL exec house errno=2` on
-   every boot thereafter, recoverable only by deleting the layer and
-   re-staging. `REMOVE_FILE` stays withheld so it cannot *unlink* the
-   file — truncating reaches the same state. Before this change
-   `landlock` was the one lid set immune to that. Withholding `TRUNCATE`
-   would restore the immunity and is a live option; it was granted
-   because it was specified, and this paragraph exists so that is a
-   decision rather than an accident. `tcb-review`.
+   Write is granted beneath the root now, and **`TRUNCATE` is not.**
+   No *other* house can see the overlay, so nothing is exposed by it.
+
+   `TRUNCATE` was granted for one round, beside a sentence saying the
+   grant gave nothing away, in the same commit that documented the cost
+   nine lines earlier: a landlock house can truncate its own exec path
+   or a library in its brick, the empty file copies up into the
+   **durable** layer, and every boot thereafter is `FAIL exec house
+   errno=2` until the layer is deleted and re-staged. `REMOVE_FILE` is
+   withheld precisely so the house cannot *unlink* that file, and
+   truncating reaches the same unrecoverable state by another route —
+   so withholding one while granting the other protected nothing.
+   `landlock` was the single lid set immune to the durable-mask failure
+   before the write grant, and withholding `TRUNCATE` restores that.
+   `tcb-review` found the cost; the decision is `HISTORY.md` §57.
+
+   The cost of the withholding, stated rather than discovered:
+   `open(..., O_TRUNC)` and `ftruncate` on a file the brick shipped now
+   fail with EACCES, so a landlock house rewrites a file in place or not
+   at all. A bind is where truncation is granted, and a bind is
+   machine-side — outside the layer, so nothing there can mask the
+   brick.
+
+   **Only at ABI ≥ 3.** The right did not exist before that, so
+   `nwsup.c` does not put it in `handled` and truncation is
+   unrestricted on such a kernel. That is a property of the kernel and
+   not only of the grant, which is why `test_landlock_confines` branches
+   on the ABI and *names the branch in its `ok` line* rather than
+   printing the same green for a machine that cannot enforce it.
+
+   Not annotated for `tools/checkbrief.py`, deliberately.
+   `LANDLOCK_ACCESS_FS_TRUNCATE` appears in `nwsup.c` twice — in
+   `handled` and in the bind grant `rw` — both of which must stay, so
+   neither its presence nor its absence expresses the claim. The claim
+   is about which of two variables the token is *in*, and no token says
+   that. `test_landlock_confines`'s truncate pair is what pins it, and
+   the pair is the pin: the root half alone is satisfied by a lid that
+   granted truncate nowhere.
 
    **The Landlock lid is for a house in a brick**, and requires one
    (`NW_E_LLBRICK`). It grants read, execute and **write** beneath the
@@ -254,10 +279,13 @@ sections after this one and are deliberately not numbered here.
    brick house's is.
 
    **So what the lid provides is not "the house cannot write". It is: a
-   house cannot create, delete or rename anything beneath its root,
-   except inside a declared bind.** The `MAKE_*` and `REMOVE_*` rights
-   are withheld at the root and granted in binds, which makes the bind
-   table the policy input for *structure* rather than for write.
+   house cannot create, delete, rename or truncate anything beneath its
+   root, except inside a declared bind.** The `MAKE_*`, `REMOVE_*` and
+   `TRUNCATE` rights are withheld at the root and granted in binds,
+   which makes the bind table the policy input for *structure* rather
+   than for write. Truncate sits on the structure side because it
+   reaches the same durable state as delete, not because it resembles
+   one.
 
    *Not* "cannot reach a path it was not given" — that was the wording
    for one round and it is the **brick's** property, not the lid's. After
@@ -272,7 +300,12 @@ sections after this one and are deliberately not numbered here.
    written down: device nodes are refused **even in a bind**
    (`MAKE_CHAR` and `MAKE_BLOCK` are handled and never granted, which
    `nwsup.c` has said all along), and `REFER` is not handled at all, so
-   cross-directory rename and hard links are refused everywhere. That is narrower than the old claim and it is
+   cross-directory rename and hard links are refused everywhere. The
+   first was a written-down exception that nothing exercised until
+   2026-09-12; `test_landlock_confines` now makes the same probe answer
+   three ways inside one bind — device node refused, fifo and socket
+   allowed — which pins the exception and supplies the paired positive
+   the root-side refusals lacked. That is narrower than the old claim and it is
    true; the old one asserted both halves of a contradiction.
 
    A consequence worth knowing rather than discovering: `MAKE_REG` is one

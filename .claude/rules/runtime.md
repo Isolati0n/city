@@ -160,14 +160,25 @@ environment — so a change to any link is a change to everything below it.
 
 ## Bricks
 
-**Landlock grants WRITE beneath the root as of 2026-09-12**, because it
-runs after the brick pivot and that root is the overlay — granting only
-read made every landlock house's layer unwritable, confirmed live as
-`wr_root=denied(13)` where a read-only image gives `denied(30)`. What the
-lid still provides is the withheld `MAKE_` rights (no device nodes,
-sockets or fifos) and the scoping of binds. `MAKE_REG` is withheld too,
-so a landlock house modifies what its brick shipped with and creates
-nothing new under `/`. `CLAUDE.md` invariant 6, `HISTORY.md` §56.
+**Landlock grants WRITE beneath the root as of 2026-09-12, and NOT
+TRUNCATE**, because it runs after the brick pivot and that root is the
+overlay — granting only read made every landlock house's layer
+unwritable, confirmed live as `wr_root=denied(13)` where a read-only
+image gives `denied(30)`. What the lid still provides is the withheld
+`MAKE_` rights (no device nodes, sockets or fifos) and the scoping of
+binds. `MAKE_REG` is withheld too, so a landlock house modifies what its
+brick shipped with and creates nothing new under `/`.
+
+`TRUNCATE` was granted with the write for one round and is withheld
+again: an emptied exec path copies up into the durable layer and no
+boot recovers, which is the same unrecoverable state `REMOVE_FILE` is
+withheld to prevent — so granting one and withholding the other
+protected nothing. It is still granted **inside a declared bind**,
+which is machine-side and outside the layer. The consequence for a
+house: `open(..., O_TRUNC)` and `ftruncate` beneath `/` fail with
+EACCES; rewrite in place, or declare a bind. Enforced only at ABI ≥ 3,
+because the right does not exist below that.
+`CLAUDE.md` invariant 6, `HISTORY.md` §56 and §57.
 
 **A LAYER CAN MASK ITS BRICK, DURABLY.** "Reads fall through to the sealed
 image" is true and incomplete: the overlay can also whiteout and overwrite,
