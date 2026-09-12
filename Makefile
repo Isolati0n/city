@@ -84,6 +84,25 @@ unit-orphanslow: houses/orphan.c
 stage: all
 	rm -rf $(STAGE)
 	mkdir -p $(STAGE)/nw/bin $(STAGE)/nw/bricks $(STAGE)/nw/stores
+	# NW_BRICK_MNT ON THE HOST ROOT, and it is deliberate. nw-sup mounts a
+	# brick image on an ABSOLUTE path -- /nw/mnt -- because in production
+	# dawn has pivoted and the machine root IS the staged tree. The suite
+	# execs nw-root with no pivot, so that absolute path resolves against
+	# the host root, where nothing created it: every brick test failed at
+	# `mount brick image errno=2` until this line existed, which reads
+	# exactly like a code defect and is not one.
+	#
+	# This is the harness being LESS capable than the machine, the inverse
+	# of harness.md's usual case, and it is the first project-absolute path
+	# the TCB uses -- /dev/null, /dev/loop-control and /proc/self/fd are
+	# the others and the lab already provides those. One idempotent mkdir;
+	# concurrent suites cannot collide on it because each house's mount is
+	# in its own namespace (verified, docs/plans/01).
+	#
+	# The alternative was an env override for the mountpoint, which is the
+	# NW_HOLD_MS mistake exactly: a production control surface added for a
+	# lab need. Refused.
+	mkdir -p /nw/mnt
 	mkdir -p $(STAGE)/efi/slots/A $(STAGE)/efi/slots/B $(STAGE)/work
 	cp -f nw-dawn nw-root nw-spawn nw-check nw-sup nw-rescue \
 	      unit-probe unit-boom unit-badcall unit-term unit-brick unit-slowdie unit-dieterm \

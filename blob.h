@@ -26,6 +26,15 @@
 #define NW_FD_RESERVED  8
 #define NW_MAX_FDS      1024
 
+/* Where nw-sup mounts a brick image. A directory brick was bind-mounted
+   onto itself and was therefore its own mount point; an image is a file
+   and cannot be, so phase 2 needs somewhere to land it. Declared here
+   because TWO programs must agree on it -- dawn creates it, nw-sup mounts
+   on it -- and a path written in both places is the drift class invariant
+   3 is about. dawn prefixes NW_ROOT_MNT because it runs before the pivot;
+   nw-sup uses it as-is because it runs after. docs/plans/01. */
+#define NW_BRICK_MNT    "/nw/mnt"
+
 _Static_assert(NW_MAX_UNITS * 2 + NW_FD_RESERVED <= NW_MAX_FDS,
                "derived fd budget");
 

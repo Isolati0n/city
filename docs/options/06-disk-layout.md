@@ -181,6 +181,27 @@ boots with a real vfat ESP is where these get tested, and case-insensitivity
 is the one most likely to bite something, because content-addressed brick
 names are hex and a case collision would be silent.
 
+### CLOSED 2026-09-12: `dawn-real-boot` has now run on a real vfat ESP
+
+Reported by Grok from a QEMU boot, on a kernel that has the FAT driver this
+one does not. **It passed** — the gap above was untested in every
+environment available to either agent until then.
+
+**Read what that does and does not establish, because the two are easy to
+confuse.** It passed *for the reason predicted*: nothing on the ESP is
+executed, so the missing execute bit had nothing to bite. That confirms the
+corrected execute-bit reasoning and it confirms that dawn mounts and reads a
+real FAT ESP — no more.
+
+**So this section's reasoning now rests on properties nothing currently
+depends on.** Case-insensitivity, ownership and permission bits are still
+untested, and the argument that rules the ESP out for bricks leans on them.
+A green boot is not evidence about a property the boot never exercised —
+which is the `lid-landlock` shape, and the reason this note says what passed
+rather than "vfat works". The moment anything *executes* from the ESP, or
+puts a content-addressed hex name on it, these become live again and
+untested.
+
 ### Q3 — Is there a root filesystem, and is it writable?
 
 **Yes, and it must be writable somewhere**, because bricks, stores and

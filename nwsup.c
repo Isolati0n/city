@@ -6,6 +6,7 @@
 #include <fcntl.h>
 #include <linux/filter.h>
 #include <linux/landlock.h>
+#include <linux/loop.h>
 #include <linux/seccomp.h>
 #include <sched.h>
 #include <stddef.h>
@@ -14,6 +15,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <signal.h>
+#include <sys/ioctl.h>
 #include <sys/mount.h>
 #include <sys/prctl.h>
 #include <sys/syscall.h>
@@ -71,6 +73,26 @@ static void lid_newns(void)
  * Runs after the NEWNS unshare (it needs the private mount namespace) and
  * before Landlock and seccomp: the strict filter has no mount, no unshare
  * and no pivot_root, so a house sealed first could not pivot at all.
+ *
+ * PHASE 2: the brick is an EROFS IMAGE, not a directory. A directory was
+ * bind-mounted onto itself because pivot_root needs a mount point and a
+ * directory can be its own; a file cannot, so the image is attached to a
+ * loop device and mounted on NW_BRICK_MNT, which dawn created.
+ *
+ * What that buys is the seal, and it is the reason the phase exists: a
+ * directory brick is writable by the house that roots in it unless a lid
+ * says otherwise, and an image is not writable at all.
+ *
+ * THE SEAL IS OVER-DETERMINED and no flag below is what enforces it. The
+ * kernel forces read-only when either the backing fd or the loop fd is
+ * O_RDONLY, and erofs has no write path. Measured: with both fds O_RDWR
+ * and neither flag set, it still mounts ro and the house's write is still
+ * refused. So do not read LO_FLAGS_READ_ONLY or MS_RDONLY as the
+ * mechanism, and do not "control" this by removing one of them -- dropping
+ * MS_RDONLY fails at the MOUNT, which is a different failure wearing the
+ * right result. The control that works runs from the other side: make the
+ * brick a directory bind-mounted onto itself, the pre-phase-2 code, and
+ * the write succeeds. docs/plans/01.
  */
 static void lid_brick(const char *brick, char *const *binds, int nbinds)
 {
@@ -80,15 +102,50 @@ static void lid_brick(const char *brick, char *const *binds, int nbinds)
     if (mount(NULL, "/", NULL, MS_REC | MS_PRIVATE, NULL) < 0)
         die("make rprivate");
 
-    /* pivot_root requires the new root to be a mount point, and a brick is a
-     * plain directory. Binding it onto itself mounts *at* the brick; it does
-     * not write into it, so the seal is untouched. */
-    if (mount(brick, brick, NULL, MS_BIND | MS_REC, NULL) < 0)
-        die("bind brick");
+    /* O_RDONLY here is half of why the seal cannot be got wrong: the kernel
+     * marks the device read-only from the backing descriptor regardless of
+     * the flags requested below. */
+    int img = open(brick, O_RDONLY | O_CLOEXEC);
+    if (img < 0) die("open brick image");
+
+    /* LOOP_CTL_GET_FREE allocates past max_loop -- that parameter is how
+     * many devices exist at module load, not a ceiling. Measured 2026-09-12:
+     * 4096 attached on a kernel reporting 8, no ceiling found. So there is
+     * no derived limit here and nothing in blob.h for it; see docs/plans/01
+     * for the trigger that would change that. */
+    int ctl = open("/dev/loop-control", O_RDWR | O_CLOEXEC);
+    if (ctl < 0) die("open loop-control");
+    int idx = ioctl(ctl, LOOP_CTL_GET_FREE);
+    close(ctl);
+    if (idx < 0) die("loop get free");
+
+    char dev[32];
+    int dn = snprintf(dev, sizeof dev, "/dev/loop%d", idx);
+    if (dn < 0 || (size_t)dn >= sizeof dev) die("loop device name");
+    int ld = open(dev, O_RDONLY | O_CLOEXEC);
+    if (ld < 0) die("open loop device");
+
+    /* LO_FLAGS_AUTOCLEAR is the design decision here: the device frees
+     * itself when its last reference goes, so there is no teardown path to
+     * get wrong, no cleanup on any die() below, and nothing leaked when a
+     * house is killed. Its control is real -- drop it and `losetup -a`
+     * shows the device still attached after the house exits. */
+    struct loop_config cfg;
+    memset(&cfg, 0, sizeof cfg);
+    cfg.fd = (uint32_t)img;
+    cfg.info.lo_flags = LO_FLAGS_AUTOCLEAR | LO_FLAGS_READ_ONLY;
+    if (ioctl(ld, LOOP_CONFIGURE, &cfg) < 0) die("loop configure");
+    close(img);
+
+    if (mount(dev, NW_BRICK_MNT, "erofs", MS_RDONLY | MS_NODEV, NULL) < 0)
+        die("mount brick image");
+    /* The mount holds the device now, so the descriptor can go. AUTOCLEAR
+     * frees it when the mount does, which is when this namespace dies. */
+    close(ld);
 
     for (int i = 0; i < nbinds; i++) {
-        char tgt[NW_BRICK_LEN + NW_PATH_LEN];
-        int n = snprintf(tgt, sizeof tgt, "%s%s", brick, binds[i]);
+        char tgt[sizeof(NW_BRICK_MNT) + NW_PATH_LEN];
+        int n = snprintf(tgt, sizeof tgt, "%s%s", NW_BRICK_MNT, binds[i]);
         if (n < 0 || (size_t)n >= sizeof tgt)
             die("bind target too long");
         /* The mount point must already exist inside the brick. nw-sup will
@@ -107,8 +164,10 @@ static void lid_brick(const char *brick, char *const *binds, int nbinds)
      * tree. This form needs neither. */
     int oldroot = open("/", O_DIRECTORY | O_RDONLY | O_CLOEXEC);
     if (oldroot < 0) die("open oldroot");
-    int newroot = open(brick, O_DIRECTORY | O_RDONLY | O_CLOEXEC);
-    if (newroot < 0) die("open brick");
+    /* The new root is the MOUNTPOINT now, not the brick path: the brick is
+     * a file and the house roots in what was mounted from it. */
+    int newroot = open(NW_BRICK_MNT, O_DIRECTORY | O_RDONLY | O_CLOEXEC);
+    if (newroot < 0) die("open brick mountpoint");
     if (fchdir(newroot) < 0) die("fchdir brick");
     if (syscall(SYS_pivot_root, ".", ".") < 0) die("pivot_root");
     if (fchdir(oldroot) < 0) die("fchdir oldroot");

@@ -147,7 +147,16 @@ moved.
 
 Phase 1 ships alone and changes nothing at runtime.
 
-## Phase 2 — `nw-sup` loop-mounts the image. The TCB change.
+## Phase 2 — `nw-sup` loop-mounts the image. The TCB change. **LANDED 2026-09-12.**
+
+Capability-checked before a line was written, because a phase verified in
+exactly one environment is the position Landlock was in immediately before
+it turned out never to have worked anywhere it applied. All three, in
+order, on this machine: **pack** (`mkfs.erofs` 1.7.1), **attach**
+(`LOOP_CTL_GET_FREE`), **mount** (`erofs`, and a write into it refused).
+`erofs_available()` in `tests/run.py` asks the same three questions at run
+time and produces a **named skip**, never a green line, when any is
+missing.
 
 `lid_brick()` currently bind-mounts a directory onto itself because
 `pivot_root` needs a mount point. It instead:

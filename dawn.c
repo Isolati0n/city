@@ -41,6 +41,24 @@
 #include <sys/syscall.h>
 #include <unistd.h>
 
+/* The ONE project header dawn includes, and it is for one constant:
+   NW_BRICK_MNT, the directory nw-sup mounts a brick image on. dawn creates
+   it and nw-sup mounts on it, so the two must agree; writing the path in
+   both files is precisely the drift class invariant 3 exists to remove, and
+   blob.h is already where constants two programs share are declared.
+   Justified here because a TCB file gaining a dependency needs a reason
+   stated, and dawn is the one TCB .c that included no project header:
+   it deliberately knows nothing about plans, and it still does not. It
+   reads no field of any struct in blob.h and calls none of its three
+   `static inline` accessors, so nothing is emitted -- checked, not
+   assumed: the disassembly is byte-identical with the include and with a
+   literal path in its place, and only the debug info differs, because it
+   names the header. (This comment said "declarations only, no code" until
+   that check was run. blob.h has three static inline functions; they emit
+   nothing here only because nobody calls them, which is a different
+   statement and the true one.) */
+#include "blob.h"
+
 #define NW_ROOT_MNT   "/sysroot"
 #define NW_OLD_ROOT   "oldroot"       /* relative to the new root */
 #define NW_ESP_AT     "/efi"          /* after pivot */
@@ -139,6 +157,13 @@ int main(void)
      * nothing under /nw/stores is touched. See docs/options/05. */
     mkpath(NW_ROOT_MNT "/nw/bricks");
     mkpath(NW_ROOT_MNT "/nw/stores");
+    /* Phase 2's mountpoint. An image is a file and cannot be bind-mounted
+     * onto itself the way a directory brick is, so lid_brick() needs
+     * somewhere to land it. One mkdir here, once, ever -- against a tmpfs
+     * per house per boot, which buys nothing because this directory is
+     * empty and pivot_root covers it a moment later, and which would still
+     * need an existing directory to mount on. docs/plans/01. */
+    mkpath(NW_ROOT_MNT NW_BRICK_MNT);
     mkpath(NW_ROOT_MNT "/" NW_OLD_ROOT);
 
     /* A bootloader-supplied root is MS_SHARED; pivot_root and MS_MOVE

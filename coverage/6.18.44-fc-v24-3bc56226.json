@@ -12,6 +12,7 @@
   "baker-rejects",
   "baker-writes-the-declared-layout",
   "blob-size-ceiling",
+  "brick-image-is-sealed",
   "brick-image-reproducible",
   "brick-is-a-root",
   "brick-needs-newns",

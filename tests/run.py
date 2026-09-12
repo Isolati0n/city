@@ -1555,10 +1555,71 @@ def make_brick(ident, mirrors=()):
             h.update(b"F" + os.path.relpath(full, tmp).encode() + b"\0")
             h.update(str(os.stat(full).st_mode).encode() + b"\0")
             h.update(open(full, "rb").read())
-    brick = f"{STAGE}/nw/bricks/{h.hexdigest()}"
-    subprocess.run(["rm", "-rf", brick], check=False)
-    os.rename(tmp, brick)
+    # PHASE 2: pack the tree into an erofs IMAGE. `brick=` names a file
+    # now, not a directory -- nw-sup loop-mounts it on NW_BRICK_MNT. The
+    # hash is still over the tree's contents, so two bricks that differ
+    # only in /id still land at different paths on their own.
+    #
+    # The image is what buys the seal, and the seal is the reason phase 2
+    # exists: a directory brick is writable by the house that roots in it
+    # unless a lid says otherwise. See test_brick_image_is_sealed.
+    brick = f"{STAGE}/nw/bricks/{h.hexdigest()}.img"
+    subprocess.run(["rm", "-f", brick], check=False)
+    r = run(["mkfs.erofs", "-zlz4", brick, tmp])
+    expect(r.returncode == 0 and os.path.exists(brick),
+           f"mkfs.erofs failed packing {ident}; erofs_available() should "
+           f"have skipped this test before here\n{r.out}{r.err}")
+    subprocess.run(["rm", "-rf", tmp], check=False)
     return brick
+
+
+_EROFS = None
+
+
+def erofs_available():
+    """Can this machine PACK, ATTACH and MOUNT an erofs image?
+
+    All three, because they are three different capabilities and a machine
+    can have any subset. This one has all three; a clone of it can mount
+    erofs with no mkfs.erofs; another environment has neither. If phase 2
+    were verified in exactly one environment that would be the position
+    Landlock was in immediately before it turned out never to have worked
+    anywhere it applied -- so this asks the question the code under test
+    asks, and a missing capability is a NAMED SKIP, never a green line.
+    """
+    global _EROFS
+    if _EROFS is not None:
+        return _EROFS
+    if not shutil.which("mkfs.erofs"):
+        _EROFS = "mkfs.erofs is not installed, so no brick image can be packed"
+        return _EROFS
+    if "erofs" not in open("/proc/filesystems").read():
+        _EROFS = "the kernel has no erofs driver (/proc/filesystems)"
+        return _EROFS
+    if not os.path.exists("/dev/loop-control"):
+        _EROFS = "/dev/loop-control is absent, so no image can be attached"
+        return _EROFS
+    # Ask by doing: pack, attach, mount. Reading /proc/filesystems says the
+    # driver is present, not that this container may use it.
+    d = tempfile.mkdtemp(dir=WORK)
+    try:
+        os.makedirs(f"{d}/t")
+        open(f"{d}/t/id", "w").write("probe\n")
+        if run(["mkfs.erofs", "-zlz4", f"{d}/i.img", f"{d}/t"]).returncode != 0:
+            _EROFS = "mkfs.erofs is installed but failed on a trivial tree"
+            return _EROFS
+        os.makedirs(f"{d}/m")
+        m = run(["mount", "-t", "erofs", "-o", "ro,nodev,loop",
+                 f"{d}/i.img", f"{d}/m"])
+        if m.returncode != 0:
+            _EROFS = ("an erofs image could be packed but not mounted: "
+                      + (m.err or m.out).strip()[:120])
+            return _EROFS
+        run(["umount", f"{d}/m"])
+        _EROFS = False          # False means "no reason to skip"
+        return _EROFS
+    finally:
+        subprocess.run(["rm", "-rf", d], check=False)
 
 
 def test_brick_is_a_root():
@@ -1702,6 +1763,65 @@ def test_path_traversal_refused():
            f"a traversing plan must be refused by name, not merely halt on"
            f"\n{out}")
     print("ok path-traversal-refused")
+
+
+def test_brick_image_is_sealed():
+    """A house cannot write into its own brick, and NO LID IS DOING THAT.
+
+    This is the test that justifies phase 2. Under the directory brick a
+    house rooted in its own brick could write into it, and the only thing
+    that stopped it was the Landlock lid -- which is opt-in, and which on
+    this machine does not exist at all. An image is not writable, by
+    anything, with no lid asked for.
+
+    `lids=newns` is the whole lid set here. NEWNS is structurally required
+    (a brick forces it -- nwcheck returns NW_E_BRICKNS without it, and
+    nw-sup re-checks) and it confines nothing: it makes the mount private,
+    it does not make it read-only. No Landlock, no seccomp. So a refusal
+    here is the filesystem's, which is the property being bought.
+
+    THE SEAL IS OVER-DETERMINED and the control does not run from the flag
+    side. The kernel forces read-only when either fd is O_RDONLY and erofs
+    has no write path, so removing MS_RDONLY or LO_FLAGS_READ_ONLY does not
+    produce a successful write -- it fails at the mount, which is a
+    different failure wearing the right result. The control that works is
+    the other side: make the brick a directory bind-mounted onto itself,
+    which is what nw-sup did before this phase, and the write succeeds.
+    docs/plans/01 records both, measured.
+    """
+    why = erofs_available()
+    if why:
+        skip("brick-image-is-sealed", why)
+        return
+    brick = make_brick("sealed-one")
+    city = f"{WORK}/sealed.city"
+    open(city, "w").write(
+        f"house sealed /bin/brick kind=oneshot lids=newns brick={brick}\n")
+    blob = f"{WORK}/sealed.blob"
+    b = run(["python3", CC, "--city", city, "--out", blob])
+    expect(b.returncode == 0, f"bake\n{b.out}{b.err}")
+    rc, out = boot(plan=blob, hold=800)
+    expect(city_closed(rc, out), f"sealed rc={rc}\n{out}")
+
+    # PAIRED. "the write was refused" is satisfied by the refusal AND by a
+    # house that never started, and those are opposite outcomes. The house
+    # reading its own /id out of the image is what makes the refusal below
+    # a claim about the seal rather than about a house that is not there.
+    expect("sealed id=sealed-one" in out,
+           f"the house did not read its own brick's /id, so it either never "
+           f"ran or is not rooted in the image -- the refusal below would "
+           f"be about nothing\n{out[-1500:]}")
+    # EROFS is 30. Assert the reason, not merely that it was not "ok": a
+    # bare `"wr_root=ok" not in out` passes when the house never printed
+    # the line at all.
+    expect("sealed wr_root=denied(30)" in out,
+           f"the house's write into its own brick was not refused with "
+           f"EROFS. A brick that its own house can write is not sealed, "
+           f"and the seal is the property this phase exists to buy.\n"
+           f"{out[-1500:]}")
+    print("ok brick-image-is-sealed (lids=newns only -- no landlock, no "
+          "seccomp; the house read its own /id out of the image and its "
+          "write came back EROFS)")
 
 
 def test_brick_needs_newns():
@@ -3399,7 +3519,7 @@ def main():
         test_crash_does_not_halt, test_budget_is_hard_total,
         test_shutdown_does_not_restart, test_term_signal, test_dawn_real_boot,
         test_kind_required, test_kind_exit0, test_seccomp_kills,
-        test_brick_is_a_root, test_brick_needs_newns,
+        test_brick_is_a_root, test_brick_image_is_sealed, test_brick_needs_newns,
         test_path_traversal_refused, test_dupname_refused,
         test_blob_size_ceiling,
         test_checker_rejects_crafted_fields,
