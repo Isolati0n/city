@@ -49,6 +49,13 @@ static void nw_emit(const char *fmt, ...)
     if (n > WIDTH - 1) n = WIDTH - 1;
     memset(b, ' ', WIDTH);
     memcpy(b, t, n);
+    /* A MARKER WHEN CUT, because the clamp is silent otherwise and the
+     * root listing is built into a 256-byte buffer before it reaches
+     * here. test_brick_is_a_root intersects that listing with the
+     * machine root's entries, so a truncated line could read as a
+     * complete one -- it survives today only because this host's `/`
+     * happens to put `etc` inside the first 63 bytes. */
+    if (strlen(t) > WIDTH - 1) b[WIDTH - 2] = '>';
     b[WIDTH - 1] = '\n';
     (void)!write(1, b, WIDTH);
 }
@@ -243,16 +250,40 @@ static void report_write_existing(const char *key, const char *path)
  * NW_LID_SECCOMP. */
 static void report_mknod(const char *key, const char *path)
 {
+    /* ONLY WHERE IT IS READ. Gated on NW_LID_LANDLOCK (0x02), not on the
+     * absence of seccomp: the first version ran in every brick house
+     * that did not declare seccomp and left an unasserted, uncleaned
+     * device node on the machine root in nine layers after one suite
+     * run. A probe that fires where nothing reads it is litter.
+     *
+     * Seccomp would kill this house anyway -- no `mknod`/`mknodat` in
+     * the allow-list, measured as status 18176 -- and that is why the
+     * skip is REPORTED rather than silent: an absent line reads the
+     * same as a refusal. */
     const char *lv = getenv("NW_LIDS");
-    if (lv && (atoi(lv) & 1)) {
+    int lids = lv ? atoi(lv) : 0;
+    if (!(lids & 2)) {
+        nw_emit("%s %s=skipped-nolandlock", me, key);
+        return;
+    }
+    if (lids & 1) {
         nw_emit("%s %s=skipped-seccomp", me, key);
         return;
     }
     if (mknod(path, S_IFCHR | 0600, makedev(1, 3)) == 0) {
         nw_emit("%s %s=ok", me, key);
-        return;   /* no unlink, same reason as mk_bind below */
+    } else {
+        nw_emit("%s %s=denied(%d)", me, key, errno);
     }
-    nw_emit("%s %s=denied(%d)", me, key, errno);
+    /* A FIFO TOO. The claim is "no device nodes, sockets or fifos" and
+     * only the first noun was probed: granting MAKE_FIFO, MAKE_SOCK,
+     * MAKE_DIR or MAKE_SYM at the root left every assertion green.
+     * mknod with S_IFIFO needs no syscall the line above does not. */
+    char f[512];
+    snprintf(f, sizeof f, "%s.fifo", path);
+    int fr = mknod(f, S_IFIFO | 0600, 0);
+    nw_emit("%s %s_fifo=%s(%d)", me, key, fr == 0 ? "ok" : "denied",
+            fr == 0 ? 0 : errno);
 }
 
 int main(int argc, char **argv)

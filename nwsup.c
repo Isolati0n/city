@@ -300,12 +300,18 @@ static void lid_brick(const char *brick, const char *layer,
  * library paths to guess at -- and guessing a list of paths in the TCB is the
  * fixed-descriptor-number class wearing a third costume.
  *
- * The restriction that remains is write. Nothing grants write beneath the
- * root, so **a house cannot write into its own brick** -- which is a property
- * the mount namespace never gave us, and the seal a content-addressed brick
- * is supposed to have. Declared binds get read and write: the plan already
- * says which paths are the house's to modify, so the bind table is the policy
- * input and nothing new is invented.
+ * WHAT THIS LID RESTRICTS, as of 2026-09-12: a house **cannot create,
+ * delete or rename anything beneath its root, except inside a declared
+ * bind.** Write and truncate ARE granted at the root -- see the note at
+ * the grant -- so the bind table is the policy input for *structure*
+ * rather than for write.
+ *
+ * This said "nothing grants write beneath the root, so a house cannot
+ * write into its own brick" until the grant changed eighty lines below
+ * it. A stale docstring is the first thing an agent reads in this file,
+ * and `CLAUDE.md`'s own new rule -- a rule is at its weakest in the
+ * change that introduces it -- was written in the same commit that left
+ * this one behind. Fourth instance. `tcb-review`.
  *
  * Device nodes are deliberately not creatable even in a bind (MAKE_CHAR and
  * MAKE_BLOCK are handled and never granted).

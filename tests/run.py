@@ -329,7 +329,10 @@ def run(cmd, **kw):
     return p
 
 
-def stage_layers(blob):
+_LAYERS_RESET = set()
+
+
+def stage_layers(blob, reset=True):
     """Create the writable layers a plan declares, through the one tool
     that creates them.
 
@@ -358,8 +361,24 @@ def stage_layers(blob):
     # about surviving a restart WITHIN one boot, and it hand-rolled this
     # same rmtree for itself; one mechanism instead, so a new brick test
     # cannot forget it.
-    for lid in (l.strip() for l in open(blob + ".layers") if l.strip()):
-        shutil.rmtree(os.path.join(_layer_dir(), lid), ignore_errors=True)
+    # ONCE PER SUITE PROCESS, PER ID -- not per boot and not per test.
+    #
+    # Per boot was wrong: production never wipes a layer, and a future
+    # test of durability across REBOOT is two boot() calls on one blob,
+    # which would have been silently wiped between them. Per test is
+    # unenforceable -- it is the thing a new brick test forgets.
+    #
+    # First sighting of an id in this process resets it, every later
+    # sighting does not. So each test starts from a pristine layer
+    # without inheriting the previous suite RUN's, and a test that boots
+    # the same plan twice keeps what the first boot wrote.
+    if reset:
+        for lid in (l.strip() for l in open(blob + ".layers") if l.strip()):
+            if lid in _LAYERS_RESET:
+                continue
+            _LAYERS_RESET.add(lid)
+            shutil.rmtree(os.path.join(_layer_dir(), lid),
+                          ignore_errors=True)
     r = run(["python3", os.path.join(ROOT, "tools", "stage-layers.py"),
              blob, "--quiet"])
     expect(r.returncode == 0, f"stage-layers failed\n{r.out}{r.err}")
@@ -368,6 +387,10 @@ def stage_layers(blob):
 def boot(slot=None, plan=None, extra=None, hold=800):
     # Staged here so no test can forget it, and so the suite exercises the
     # production ordering: layers exist BEFORE the boot that needs them.
+    # stage_layers() resets an id the FIRST time it sees it in this
+    # process and never again, so two boots of one plan keep what the
+    # first wrote -- see the note there. `tcb-review` caught the version
+    # that reset on every boot.
     if plan:
         stage_layers(plan)
     cmd = ["unshare", "--pid", "--fork", "--mount-proc", "--", f"{BIN}/nw-root", "--hold-ms", str(hold)]
@@ -2659,13 +2682,20 @@ def test_landlock_confines():
 
       the house started            -- it can read and execute its own brick
       it can write a declared bind -- the plan said that path was its to write
-      it CANNOT write its brick    -- nothing granted write beneath the root
+      it CAN write its root        -- WRITE_FILE and TRUNCATE are granted
+                                      beneath / since 2026-09-12; the
+                                      brick itself is untouched because
+                                      writes land in the layer
 
     The third is the confinement. Without it this is a test that the house
     started, which proves nothing about what it can touch.
 
-    Negative control: change the "/" grant in lid_landlock from `ro` to `rw`
-    and wr_root becomes ok, failing this test."""
+    Negative control: change the "/" grant in lid_landlock from `root` to
+    `rw` and wr_root becomes ok, failing the discrimination assertion;
+    change it back to `ro` and wr_existing becomes denied(13), failing
+    the first. The variable is `root` now, not `ro` -- this sentence said
+    `ro` after the grant changed, which is the same stale-docstring shape
+    as the one in nwsup.c the same round had to fix."""
     abi = landlock_abi()
     if abi is None:
         skip("landlock-confines",
@@ -2750,15 +2780,28 @@ def test_landlock_confines():
            f"the root since 2026-09-12; if this is denied(13) the grant "
            f"did not take, and if denied(30) the layer did not mount"
            f"\n{out}")
+    # THE ERRNO, NOT "denied" -- the same defect this round spent a pass
+    # removing from wr_root, reintroduced one line below it. denied(1) is
+    # EPERM (no CAP_MKNOD) and denied(13) is EACCES (Landlock): opposite
+    # readings, and this is the SOLE evidence for the whole "what the lid
+    # still provides" claim, so it would also stay green if the houses
+    # simply stopped holding CAP_MKNOD. `tcb-review`.
     mk = field("mknod_root").get("sealed", "")
-    expect(mk.startswith("denied"),
-           f"a landlock house created a DEVICE NODE at its root: "
-           f"mknod_root={mk}. The MAKE_ rights are what the lid still "
-           f"withholds, and without them it grants everything the "
-           f"filesystem would have\n{out}")
+    expect(mk == "denied(13)",
+           f"a device node at the root was not refused BY LANDLOCK: "
+           f"mknod_root={mk}. denied(1) is EPERM -- the house lacks "
+           f"CAP_MKNOD and the lid is proving nothing; `ok` means the "
+           f"MAKE_ rights leaked\n{out}")
+    # AND A FIFO, because the claim names three nouns and only one was
+    # probed: granting MAKE_FIFO, MAKE_SOCK, MAKE_DIR or MAKE_SYM at the
+    # root left every assertion here green.
+    mkf = field("mknod_root_fifo").get("sealed", "")
+    expect(mkf.startswith("denied"),
+           f"a landlock house created a FIFO at its root: "
+           f"mknod_root_fifo={mkf}\n{out}")
     wr = field("wr_root").get("sealed", "")
     mkb = field("mk_bind").get("sealed", "")
-    expect(wr.startswith("denied") and mkb.startswith("ok"),
+    expect(wr == "denied(13)" and mkb.startswith("ok"),
            f"the lid no longer DISCRIMINATES: creating a file must be "
            f"refused at the root (MAKE_REG withheld) and allowed in a "
            f"declared bind. Got wr_root={wr} mk_bind={mkb}\n{out}")

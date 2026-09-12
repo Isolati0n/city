@@ -5103,3 +5103,71 @@ arriving as over-acceptance**: the suite exercised the field and never
 exercised two houses disagreeing about it. Both directions again, and the
 missing direction was neither accept nor reject — it was *two units
 interacting through one field*.
+
+### §56 addendum: the narrowed claim was wrong in four places
+
+`tcb-review` against `00b6e3e`. The resolution held; the *description*
+of it did not, and one of the findings is the pattern named four lines
+away in the same commit.
+
+- **`lid_landlock()`'s own docstring still said "nothing grants write
+  beneath the root, so a house cannot write into its own brick"** —
+  eighty lines above the grant that now does. The header comment is the
+  first thing an agent reads in that file. Fourth instance of *a rule is
+  at its weakest in the change that introduces it*, and this one was
+  four lines from where the rule was written down.
+- **"cannot reach a path it was not given" is the BRICK's property, not
+  the lid's.** After the pivot the reachable namespace *is* `/`, and
+  `test_brick_is_a_root` proves it with no Landlock at all. Claiming it
+  repeated exactly what §56 retired: a claim standing next to a
+  mechanism already doing the work. The lid's real addition over the
+  pivot — Landlock refuses mount, umount and pivot_root for any domain —
+  was nowhere stated.
+- **"gives away nothing that was being protected" is false, and the same
+  commit documented the cost nine lines earlier.** `TRUNCATE` is granted
+  at the root, so a landlock house can truncate its own exec path; that
+  copies up into the durable layer and is the unrecoverable state
+  `runtime.md` describes. `REMOVE_FILE` stays withheld so it cannot
+  *unlink* — truncating reaches the same place. Before this change
+  `landlock` was the one lid set immune. Withholding `TRUNCATE` would
+  restore the immunity and is recorded as a live option rather than
+  taken, because granting it was specified.
+- **"declared binds still get the full set" is false** — `MAKE_CHAR` and
+  `MAKE_BLOCK` are withheld even in a bind, which `nwsup.c` had said all
+  along, in the file the new sentence described.
+- **Invariant 5 was falsified and not updated:** "it can create files
+  under `/`" is now untrue for a landlock house. And invariant 6's
+  "cannot create a new one under `/`" is contradicted by this change's
+  own test, which requires creating a file *in a bind* to succeed — a
+  bind is under `/`. The word was "outside a declared bind".
+
+### And the errno lesson had to be learned twice in one round
+
+`expect(mk.startswith("denied"))` for the device node — **the exact
+defect this round spent a pass removing from `wr_root`, reintroduced one
+line below it.** `denied(1)` is EPERM (no `CAP_MKNOD`, the lid proving
+nothing) and `denied(13)` is EACCES (Landlock). It was also the *sole*
+evidence for the whole "what the lid still provides" claim. Both
+assertions require the errno now.
+
+Asking the suite's own question — what single change leaves all three
+green — also found that granting `MAKE_SOCK`, `MAKE_FIFO`, `MAKE_DIR` or
+`MAKE_SYM` at the root changed nothing, so "device nodes, sockets or
+fifos" was pinned for the first noun only. There is a fifo probe now.
+
+### The reset was at the wrong granularity, twice
+
+Per boot wiped a layer between two boots of one plan — and the property
+this work documents is durability across *reboot*, so the obvious future
+test for it would have been silently defeated. Per test is what a new
+brick test forgets. It resets **once per suite process, per id**: each
+test starts pristine without inheriting the previous run, and a test
+that boots one plan twice keeps what the first boot wrote. Verified by
+running the suite twice in a row with layers already on disk.
+
+Also: the `mknod` probe fired in every non-seccomp brick house while
+only one test read it, leaving unasserted device nodes in nine layers on
+the machine root after a single run. Gated on `NW_LID_LANDLOCK` now —
+it runs where it is read. And `nw_emit()` clamped to 63 bytes silently;
+the root listing is built into a 256-byte buffer before reaching it, so
+a cut line could read as a complete one. It marks the cut.

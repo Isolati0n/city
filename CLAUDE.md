@@ -176,8 +176,10 @@ sections after this one and are deliberately not numbered here.
    is born with, and that is still exactly three descriptors.
 
    **Neither is a writable layer.** Every house with a brick roots in that
-   brick plus one writable area, so it can create files under `/` — but it
-   opens them itself, by name, with no descriptor passed in. The layer
+   brick plus one writable area, so it can write beneath `/` — and create
+   files there too, unless it declares `landlock`, which withholds
+   `MAKE_REG` at the root (invariant 6). Either way it opens them itself,
+   by name, with no descriptor passed in. The layer
    changes what a house can *keep*, not what it is *given*. Three
    descriptors, still, and `test_brick_is_a_root`'s census asserts it by
    name on a house that has one.
@@ -230,8 +232,19 @@ sections after this one and are deliberately not numbered here.
    erofs — `wr_root=denied(13)`, EACCES from the lid, where a read-only
    image gives `denied(30)`.
 
-   Write is granted beneath the root now. It gives away nothing that was
-   being protected: the root is a private overlay no other house can see.
+   Write is granted beneath the root now. No *other* house can see the
+   overlay, so nothing is exposed by it — **but it does give one thing
+   away, and the same commit that claimed otherwise documented the cost
+   nine lines earlier.** `TRUNCATE` is granted too, so a landlock house
+   can truncate its own exec path or a library in its brick, and that
+   copies up into the **durable** layer: `FAIL exec house errno=2` on
+   every boot thereafter, recoverable only by deleting the layer and
+   re-staging. `REMOVE_FILE` stays withheld so it cannot *unlink* the
+   file — truncating reaches the same state. Before this change
+   `landlock` was the one lid set immune to that. Withholding `TRUNCATE`
+   would restore the immunity and is a live option; it was granted
+   because it was specified, and this paragraph exists so that is a
+   decision rather than an accident. `tcb-review`.
 
    **The Landlock lid is for a house in a brick**, and requires one
    (`NW_E_LLBRICK`). It grants read, execute and **write** beneath the
@@ -240,17 +253,35 @@ sections after this one and are deliberately not numbered here.
    paths guessed at in the TCB, and the layer is writable as every other
    brick house's is.
 
-   **So what the lid provides is not "the house cannot write". It is: the
-   house cannot create device nodes, sockets or fifos, and cannot reach a
-   path it was not given.** The `MAKE_` rights stay withheld beneath the
-   root and declared binds still get the full set, which makes the bind
-   table the policy input. That is narrower than the old claim and it is
+   **So what the lid provides is not "the house cannot write". It is: a
+   house cannot create, delete or rename anything beneath its root,
+   except inside a declared bind.** The `MAKE_*` and `REMOVE_*` rights
+   are withheld at the root and granted in binds, which makes the bind
+   table the policy input for *structure* rather than for write.
+
+   *Not* "cannot reach a path it was not given" — that was the wording
+   for one round and it is the **brick's** property, not the lid's. After
+   the pivot the reachable namespace *is* `/`, and `test_brick_is_a_root`
+   proves it with `lids=newns,seccomp` and no Landlock at all. Claiming
+   it here repeats exactly what this section retired: a claim standing
+   next to a mechanism already doing the work. What the lid does add over
+   the pivot is that Landlock refuses mount, umount and pivot_root for
+   any domain, which matters for a house with no seccomp.
+
+   Two exceptions, both older than this change and neither previously
+   written down: device nodes are refused **even in a bind**
+   (`MAKE_CHAR` and `MAKE_BLOCK` are handled and never granted, which
+   `nwsup.c` has said all along), and `REFER` is not handled at all, so
+   cross-directory rename and hard links are refused everywhere. That is narrower than the old claim and it is
    true; the old one asserted both halves of a contradiction.
 
    A consequence worth knowing rather than discovering: `MAKE_REG` is one
    of the withheld rights, so a landlock house can modify a file its
-   brick already contains and cannot create a new one under `/`. Granting
-   it is a deliberate change here and in this paragraph, not a fix.
+   brick already contains and cannot create a new one **outside a
+   declared bind**. (It said "under `/`", which this change's own test
+   contradicts — a bind *is* under `/`, and assertion 3 requires creating
+   a file in one to succeed.) Granting `MAKE_REG` at the root is a
+   deliberate change here and in this paragraph, not a fix.
    `HISTORY.md` §26 and §56.
 
    **Lids are not advisory.** If a declared lid cannot be applied, that house
