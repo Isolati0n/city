@@ -69,21 +69,38 @@ def stage(blob_path, root=""):
     #
     # Through `.sha256` rather than by parsing the blob: a third copy of
     # the unit layout is the drift class this file's docstring is about.
-    # Absent `.sha256` is not fatal here -- a blob may arrive from
-    # somewhere that writes no sidecars at all, and this tool's contract
-    # is the `.layers` beside it -- but a `.sha256` that DISAGREES is.
+    # ABSENT `.sha256` IS FATAL TOO, and the first version of this said
+    # otherwise on a producer that does not exist: the one writer of
+    # `.layers` is the baker, which writes `.sha256` beside it in the
+    # same function, unconditionally, and `stage-candidate` renames
+    # both. So a blob
+    # "from somewhere that writes no sidecars" has no `.layers` either
+    # and is refused below. The reachable way to have one without the
+    # other is to have LOST the `.sha256`, which is the damage case.
+    # It also made the two readers answer the same input differently:
+    # the stager refuses an unreadable live `.sha256` and this one
+    # proceeded. `control`.
     import hashlib
     sha = blob_path + ".sha256"
-    if os.path.exists(sha) and os.path.exists(blob_path):
-        want = open(sha).read().strip()
-        got = hashlib.sha256(open(blob_path, "rb").read()).hexdigest()
+    if os.path.exists(side):
+        try:
+            want = open(sha).read().strip()
+            got = hashlib.sha256(open(blob_path, "rb").read()).hexdigest()
+        except OSError as e:
+            raise SystemExit(
+                f"stage-layers: there is a layer sidecar beside "
+                f"{blob_path} but its hash sidecar cannot be read "
+                f"({e}), so nothing says the layer list describes this "
+                f"blob. Refusing.")
         if want != got:
             raise SystemExit(
                 f"stage-layers: {sha} does not describe {blob_path}, so "
                 f"the sidecars beside it are stale -- an interrupted "
                 f"stage leaves exactly this. Staging the layers they "
                 f"name would create the layers of a plan that is not "
-                f"there. Refusing.")
+                f"there. Refusing. Write the hexdigest alone into that "
+                f"file if you are repairing it -- `sha256sum` emits "
+                f"'<hash>  <name>', which this compares whole.")
     try:
         ids = [l.strip() for l in open(side) if l.strip()]
     except OSError as e:

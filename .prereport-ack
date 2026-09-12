@@ -133,3 +133,9 @@ unpaired-absence	tests/run.py	expect(not os.path.exists(f"{_layer_dir()}/{symlid
 # paired by the refusal above it: the tool ran, refused, and must have
 # removed the slot directory it created for the attempt
 unpaired-absence	tests/run.py	expect(not os.path.exists(f"{slots}/FRESH"),
+# paired by the rc!=0 in the same expression: the tool ran and refused, so
+# "no traceback" is about how it refused rather than about it not running
+unpaired-absence	tests/run.py	expect(r.returncode != 0 and "Traceback" not in (r.out + r.err),
+# paired by the refusal assertion two lines down, and by the fixture baking a
+# plan that names this layer -- without both, the absence proves nothing
+unpaired-absence	tests/run.py	expect(not os.path.exists(f"{pfx}{_layer_dir()}/{slid}"),

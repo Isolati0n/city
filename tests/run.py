@@ -3892,10 +3892,24 @@ def _candidate_stager_body(_sh, _ids_made):
         found a hole each time -- first one call with neither, then one
         with three of four. Remembering to add them is the thing that
         failed, so the wrapper does it and a new case cannot forget."""
+        cand = f"{slots}/B/plan.blob"
+        before = open(cand, "rb").read() if os.path.exists(cand) else None
         r = run(["python3", stager, "--slots", slots,
                  "--city", city or cand_city,
                  "--nw-check", nwck or chk] + list(extra))
         w = why or " ".join(str(x) for x in extra) or "stage"
+        # THE THIRD THING A REFUSAL MUST NOT DO. `_live_intact` watches
+        # the live slot and `_no_scratch` watches dotfiles; nothing
+        # watched the CANDIDATE's bytes except two hand-written
+        # comparisons, so a refusal moved below the renames printed
+        # "Refusing" and staged the candidate anyway. Third round
+        # running in which a refusal's POSITION was unpinned, and the
+        # third time the remedy is to put the check in the wrapper
+        # rather than at the sites someone remembers.
+        if r.returncode != 0 and before is not None:
+            expect(open(cand, "rb").read() == before,
+                   f"{w}: the refusal came AFTER the write -- the "
+                   f"candidate slot changed on a run that refused")
         # `check=False` only where the case itself has deliberately
         # changed the live slot -- the ill-formed `current` case, which
         # then asserts against the value IT wrote. One exception, named,
@@ -4129,6 +4143,16 @@ def _candidate_stager_body(_sh, _ids_made):
            f"--root still created the layer on the machine root")
     _live_intact("--root stage")
 
+    # A live slot whose directory is absent: a named refusal, not a
+    # traceback. The test asserts that standard for --nw-check and the
+    # guard added last round was new code failing it.
+    os.rename(f"{slots}/A", f"{WORK}/cand-A-hidden")
+    r = _stage(check=False, why="live slot directory absent")
+    os.rename(f"{WORK}/cand-A-hidden", f"{slots}/A")
+    expect(r.returncode != 0 and "Traceback" not in (r.out + r.err),
+           f"an absent live slot directory raised instead of refusing"
+           f"\n{r.out}{r.err}")
+
     # A slot that is the live one under another spelling.
     symlid = f"l-cs-sym-{tag}"
     _ids_made.append(symlid)
@@ -4139,9 +4163,14 @@ def _candidate_stager_body(_sh, _ids_made):
     open(sym_city, "w").write(
         f"house symone {BIN}/unit-probe kind=oneshot "
         f"lids=newns,seccomp brick={'34' * 32} layer={symlid}\n")
-    os.rmdir(f"{slots}/B") if not os.listdir(f"{slots}/B") else None
-    if os.path.isdir(f"{slots}/B"):
-        _sh.rmtree(f"{slots}/B")
+    # MOVED ASIDE, NOT DESTROYED. The first version rmtree'd the
+    # candidate slot to make room for the symlink and then recreated it
+    # EMPTY, so every case after this one had no candidate bytes to
+    # compare and `_stage()`'s candidate check silently did nothing --
+    # which is how the stale-sidecar refusal stayed position-unpinned
+    # even after the wrapper was given the check. A test that destroys
+    # its own evidence, for the third time in this work.
+    _sh.move(f"{slots}/B", f"{WORK}/cand-B-aside")
     os.symlink("A", f"{slots}/B")
     # WITH ITS OWN LAYER, because the guard's failure mode leaves
     # nothing else behind. `control` moved the samefile check below
@@ -4153,7 +4182,10 @@ def _candidate_stager_body(_sh, _ids_made):
     r = _stage(city=sym_city, why="symlinked slot")
     _no_new_layers("symlinked slot", symlid)
     os.unlink(f"{slots}/B")
-    os.makedirs(f"{slots}/B")
+    _sh.move(f"{WORK}/cand-B-aside", f"{slots}/B")
+    expect(os.path.exists(f"{slots}/B/plan.blob"),
+           "the candidate slot did not come back, so every later case "
+           "would compare against nothing")
     expect(r.returncode != 0 and "same directory" in (r.out + r.err),
            f"a slot symlinked to the live one was staged over: "
            f"`target == live` is a string compare and a symlink is "
@@ -4196,6 +4228,12 @@ def _candidate_stager_body(_sh, _ids_made):
     _src = open(f"{ROOT}/tools/stage-candidate.py").read()
     _m = re.search(r"for suffix in \(([^)]*)\):", _src)
     expect(_m, "the rename loop is gone from stage-candidate.py")
+    expect(_src.index("os.replace(blob, os.path.join(tdir") > _m.end(),
+           "stage-candidate renames the blob before its sidecars. That "
+           "leaves an interruption point where the blob and .sha256 are "
+           "new and .layers is old -- the sha matches, and the clash "
+           "check trusts a stale layer list. The tuple order alone does "
+           "not pin this; the blob must come last.")
     expect(_m.group(1).index('".sha256"') < _m.group(1).index('".layers"'),
            f"stage-candidate renames .layers before .sha256. An "
            f"interruption between them leaves a new layer list beside a "
@@ -4203,10 +4241,24 @@ def _candidate_stager_body(_sh, _ids_made):
            f"trusts it: {_m.group(1)}")
 
     # And the third reader refuses a stale pair too.
-    _sh.copytree(f"{slots}/A", f"{WORK}/cand-stale", dirs_exist_ok=True)
+    # WITH A LAYER, or the check's position cannot be observed: the
+    # live plan declares none, so the loop the check guards creates
+    # nothing either way and moving the check below it stayed green.
+    slid = f"l-cs-third-{tag}"
+    _ids_made.append(slid)
+    _sh.rmtree(f"{pfx}{_layer_dir()}/{slid}", ignore_errors=True)
+    stale_city = f"{WORK}/cand-stale.city"
+    open(stale_city, "w").write(
+        f"house staleone {BIN}/unit-probe kind=oneshot "
+        f"lids=newns,seccomp brick={'56' * 32} layer={slid}\n")
+    os.makedirs(f"{WORK}/cand-stale", exist_ok=True)
+    run(["python3", CC, "--city", stale_city,
+         "--out", f"{WORK}/cand-stale/plan.blob"])
     open(f"{WORK}/cand-stale/plan.blob.sha256", "w").write("deadbeef\n")
     r = run(["python3", f"{ROOT}/tools/stage-layers.py",
              f"{WORK}/cand-stale/plan.blob", "--root", pfx])
+    expect(not os.path.exists(f"{pfx}{_layer_dir()}/{slid}"),
+           f"tools/stage-layers.py created the layer before refusing")
     expect(r.returncode != 0 and "does not describe" in (r.out + r.err),
            f"tools/stage-layers.py staged the layers of a plan that is "
            f"not there. It is the tool THE RECOVERY tells an operator to "

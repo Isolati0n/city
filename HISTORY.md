@@ -6626,3 +6626,80 @@ machine root. **Pid keying converted interference into accumulation** —
 the forced-interleaving experiment confirms the interference class is
 closed, and the accumulation it left was new. A `finally` around the
 body closes it; a full suite run now leaves nothing behind.
+
+## 69. The wrapper had the check and the test had thrown the evidence away (2026-09-12)
+
+`control`'s fourth pass, scoped to what §68 added, with a stopping rule
+stated in advance: land unless something HIGH comes back. Nothing did.
+Its own verdict was one narrow round on the harness, and it named which
+finding not to leave.
+
+### The third thing a refusal must not do
+
+`_live_intact` watches the live slot and `_no_scratch` watches
+dotfiles. The candidate slot's own bytes were compared at two
+hand-written sites, so a refusal moved below the renames printed
+"Refusing" and staged the candidate anyway. **Third consecutive round
+in which a refusal's POSITION was unpinned**, and the third time the
+remedy is the same: put the check in `_stage()` rather than at the
+sites someone remembers.
+
+### And then it still did not fire
+
+Putting the comparison in the wrapper was not enough, and finding out
+why is the useful part. The symlink case needed `<slots>/B` to be a
+symlink, so it **rmtree'd the candidate slot** and recreated it empty
+afterwards. From that point on `before` was `None` at every call site
+and the wrapper's new check silently did nothing — which is why the
+control still passed after the fix.
+
+A test that destroys its own evidence, for the third time in this
+work: the probe that wrote over `/id`, the restore that ran before its
+assertion, and now a fixture that clears the slot the wrapper compares.
+The shape is not "an assertion is missing". It is **an assertion that
+cannot see, because something earlier removed what it reads**, and it
+looks identical to an assertion that passed. It moves the slot aside
+and back now, and asserts it came back.
+
+Found by running the mutation and then asking why the answer was not
+what the mutation implied — not by reading the wrapper, which was
+correct.
+
+### Its position pinned, one tool at a time
+
+`stage-layers`'s new sha check had the same gap for the same reason:
+the plan the fixture staged declared no layers, so the loop it guards
+created nothing either way and moving the check below it stayed green.
+The fixture bakes a plan with a layer now.
+
+The source-level order assertion pinned the tuple and not the blob:
+moving `os.replace(blob, ...)` above the loop leaves an interruption
+point where the blob and `.sha256` are new and `.layers` is old — the
+same defect from the other side. Both are asserted now.
+
+### The rest
+
+- `except OSError` narrowed to ENOTEMPTY in §68 turned ENOENT into a
+  traceback, and **raising from a `finally` discards the in-flight
+  `SystemExit`**, so a refusal would answer with a stack trace about
+  cleanup. ENOENT means the cleanup succeeded.
+- The `sha256sum` remedy went into one of the two tools that make the
+  identical comparison. The covered-claim-with-an-uncovered-member
+  shape, one round after the round that named it.
+- "Absent `.sha256` is not fatal" was justified by a producer that does
+  not exist — the only writer of `.layers` writes `.sha256` two lines
+  above it — and it made the two readers answer the same input
+  differently. Both refuse now.
+- The `os.path.exists(ldir)` guard added in §68 fixed a real traceback
+  and nothing pinned it; the named-refusal-not-a-traceback standard the
+  test asserts for `--nw-check` is asserted for it too.
+
+### Four rounds on one tool, and what each found
+
+Not a count of defects but of kinds, because that is the part that
+transfers: round one, guards with no tests at all; round two, a guard
+whose *position* was unpinned; round three, a check whose *inference*
+rested on an order nothing stated, and an enumeration of readers that
+was missing one; round four, a wrapper that had the check and a fixture
+that had removed what it reads. Each round's defect lived one level
+further from the code and closer to the evidence.

@@ -385,7 +385,12 @@ def stage(slots, city, slot=None, root="", nw_check=None, quiet=False):
             try:
                 os.rmdir(tdir)
             except OSError as e:
-                if e.errno != errno.ENOTEMPTY:
+                # ENOENT means it is already gone, which is success, and
+                # raising from a `finally` DISCARDS the SystemExit on
+                # its way out -- so the tool would answer a refusal with
+                # a traceback about cleanup. `control` reached it by
+                # removing the slot under a slow --nw-check.
+                if e.errno not in (errno.ENOTEMPTY, errno.ENOENT):
                     raise
                 print(f"stage-candidate: left {tdir} behind: it is not "
                       f"empty, which means the scratch directory could "
