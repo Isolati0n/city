@@ -595,16 +595,38 @@ def test_bad_crc():
 
 def test_baker_rejects():
     city = f"{WORK}/bad-city.txt"
-    # `lids=none` on both, so the refusal under test is the DUPLICATE and
-    # not the missing key. Asserting the reason string is what caught
-    # this when `lids=` became required: the bake still failed, for
-    # another reason, and `expect(returncode != 0)` alone would have
-    # stayed green on a test that had stopped testing duplicates.
-    open(city, "w").write("house a /bin/true kind=oneshot lids=none\n"
+    # `lids=none` on all three, so the refusal under test is the
+    # DUPLICATE and not the missing key. Asserting the reason string is
+    # what caught this when `lids=` became required: the bake still
+    # failed, for another reason, and `expect(returncode != 0)` alone
+    # would have stayed green on a test that had stopped testing
+    # duplicates. `control` reverted this line and measured exactly
+    # that -- the returncode half passed, the reason half went red.
+    #
+    # THREE HOUSES AND THE PAIR IS NOT AT INDEX 0. With `a, a` the check
+    # narrows to `names.count(names[0]) > 1` and stays green, which
+    # `control` ran: a city of `x, a, a` then bakes and only nwcheck.c
+    # catches it. Same lesson as the fold fixture's middle position --
+    # the input has to be one the narrowed form answers wrongly.
+    open(city, "w").write("house x /bin/true kind=oneshot lids=none\n"
+                          "house a /bin/true kind=oneshot lids=none\n"
                           "house a /bin/true kind=oneshot lids=none\n")
     p = run(["python3", CC, "--city", city, "--out", f"{WORK}/nope.blob"])
     expect(p.returncode != 0, "duplicate name should fail bake")
     expect("duplicate name" in (p.out + p.err), f"reason\n{p.out}{p.err}")
+
+    # `critical=` was removed on 2026-09-10 and its refusal was
+    # DELETABLE GREEN until now -- `control` deleted the whole branch
+    # and the target passed. A retired key that silently becomes an
+    # unknown key still refuses, but with the wrong message, and the
+    # message is the entire point of keeping the branch.
+    open(city, "w").write(
+        "house a /bin/true kind=oneshot lids=none critical=1\n")
+    p = run(["python3", CC, "--city", city, "--out", f"{WORK}/nope.blob"])
+    expect(p.returncode != 0 and "critical= was removed" in (p.out + p.err),
+           f"critical= must refuse by NAME, not fall through to the "
+           f"unknown-key message: the branch exists to say what happened "
+           f"to it\n{p.out}{p.err}")
 
     # AND THE NEW KEY ITSELF, in both directions. Omitting it is
     # refused; saying `none` is accepted and bakes the same byte the
@@ -618,6 +640,17 @@ def test_baker_rejects():
            f"a house with no lids= must be refused: a bare house somebody "
            f"chose and one somebody forgot bake the identical byte"
            f"\n{p.out}{p.err}")
+    # ACCEPTED, AND THE BYTE IS 0. `expect(returncode == 0)` alone
+    # asserts "did not refuse" and nothing about what `none` MEANS:
+    # `control` mapped LID_NAMES["none"] to NEWNET and the whole target
+    # stayed green, so a baker in which a bare house silently gets a
+    # network namespace passed. The blobs were write-only -- named at
+    # --out and read nowhere.
+    def _lids_byte(blob, i=0):
+        off = unit_layout()
+        d = open(blob, "rb").read()
+        return d[20 + i * off["_size"] + off["lids"]]
+
     okl = f"{WORK}/okl-city.txt"
     open(okl, "w").write("house a /bin/true kind=oneshot lids=none\n")
     p = run(["python3", CC, "--city", okl, "--out", f"{WORK}/okl.blob"])
@@ -625,6 +658,11 @@ def test_baker_rejects():
            f"lids=none must be ACCEPTED -- it is how a bare house is "
            f"declared, and refusing it would leave no way to say it"
            f"\n{p.out}{p.err}")
+    expect(_lids_byte(f"{WORK}/okl.blob") == 0,
+           f"lids=none baked {_lids_byte(f'{WORK}/okl.blob')}, not 0. The "
+           f"whole argument for requiring the key is that `none` bakes "
+           f"the byte an omission used to; a `none` that means something "
+           f"else is a bare house nobody declared.")
 
     # AND THE --probe PATH, which is the OTHER way this baker makes
     # houses. It kept its own `--lids seccomp` default after the city
@@ -632,17 +670,55 @@ def test_baker_rejects():
     # a house line and false of the program -- a lid set chosen for four
     # houses on the path nobody was reading. `claims`. Pinned in both
     # directions for the same reason the city pair is.
-    p = run(["python3", CC, "--probe", "/bin/true",
-             "--out", f"{WORK}/probe-nolids.blob"])
+    probe_no = f"{WORK}/probe-nolids.blob"
+    if os.path.exists(probe_no):
+        os.unlink(probe_no)
+    p = run(["python3", CC, "--probe", "/bin/true", "--out", probe_no])
     expect(p.returncode != 0 and "--lids is required" in (p.out + p.err),
            f"--probe with no --lids must be refused: the probe city "
            f"declares nothing itself, so a default there picks a lid set "
            f"for every house it makes\n{p.out}{p.err}")
+    # AND THE REFUSAL WROTE NOTHING. `control` moved the bake above the
+    # check: the tool printed `wrote ...` and its refusal, exited 1, and
+    # left a blob nw-check accepts with a lid set nobody asked for --
+    # green, because the test only grepped stdout. The same
+    # refuse-after-doing-the-work shape `control` found in fold_house.
+    expect(not os.path.exists(probe_no),
+           f"the refusal left {probe_no} behind, so it baked first and "
+           f"refused afterwards -- a refusal that has already written a "
+           f"validated blob is not a refusal")
+
     p = run(["python3", CC, "--probe", "/bin/true", "--lids", "none",
              "--out", f"{WORK}/probe-none.blob"])
     expect(p.returncode == 0,
            f"--lids none must be ACCEPTED on the probe path too"
            f"\n{p.out}{p.err}")
+    # PAIRS THE ABSENCE ABOVE. "the refusal wrote nothing" is satisfied
+    # by a tool that never writes its --out at all, so this says the
+    # same tool on the same flag DOES write it.
+    expect(os.path.exists(f"{WORK}/probe-none.blob"),
+           "the probe path wrote no blob even when accepted, so the "
+           "refusal writing none above says nothing about the refusal")
+    # EVERY unit, because the flag is applied to all of them and
+    # `control` showed a `--lids` that is required and then IGNORED
+    # passes otherwise: the pair pinned that the flag is demanded and
+    # nothing pinned that it is used.
+    bad = [i for i in range(4)
+           if _lids_byte(f"{WORK}/probe-none.blob", i) != 0]
+    expect(not bad,
+           f"--lids none left a nonzero lids byte in probe unit(s) {bad}; "
+           f"the flag is required and ignored")
+    # AND THE INSTRUMENT CAN SEE A NONZERO. Every lids assertion in this
+    # test requires 0, so a `_lids_byte` that returned 0 unconditionally
+    # would satisfy all of them -- the filter-that-matches-nothing shape,
+    # here as a reader that always answers the value under test. One bake
+    # with a real lid is what separates them.
+    p = run(["python3", CC, "--probe", "/bin/true", "--lids", "seccomp",
+             "--out", f"{WORK}/probe-sec.blob"])
+    expect(p.returncode == 0, f"probe bake with seccomp\n{p.out}{p.err}")
+    expect(_lids_byte(f"{WORK}/probe-sec.blob") != 0,
+           "_lids_byte reads 0 for a house baked with seccomp, so every "
+           "`== 0` above is satisfied by the reader and not by the baker")
     open(city, "w").write("house a /bin/true kind=oneshot window=1 lids=none\n")
     p = run(["python3", CC, "--city", city, "--out", f"{WORK}/nope.blob"])
     expect(p.returncode != 0, "window= must fail the bake")
@@ -654,10 +730,13 @@ def test_baker_rejects():
     expect("hard total" in (p.out + p.err),
            f"window= was refused, but not by the D18 branch -- the message "
            f"does not explain why\n{p.out}{p.err}")
-    print("ok baker-reject-dupname+window+lids (duplicate name and "
-          "window= refused by reason; lids= omitted refused and lids=none "
-          "accepted, which is the pair -- a baker refusing both would "
-          "satisfy the refusal alone)")
+    print("ok baker-reject-dupname+window+lids (duplicate name on a pair "
+          "that is not at index 0, window= and critical= each refused by "
+          "reason; lids= and --lids each omitted refused and `none` "
+          "accepted, on the city path and the probe path -- and the BYTE "
+          "checked 0 in both, because accepted-without-reading is "
+          "satisfied by a `none` that means something else; the probe "
+          "refusal asserted to have written no blob)")
 
 
 def test_fuzz_checker():
