@@ -7231,15 +7231,14 @@ sentence was written, and found more than a fourth item:
   document says a container's state is bounded to one directory. A house
   with a declared bind has durable state in two: `nwsup.c:251` mounts
   `MS_BIND | MS_REC` with no `MS_RDONLY` and a full write grant,
-  machine-side and outside the layer. Verified here independently — the
-  only `MS_RDONLY` in executable code is the erofs brick at line 194; the
-  other two hits are the seal comment at 90 and 92, and writing "the only
-  one in the file" was the comment-hit mistake this very section condemns
-  two bullets down. **And the flag was the wrong evidence anyway**:
-  `MS_RDONLY` is ignored on an initial bind, measured, so its absence is
-  not what makes the bind writable. What does is `nwsup.c:470` granting
-  the bind the full `rw` right set, over a writable machine path.
-  `nwsup.c:90` warns against reading the flag as the mechanism, by name.
+  machine-side and outside the layer. **The evidence is the writable
+  source, not a missing flag**: `MS_RDONLY` is ignored on an initial bind
+  — measured — so its absence never made the bind writable, and
+  `nwsup.c:90` warns against reading that flag as the mechanism by name.
+  Under the Landlock lid `nwsup.c:470` then grants the bind the full `rw`
+  right set; without that lid nothing restricts it at all. A first
+  telling cited the flag, and a second cited line 470 as though it were
+  general when it runs only for `NW_LID_LANDLOCK`.
 - **"The supervisor blocks in `waitpid`" is true and is not established
   by the count the paragraph cites.** A count of four is equally
   consistent with polling; what makes "blocks" true is `waitpid(p, &st, 0)`
@@ -7260,26 +7259,27 @@ count rule already retired, and it asserted it *inside a paragraph
 warning against unfalsifiable claims*. Name what you checked; let the
 list be the claim and let the next reader add to it.
 
-### Smaller things the same audit found in the same paragraph
+### Smaller things the same audit found
 
-- **An unnamed instance-count**, four words after a permitted one:
-  "`blob.h`'s two `NW_KIND_*` constants". Naming them is a few characters
-  longer and removes the hostage. *(This said "nine characters"; it is
-  fifteen with the backticks and thirteen without. A count in prose, in
-  the bullet about counts in prose, in the section about that bullet.)* The permitted count in the same
+- **An unnamed instance-count**, beside a permitted one in the same
+  passage:
+  "`blob.h`'s two `NW_KIND_*` constants". Naming them costs a few
+  characters and removes the hostage. The permitted count in the same
   sentence works only because its three items are named beside it.
-- **"The rule has nothing to say about it" contradicted the sentence
-  three lines above**, which says in as many words that such writing is
+- **"The rule has nothing to say about it" contradicted the rule
+  sentence closing the section above it**, which says in as many words that such writing is
   a hypothesis. The point survives as *it returns one verdict for
   everything unwritten*; "nothing to say" overstated it into a
-  contradiction visible on the same screen.
+  contradiction with a sentence on the same page.
 - **Only two of the three checks are greps.** "No layer-size bound" is a
   negative over a set of files somebody chose, and the chooser was not
   recorded — which matters, because on a kernel with an on-disk quota
   format it is true of the codebase and false of the machine. Measured
   here: `CONFIG_QUOTA=y` but no `QFMT_V1`/`QFMT_V2`/`QUOTA_TREE`, no XFS,
-  no btrfs, no tmpfs quota, the root mounted `noquota`, and `quotactl`
-  answering `ESRCH`. So nothing can bound a layer on THIS machine, and
+  no btrfs, no tmpfs quota, the root mounted `noquota` — read off
+  `/proc/fs/ext4/<dev>/options`, **not** `/proc/mounts`, which does not
+  carry it, so the obvious command gives the wrong answer — and
+  `quotactl` answering `ESRCH`. So nothing can bound a layer on THIS machine, and
   nothing in the tree makes that so. A description of the model
   presented as a description of the machine — which is the document's own
   correction 1, arriving inside the document that states it.
@@ -7293,36 +7293,28 @@ list be the claim and let the next reader add to it.
 in `CLAUDE.md` beside the first; not fixed here, because a matcher change
 is its own change.
 
-### The shape, and a second round that found more than the first
+### The shape
 
 Every defect above is in the sentence that promotes a test for
 unfalsifiable writing, written by an author thinking about that test.
 The rule at its weakest in the change that introduces it, again — and
 found the way all of them are found, by somebody running something.
 
-**The correction then reinstated the defect it removed.** Deleting
-"whole falsifiable surface" put "three more sentences" in its place: an
-unnamed instance-count, four lines above the sentence explaining why a
-count is the wrong form, and *short* — the document's own thesis, that
-nothing in the tree can disagree with or confirm any sentence in it, is
-refuted in both directions by the three checks listed one paragraph
-earlier. The central self-classification, the sentence the label rests
-on, was the omission.
-
-Two more in the same correction. The bind evidence cited the absence of
-`MS_RDONLY`, which is ignored on an initial bind — measured — so the
-flag stood in for the mechanism, in a file whose own comment warns
-against reading it that way. And the fold-helper fix framed a
-one-sided defect symmetrically: `bakery/fold.py` has never said "fold
-helper", it says fold engine and disclaims the check, and it did so in
-the commit that landed it, so `CLAUDE.md` was the only place missing the
-qualifier. Distributing a defect across two files is a softening, and it
-reads as even-handedness.
+Then two further review rounds, and **every finding in them was in the
+narration rather than in the rule.** The test itself survived all three
+untouched; what kept failing was this account of what the previous round
+had got wrong — each retelling adding a positional reference, a
+character count or a completeness claim, each of which then needed its
+own retraction. The account was cut back rather than corrected again,
+which is why the bullets above no longer carry their own revision
+histories. `claims` recommended the cut and named the shape: a record
+that concedes it cannot be checked, and then makes checkable-and-wrong
+claims inside itself, pays the cost of both forms.
 
 **Nothing in the tree records what a reviewer reported**, only the
-packets they were sent. So this section's account of what `claims` found
-is unfalsifiable in the same sense the document's own provenance line
-concedes — one level down, about the findings this round answers.
+packets they were sent — so this section's account of the findings is
+itself unanchored in the sense §70 and the document define. The
+measurements it cites are not: those are in the tree and reproduce.
 
 ## 72. Holding a commit is the safe state; holding a working tree is not (2026-09-13)
 
@@ -7344,9 +7336,14 @@ different failures and are not in tension, so the answer to "a review is
 owed and the work is finished" is: commit locally, hold the push, act on
 the review, then push.
 
-The loss half is not hypothetical. The session that produced these
-sections ran `git checkout -- .` to tidy up after a control, in a tree
-holding uncommitted work, and wiped its own edits — §66. **What recovered
+The loss half is not hypothetical. §66 records `git checkout -- .` run
+to tidy up after a control, in a tree holding uncommitted work, wiping
+the edits. *(A first telling attributed that to "the session that
+produced these sections". Nothing in the tree records session
+boundaries; what it records is that §66 landed in `686db4d` and these
+sections six commits later, so the identity was an assertion the tree
+cannot check — written into the section whose neighbour concedes
+exactly that limit.)* **What recovered
 them was redoing them**; the commit being intact is what made redoing
 them cheap rather than what preserved them, and a first telling of this
 section blurred the two. §66's own wording is the accurate one: "the

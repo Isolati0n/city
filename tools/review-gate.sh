@@ -1,5 +1,12 @@
 #!/bin/sh
-# review-gate.sh — refuse to push a change no reviewer has seen.
+# review-gate.sh — REPORT that a change no reviewer has seen is owed one.
+#
+# It refuses nothing. Nothing invokes it: .git/hooks holds only samples,
+# core.hooksPath is unset, and neither the Makefile nor .claude/ calls it.
+# `--check` prints and exits 1, and obeying that is a discipline. This line
+# said "refuse to push" and a HISTORY section repeated the claim as
+# mechanism -- the wrong reading was generated here, which is where an
+# agent reads it from. `claims`. HISTORY.md 72.
 #
 # Both HIGH findings of 2026-09-10 -- the ".." traversal and the profile that
 # killed compilers -- were found in code that was already committed and

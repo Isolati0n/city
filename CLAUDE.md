@@ -412,8 +412,11 @@ rediscover them.
   precondition. The asymmetry matters and a first telling smoothed it
   away: `bakery/fold.py` has never used the phrase "fold helper" — it
   calls itself the fold engine and disclaims the check, and it did so in
-  the commit that landed it. This bullet was the only place the
-  qualifier was missing. `claims`. "The house is not
+  the commit that landed it, so the qualifier was missing here rather
+  than there. `claims`. (A first correction said this bullet was "the
+  only place" it was missing, which is a completeness claim written four
+  lines from the engine's name, and false: `docs/NW-EXPECTATIONS-
+  UNANCHORED.md` uses the phrase unqualified too.) "The house is not
   running" is satisfied by a longrun house between restarts, which is
   about to write; the supervisor is the thing whose absence means the
   unit will not run again before the next boot, because it stops
@@ -970,10 +973,12 @@ its "whole falsifiable surface"; the correction claimed a number instead;
 both were wrong and the second was wrong in the same shape as the first,
 because a count and a completeness claim are both statements about how hard
 somebody looked. The omission that mattered was the document's own thesis —
-it says nothing in the tree can disagree with any sentence in it or confirm
-one, and the list above refutes that in both directions. `HISTORY.md` §71
-has the audit; do not tell it twice, and note that the two tellings had
-already drifted apart when `claims` compared them.
+it says nothing in the tree can disagree with any sentence in it *or confirm
+one*. The list above confirms three, and a house with a declared bind
+contradicts a fourth: the document says a container's state is bounded to
+one directory, and a bind gives it durable state in two. So the sentence the
+whole label rests on is answerable, in both directions. `HISTORY.md` §71 has
+the episode.
 
 **Every absence is over a set somebody chose, and the chooser is part of the
 claim.** "No layer-size bound" is the obvious case — on a kernel with an
@@ -1145,8 +1150,10 @@ shape this file names as the durable kind.)
   uncommitted work, during the round that added the cleanup rules to
   `harness.md` and `runtime.md` (`HISTORY.md` §66, which files it as
   the destructive-cleanup class and applies the weakest-rule label to a
-  different item in the same round). Nothing was lost, because the
-  commit was intact; that is luck, not the rule working. Note the fit
+  different item in the same round). Nothing was lost — the commit was
+  intact and the edits were redone, which is `HISTORY.md` §66's own
+  wording and worth keeping exactly: the commit made redoing them cheap,
+  it did not preserve them. That is luck, not the rule working. Note the fit
   is by analogy: no rule about destructive cleanup was *introduced* by
   that change, so this is the pattern's shape without its usual
   mechanism.
