@@ -139,3 +139,103 @@ unpaired-absence	tests/run.py	expect(r.returncode != 0 and "Traceback" not in (r
 # paired by the refusal assertion two lines down, and by the fixture baking a
 # plan that names this layer -- without both, the absence proves nothing
 unpaired-absence	tests/run.py	expect(not os.path.exists(f"{pfx}{_layer_dir()}/{slid}"),
+
+# --- 2026-09-12, the fold (bakery/fold.py, bakery/test_fold.py) ---
+# The oracle's three comparisons ARE the check: it walks the kernel's own
+# overlay view and the folded image and requires them equal. The paired
+# positive is the `built` dict at the end of the same check, which names
+# each property and reports which one is missing -- so an all-empty
+# census cannot satisfy the three, and a fixture that quietly stops
+# building one says which. An earlier version of this ack enumerated
+# what that block asserts and got two of the items wrong (a symlink was
+# not checked to point at a directory, a path was not checked to be an
+# empty directory); `claims` read the code. Enumerate the probe is the
+# rule this serves, so the enumeration now lives in the code as keys.
+# Controls: every mechanism named, each mutated and each seen red.
+unpaired-absence	bakery/test_fold.py	expect(not missing, f"the fold lost {missing}; the house saw them")
+unpaired-absence	bakery/test_fold.py	expect(not extra, f"the fold invented {extra}")
+unpaired-absence	bakery/test_fold.py	expect(not differ, f"folded image disagrees with the kernel: {differ}")
+# Skip guards, not assertions: they choose whether the check runs and name
+# what goes untested when it does not. There is nothing to pair.
+unpaired-absence	bakery/test_fold.py	if "overlay" not in open("/proc/filesystems").read():
+unpaired-absence	bakery/test_fold.py	if err is None:
+# `_erofs_ok` asks BOTH questions -- the tool AND /proc/filesystems, on
+# the next line. The matcher sees only the first. This is the very
+# distinction harness.md draws (detect the capability, not a tool that
+# implies it) and the code already draws it.
+tool-presence	bakery/test_fold.py	if not shutil.which("mkfs.erofs"): return False, "mkfs.erofs is not installed"
+# English, not counts: "One entry" names what the function handles, and
+# "step-4" is a reference to a numbered step in the same function.
+prose-count	bakery/fold.py	"""One entry, type-aware. `where` names the tree the entry came from,
+prose-count	bakery/fold.py	# Applied last, in the order recorded, so a step-4 file's mode wins
+
+# --- 2026-09-13, the fold's second review round ---
+# `control` settled these five by mutation, not by reading: each absence
+# is paired by a positive in the same check that fails when the mechanism
+# does not run. 59 is redundant beside an exact-content positive; 181 is a
+# skip guard inside _erofs_ok, which asks BOTH questions; 240 asserts the
+# CONTROL was applied and is paired by hashes either side of it; 296 sits
+# beside `raised is not None`; 369 beside returncode==1 and the reason
+# string -- covering THAT input, not the property, since two other inputs
+# printed tracebacks until this round fixed them.
+unpaired-absence	bakery/test_fold.py	expect(not os.path.lexists(p), "the whiteout itself was copied in")
+unpaired-absence	bakery/test_fold.py	if "erofs" not in open("/proc/filesystems").read():
+unpaired-absence	bakery/test_fold.py	expect("-T" not in no_T, "the control did not remove -T")
+unpaired-absence	bakery/test_fold.py	expect("does-not-exist" not in raised,
+unpaired-absence	bakery/test_fold.py	expect("Traceback" not in r.stderr, f"crashed: {r.stderr[:200]!r}")
+# 149 was `control`'s one FIX rather than ack: its positive came from step
+# 3 creating the directory, not from step 1 copying anything, so it passed
+# with step 1 neutralised. A lower file outside etc is asserted present on
+# the next line and step1-does-nothing now turns it red.
+unpaired-absence	bakery/test_fold.py	expect(ls(p) == [], f"etc holds {ls(p)}, expected empty")
+# Paired further down the same check by the same probe on a filesystem
+# that CAN hold the marker, so "refuses" is not satisfied by refusing
+# everything. (This said "two lines down" and it is six; a position is a
+# count with an extra way to be wrong. `claims`.)
+unpaired-absence	bakery/test_fold.py	expect(not can, f"the probe accepted a filesystem with no xattrs: "
+# Not a test: a guard inside the mode pass. `mode is None` is how a
+# symlink cancels a mode recorded for the same path.
+unpaired-absence	bakery/fold.py	if mode is None or not os.path.exists(path) or os.path.islink(path):
+# Prose in a dated record and in a docstring, quoting the wording being
+# retracted. Not counts and not assertions.
+prose-count	HISTORY.md	*This said "so there is one entry", which is wrong and wrong in the
+prose-count	HISTORY.md	**"There is no --force" was false, nine lines from `--no-opaque-check`.**
+mechanism-claim	HISTORY.md	**The qualifier is load-bearing and was missing.** Identity is a
+unpaired-absence	HISTORY.md	not in stderr`, for a different input.
+unpaired-absence	bakery/test_fold.py	were not in it -- a claim of exhaustiveness standing beside the very
+# English, not counts -- except the fold.py one, which IS a count and is
+# permitted because the three are named in the two sentences above it.
+# The earlier reason here said "English" for all three, which is where
+# the next reader learns which shapes pass, so it mattered. `claims`.
+prose-count	Makefile	# running, one line of output scrolling past. Both controls that were run
+prose-count	bakery/fold.py	# all three, each one input away from the fixture.
+prose-count	bakery/test_fold.py	# left `make test` green at one check fewer, and the roster size is
+# Paired by the two assertions directly above it, which prove the probe
+# RAN and refused for the kernel's own errno. Without them "left nothing
+# behind" would be satisfied by a probe that never created anything.
+unpaired-absence	bakery/test_fold.py	expect(os.listdir(m) == [], f"the probe left {os.listdir(m)} behind")
+
+# --- 2026-09-13, the fold's third review round ---
+# English and step references, not counts.
+prose-count	HISTORY.md	**Round two's crash moved one step over rather than being fixed.** Step 3
+prose-count	Makefile	# green again, two echoed command lines with nothing between them, which is
+prose-count	bakery/test_fold.py	# the house copies `etc` up, so step 1 and step 4a each supply it
+unpaired-absence	HISTORY.md	not in the fold, because in the fold it would mean disagreeing with what
+# The escape check's absences are paired by the block after them, which
+# requires the merged tree to be RIGHT -- so "wrote nothing outside" cannot
+# be satisfied by a fold that did nothing. 1012/1016 are the empty-dir case
+# and pair each other: not-a-symlink AND is-an-empty-directory AND the host
+# untouched, three readings of one outcome, so no single wrong result
+# satisfies them.
+unpaired-absence	bakery/test_fold.py	expect(not os.path.islink(os.path.join(t.merged, "x")),
+unpaired-absence	bakery/test_fold.py	expect(not os.path.islink(m),
+unpaired-absence	bakery/test_fold.py	expect(os.path.isdir(m) and ls(m) == [],
+# Paired by the next line, which requires the symlink's TARGET to survive
+# -- so "the whiteout removed it" is not satisfied by a merge that removed
+# everything.
+unpaired-absence	bakery/test_fold.py	expect(not os.path.lexists(os.path.join(t.merged, "bin")),
+# Paired by the very next line, which requires an ORDINARY user.* xattr to
+# survive -- so "the marker was not carried" cannot be satisfied by a fold
+# that carried no xattrs at all, which is the mutation the round before
+# this one was about.
+unpaired-absence	bakery/test_fold.py	expect("user.overlay.somethingelse" not in got,

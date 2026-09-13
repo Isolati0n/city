@@ -18,7 +18,7 @@ set -eu
 
 DIR=.reviews
 TCB='dawn.c pid1.c nwspawn.c nwcheck.c nwcheck_main.c nwsup.c lids.c blob.h rescue.c'
-SUITE='tests/run.py unit_probe.c houses'
+SUITE='tests/run.py unit_probe.c houses bakery/test_fold.py tools/test_checkbrief.py'
 # CLAUDE.md's dispatch table has owed a `claims` review for a brief or an
 # environment claim since it was written, and this gate did not watch a
 # single prose file -- so "dispatch before you push" was mechanical for
@@ -27,7 +27,27 @@ SUITE='tests/run.py unit_probe.c houses'
 # get pushed, gate reporting ok throughout, while its own review of that
 # change was still running. Kind-1 statements rot silently; that is the
 # whole reason the reviewer exists.
-PROSE='CLAUDE.md .claude/rules .claude/agents'
+#
+# HISTORY.md WAS LEFT OUT OF THAT WIDENING, and it is named in the same
+# dispatch-table row that motivated it. Measured 2026-09-12: a diff whose
+# prose was a whole new HISTORY section, with a `claims` review dispatched
+# and still running, got `review-gate: ok`. The rule at its weakest in the
+# change that introduces it, in the guard written against honour-system
+# review -- found by reading the gate after it green-lit a push it should
+# have held, which is the silence failure's own diagnostic question: not
+# "does it pass" but "what made it fire, and what cannot".
+#
+# The suite list had the same shape of hole: it named tests/run.py and the
+# fixture houses, so a NEW test file was watched by nothing. bakery/fold.py
+# arrived with its own suite and `control` was owed for it under the
+# dispatch table's "a test was added or changed" row.
+#
+# STILL UNWATCHED, deliberately rather than by oversight, and recorded so
+# the next reader does not take silence for coverage: non-test code outside
+# the TCB -- the baker, tools/, the stagers. No reviewer in the table owns
+# them, so adding a component would mean inventing an owner. Read this list
+# rather than assuming a path is covered.
+PROSE='CLAUDE.md .claude/rules .claude/agents HISTORY.md'
 TCB_REVIEWERS='tcb-review fd-auditor'
 SUITE_REVIEWERS='control'
 PROSE_REVIEWERS='claims'

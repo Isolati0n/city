@@ -166,6 +166,25 @@ test: stage
 	sh install-agents.sh --check
 	$(STAGE)/nw/bin/nw-check $(STAGE)/efi/slots/A/plan.blob
 	NW_STAGE=$(STAGE) python3 tests/run.py
+# The fold's own suite. It runs HERE rather than beside the tarball it
+# arrived in, because a suite outside the tree is a suite nobody runs --
+# the same rule proofs/ exists to enforce. Exit 2 is "some check skipped
+# and none failed", which a machine without root, erofs or overlay will
+# produce, so it is accepted; the run still prints which properties went
+# untested, and a skip is not a pass. Exit 1 is a real failure and stops
+# the target.
+# THE RUN MUST PROVE IT RAN. python3 exits 2 when it cannot OPEN the script
+# and the guard reads 2 as "skipped, none failed", so a deleted file left
+# `make test` green with the suite never running. `test -f` was the first
+# answer and it closed deletion only: truncate the file to zero bytes, or
+# replace it with a comment, and python3 exits 0 having run nothing --
+# green again, two echoed command lines with nothing between them, which is
+# exactly the output the failure it was meant to close produces. Existence
+# is not execution. This greps the run's own summary for a nonzero pass
+# count, so the evidence is something the suite printed rather than
+# something about the file. `control`, twice.
+	python3 bakery/test_fold.py 2>&1 | tee /dev/stderr 	  | grep -qE '^[0-9]+ checks: [1-9][0-9]* pass'
+	python3 bakery/test_fold.py >/dev/null 2>&1 || [ $$? = 2 ]
 	NW_STAGE=$(STAGE) sh tools/coverage-tcb.sh
 
 # The pre-report shape checker, over the diff you are about to report on.

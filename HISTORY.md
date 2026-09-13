@@ -6703,3 +6703,415 @@ rested on an order nothing stated, and an enumeration of readers that
 was missing one; round four, a wrapper that had the check and a fixture
 that had removed what it reads. Each round's defect lived one level
 further from the code and closer to the evidence.
+
+
+## 70. The fold's suite was green and nothing read a byte of its output (2026-09-12)
+
+`fold.py` and its suite arrived as a tarball, handed over as unreviewed
+code with the operator's own framing: the green is evidence about one
+environment and the cases one person chose, and neither is evidence
+about the cases nobody thought of. *(Counts that were here — how many
+checks, how many cases — name a file no commit carries, so nothing can
+check them. The suite in the tree prints its own roster.)* It reproduced green here too
+— root, erofs, overlay, nothing skipped.
+
+### The structural cause, which `control` found and is worth more than any one defect
+
+Every fold-level assertion was a hash compared to another hash, a file
+compared to its own existence, sidecar JSON compared to itself, or an
+exit code. **Nothing mounted an image the fold produced.** One gap, and
+behind it four defects at once.
+
+The sharpest demonstration is the identity: a house that wrote nothing
+should fold to its own base. Against a tree holding an executable, a
+0600 file, a symlink to a directory, a symlink to a file and an empty
+directory, packed by `mkbrick.pack`:
+
+    base image  : 4cc0a22ea9e4299947c8e3b9971002e88ddb2c6cc424d73aeda54c24996137fc
+    folded empty: 3a782b5be923ea563a6ad3077b7bb41c416503fb053416603f296dc259eed588
+
+**The qualifier is load-bearing and was missing.** Identity is a
+property of a base packed by `mkbrick.pack`, not of any base:
+`tests/run.py`'s `make_brick` packs with `-zlz4` while the fold uses
+`mkbrick.EROFS_FLAGS`, so an empty-layer fold of a SUITE brick differs
+from its base under a perfectly correct fold — same contents, different
+flags. The bullet below measures a suite brick, which invited exactly
+that misreading. `claims` scanned every image under `/nw/bricks`
+looking for the pair above and found none, because the input was a
+scratch tree that no longer exists. The check that now carries this
+names its input in code, which is the only form that cannot go stale.
+
+### The four
+
+- **File modes were dropped, and directory modes with them.** The
+  second half was true of the code and unpinned by the test for a
+  round: `claims` and `control` each deleted directory-mode
+  preservation alone and got a green suite, because the fixture's one
+  distinctively-moded directory was the one the house deletes — the
+  probe consuming the evidence the assertion would have read. Both
+  halves are pinned now, by a surviving `0701` directory in the base
+  and a `0711` one the house creates. `_copy_entry` opened the
+  destination with the default mode; `force_attrs` forced uid, gid and
+  mtime and not mode; `--force-uid/--force-gid` do not touch it. Run
+  against one of this repository's own bricks with an EMPTY layer:
+
+      original brick: /bin/brick mode=0o755
+      folded brick  : /bin/brick mode=0o644
+
+  `/bin/brick` is the exec path of every brick house in the suite, and
+  the folded binary answers `Permission denied` off a real mount. A 0600
+  file came back 0644, which loses a restriction rather than an ability.
+- **A symlink to a DIRECTORY was silently deleted.** `os.walk` puts one
+  in `dirnames`, where step 1 skipped it; a symlink to a FILE lands in
+  `filenames` and survived, which is why the case read as covered.
+  `/bin -> usr/bin` is the shape every distribution image has.
+- **A directory the house created survived only if it contained a
+  file.** `plan_merge` recorded a directory only when it was opaque, and
+  the kernel does not mark a newly created directory opaque — measured
+  on a real overlay, not assumed:
+
+      newdir         is_opaque=(False, None)
+      plan: deleted=[] replaced=[] copied=[]
+      merged tree: ['f']
+
+- **Hard links became separate inodes.**
+
+erofs carries all four — verified by packing a tree holding each and
+reading them back — so every one was the fold losing it, never the
+format declining to carry it.
+
+**There was a fifth, and the sentence claiming the list was measured is
+where it was found.** `user.*` xattrs survive a pack — verified by
+packing one and reading it back off the mount — and were dropped on
+files and directories alike; the identity above fails on a base carrying
+one. Both reviewers found it independently, one through the oracle's
+census and one through the docstring's claim of exhaustiveness. *Nothing
+in this tree sets one: `grep` for `xattr` across the baker, `tools/`,
+`houses/` and the C sources returns nothing, so "a brick's baker and a
+house both set them", written here for one round, named two things that
+do not exist. The reason to carry them is that erofs does and a brick
+may come from anywhere.* The census now names the
+fields it compares instead of claiming to compare everything, because a
+list of what-is-preserved is the wrong instrument and the comparison is
+the right one.
+
+### The one that was not in anyone's list: the capability probe could not work
+
+`can_read_overlay_xattr` read an absent `trusted.overlay.opaque` and
+mapped ENODATA to "yes, I can read". But the kernel hides trusted
+xattrs from a reader without CAP_SYS_ADMIN by reporting them **absent**,
+not forbidden. Measured, on a directory that really carries the marker:
+
+    --- read the PRESENT marker as root:
+       value b'y'
+    --- read the PRESENT marker under unshare -U -r:
+       errno 61 No data available
+
+So the EPERM branch was unreachable on Linux, and the same errno
+collapse made `is_opaque` report "not opaque" for a marker it merely
+could not see — the silent wrong artifact the module docstring says the
+refusal exists to prevent. The refusal had never once fired for a real
+reason; every check that saw it refuse had replaced the function with a
+lambda. What was actually refusing is the base mount, which needs the
+same capability and fails first: **a claim standing beside a mechanism
+already doing the work, inside the check written to prevent exactly
+that.**
+
+`setxattr` is the operation that discriminates — EPERM without the
+capability, and it also fails on a filesystem that cannot carry
+`trusted.*` at all. `can_trust_overlay_markers` writes a marker into a
+temporary directory it creates and removes, never into `upper`, because
+a probe must not write where an assertion reads.
+
+A second silent path beside it: `plan_merge` raised only on `"EPERM"`
+and ignored every other error `is_opaque` returned, so an upper on a
+filesystem answering EOPNOTSUPP read as "no directory is opaque". Any
+error is an error now, and `/proc` supplies the kernel's own ENOTSUP so
+the check needs no stand-in.
+
+### What replaced the checks
+
+`test_fold.py` gained a case that mounts the same lower and upper as a
+real overlay, mounts the folded image, and requires the two to agree on
+every property erofs can carry. **The kernel is the oracle**, which is
+the point: my model of what a fold should do is what wrote the four
+defects, so a check satisfied by that model would have passed against
+all of them. Hard links are compared as equivalence classes of paths,
+never as inode numbers, which differ between two filesystems by
+construction.
+
+`fold.pack`, `hash_file` and the rename were deleted and `mkbrick.pack`
+does the packing, so within mkbrick the name IS the digest of the bytes
+just written. **This was written as "unwritable rather than caught" and
+that is false**: `claims` wrote both mutations — misreport the hash,
+and move the file after packing — and both are *caught*, by the oracle's
+first assertion, that the image sits at its own hash. (The second, that
+the stored name is the digest of the stored bytes, is separately
+reachable by appending a byte at the correct name, so the pair is not
+redundant; attributing both catches to both assertions was loose.) The
+correction matters because "unwritable" is an argument for deleting the
+assertions that are doing the work. Designing the
+problem out is the closing rule in `CLAUDE.md`; this was a narrowing,
+not an elimination, and calling it one was the same defect the rule is
+about.
+
+`force_attrs` is deleted rather than kept with a story. It was
+documented as redundancy against a packer that stops honouring its
+flags, and it provided none: every file in `merged` is created by the
+fold process itself, so `chown(0,0)` as root can never change anything,
+and `-T 0` flattens the erofs SUPERBLOCK build time, which no `utime`
+on the tree reaches. Dead code with a story attached is the shape this
+project is about.
+
+### Controls, all run, each red for its own reason
+
+    revert-mode-preservation      -> every mode the census compares disagrees
+    revert-symlink-to-dir-ONLY    -> the fold lost ['bin']
+    revert-plan-dirs              -> the fold lost ['var','var/lib','var/lib/app']
+    revert-hardlink-preservation  -> the kernel's link classes, fold none
+    break-content-addressing      -> image not at its own hash
+    revert-probe-to-a-read        -> the real probe did not refuse
+    revert-is-opaque-eperm-only   -> plan_merge accepted an unreadable upper
+
+`revert-is-opaque-eperm-only` passed at first and the ENOTSUP check was
+written for it, which is the rule working: the widening was a fix
+nothing tested until the control said so.
+
+### A disagreement with the reviewer, kept as a disagreement
+
+`control` reported the nested-opaque ordering as a live defect — the
+folded image loses a subdirectory the kernel shows the house — and
+named `reverse=True` on `plan.replaced` as the cause. The outcome
+reproduces. The cause does not: on a real overlay the kernel marks only
+the recreated parent opaque and never its children, so no reachable
+input puts two NESTED entries in `plan.replaced` and the order never
+applies. The loss was `plan.dirs` not existing, arriving by a second
+route.
+
+*This said "so there is one entry", which is wrong and wrong in the
+direction that would license deleting the sort: siblings are routine —
+three directories each removed and recreated give
+`replaced=['etc','opt','var']` — and their order is irrelevant only
+because none contains another. Nesting was always the claim.* Both
+reviewers then tried to falsify it independently and could not, by
+seven sequences between them; one found the mechanism (`EXDEV` — with
+`redirect_dir` off the kernel refuses a lower-backed directory rename
+outright) and one found that a house cannot forge the marker either,
+since the kernel escapes a house-set `trusted.overlay.opaque` into the
+upper as `trusted.overlay.overlay.opaque`. Absence of a sequence is
+not proof, and both said so.
+
+The order is left as it stands and recorded as unpinned, with whether
+it is wrong unestablished. A fix justified by a cause that is not the
+cause is a fix nobody can later evaluate.
+
+### The suite runs inside `make test`
+
+`python3 bakery/test_fold.py || [ $? = 2 ]` — exit 2 is "skipped, none
+failed", which a machine without root, erofs or overlay produces. A
+suite left beside the tarball it arrived in is a suite nobody runs, the
+same rule `proofs/` exists to enforce.
+
+The guard is a mechanism and got its own control, and **the first
+attempt at that control passed**: `sys.exit(1)` appended to a file
+ending in `sys.exit(main())` is unreachable, so it tested nothing and
+read as the guard being too permissive. Injecting a real failing check
+instead gives `make exit: 2`, and a real skipping check gives
+`make exit: 0`. A control that passes is not good news, in the round
+about controls.
+
+### The second round found more in the fixes than the first found in the tarball
+
+`CLAUDE.md`: "The output of a review round is unreviewed code." Both
+reviewers were re-dispatched against the fixes and came back non-empty,
+converging independently on directory modes unpinned, xattrs lost, and
+"unwritable" false. What follows is what the FIXES
+broke, which is the part worth reading.
+
+**A crash the fix introduced.** `apply_merge` step 3 did
+`os.makedirs(p, exist_ok=True)` on a path the base holds as a regular
+file, so `rm f; mkdir f` in a house raised `FileExistsError` out of
+`main()`'s `except MergeError` as a traceback — while
+`check_cli_exits_nonzero_with_the_reason_on_stderr` asserts `"Traceback"
+not in stderr`, for a different input.
+
+**And the mode fix reproduced the defect it fixed.** The mode pass
+guarded on `os.path.lexists`, which is true for a symlink, and
+`os.chmod` follows one. Three reachable consequences, all measured by
+`control`: a crash on a dangling symlink (ordinary in a brick —
+`/etc/localtime`, any unit link pointing outside); a *silent* mode
+change on the link's target, `0755` becoming `0600` inside a valid
+image at exit 0, which is this round's opening defect arriving through
+its own repair; and, for an absolute symlink, a chmod of a file on the
+fold host outside the merged tree, where the layer chooses the path and
+the base chooses the mode. One `os.symlink` from the fixture.
+
+**A marker the fold did not know existed.** It read
+`trusted.overlay.opaque` and treated it as the whole encoding. With
+`redirect_dir=on` a renamed directory carries `.redirect` and the fold
+drops its contents; with `metacopy=on` a chmod'd file carries
+`.metacopy` and a body of zeros, and the fold wrote 4096 zeros over
+4096 bytes of real content — exit 0, valid content-addressed image.
+Refused now rather than handled: implementing either means implementing
+the kernel's rename resolution or reading through to the lower, and an
+unrecognised marker is exactly where silence costs most. Not
+hypothetical on a kernel defaulting them off, because a layer is
+durable and portable and this machine reports
+`redirect_always_follow=Y`.
+
+**"There is no --force" was false, in the same function as `--no-opaque-check`.**
+It bypassed both refusals — fed the exact input the ENOTSUP check exists
+for, it produced an accepted plan with every directory read as
+non-opaque — and neither direction of the flag was tested. The flag is
+gone; `opaque_check` survives as a parameter, because the tree-level
+checks call `plan_merge` with no privileges at all and that is the
+property worth keeping.
+
+**Two silences in the gate.** `python3` exits **2** when it cannot open
+the script, and the guard read 2 as "skipped, none failed" — so losing
+`bakery/test_fold.py` in a merge left `make test` green with the suite
+never running. Both controls that were run went through a *running*
+interpreter, which is the one path that cannot reach it. `test -f`
+first, controlled. And dropping `@check` from the oracle left the target
+green at one check fewer, because the roster size is printed and read by
+nobody; `main()` now derives the roster from the module and refuses a
+declared-but-unregistered check, derived rather than counted so it
+cannot go stale.
+
+**One that was a fix, not an ack.**
+`check_empty_opaque_directory_exists_and_is_empty`'s positive — "the
+emptied directory is absent from the merge" — was supplied by step 3's
+own `if not isdir: makedirs`, not by the mechanism under test, so the
+check passed with step 1 neutralised entirely: `/etc` was empty from
+never having been copied rather than from having been emptied. Paired on
+the page, satisfied by the premise never being established. One lower
+file outside `etc`, asserted present, closes it.
+
+Ten controls, each red for its own reason:
+
+    dir-modes-only                -> kept-mode 0701 and var/lib/app 0711 disagree
+    drop-user-xattrs              -> etc and secret disagree; identity fails
+    revert-makedirs-crash         -> FileExistsError on becomes-a-dir
+    revert-chmod-through-symlink  -> aaa 0755 became 0600
+    allow-unhandled-markers       -> plan_merge accepted a .redirect upper
+    probe-enotsup-as-ok           -> the probe accepted a filesystem with no xattrs
+    whiteout-any-chardev          -> a 1:3 device node read as a deletion
+    ignore-opaque-upper-root      -> an opaque root not planned as a replace
+    step4b-no-hardlinks           -> the house's hard-link pair split
+    step1-does-nothing            -> red across the suite, the empty-opaque fix among them
+
+### And one of mine, in the round about controls
+
+Extending the oracle fixture, a `str.replace` anchor did not match — the
+escaping was wrong in the heredoc that applied it — and `str.replace`
+does not raise. The suite went green with the house-side half of the
+fixture never added, and it read as the fixes working. Found because the
+`built` dict named which properties were missing rather than reporting a
+boolean, so the next run said `['dir over file', 'link over file']`
+instead of `False`.
+
+Two things generalise. An edit applied without asserting its anchor is
+the silent-write failure in the tooling used to write the tests, and
+every subsequent patch here asserts. And **a paired positive that
+enumerates by name pays for itself the first time it fires**: the same
+block as a conjunction would have said only that something was missing.
+
+### The third round: the fold was writing outside the merged tree
+
+Round two's fixes were re-dispatched, on the reasoning that round two
+found more in round one's fixes than round one found in the tarball.
+Round three found more again, and two of its findings are a class that
+had not appeared before: **the fold escaping the tree it is building.**
+
+The fold runs as root in the bakery, and a layer chooses its own paths.
+So a symlink in the base plus a layer entry at the same name reaches
+whatever the symlink points at:
+
+- step 3's `os.path.islink` test — deleted, `os.path.isdir` follows the
+  link, the else branch `listdir`s and removes the **target's** children
+  and step 4b writes the layer's file there;
+- step 4b's `_remove(dst)` — deleted, `open(dst, "wb")` follows the link
+  and overwrites a file on the host;
+- `_remove`'s own `os.path.islink` test — deleted,
+  `shutil.rmtree(<symlink>, ignore_errors=True)` swallows its own
+  refusal, so a house that deleted `/bin` from a brick where `/bin` is a
+  symlink gets it back in the folded image.
+
+Every one was green. The oracle could not see any of them, and the
+reason is worth keeping: **an assertion that the merged tree is right
+cannot see a write that landed somewhere else.** Only an assertion about
+what did *not* move can, and the check written for it puts its victim
+directory outside `merged` on purpose.
+
+**Round two's crash moved one step over rather than being fixed.** Step 3
+got the `FileExistsError` guard; step 4a has the identical
+`os.makedirs(exist_ok=True)` on a path step 1 may hold as a regular file,
+and it is reachable whenever the upper's directory is not opaque — which
+the kernel only guarantees for a layer matched to its own base. Nothing
+binds `--base` to `--layer`, so an ordinary rebase reaches it. The silent
+sibling is worse than the crash: on a symlink-to-a-directory
+`makedirs(exist_ok=True)` *succeeds through the link*, so the layer's
+`/bin/added` lands at `/usr/bin/added`, exit 0, valid image.
+
+**And there are two overlay marker namespaces, not one.** The refusal
+added in round two named `trusted.overlay.*`; a `userxattr` overlay —
+what every rootless overlay uses — writes `user.overlay.opaque`. Measured
+on a real userxattr mount: the house replaced `/etc`, the fold
+resurrected its base children, and the marker was **baked into the
+sealed brick**, because the xattr deny-list named one namespace too.
+Sharper still, `user.overlay.*` needs no privilege and the kernel does
+not escape it the way it escapes a house-set `trusted.overlay.opaque`
+(which becomes `trusted.overlay.overlay.opaque`) — so under nw-sup's
+exact mount options a house can plant one in its own layer.
+`trusted.overlay.whiteout` joined the refused set at the same time: a
+zero-byte file carrying it is a deletion to the kernel and a plain copy
+to the fold.
+
+**A sixth preserved property, found the same way as the fifth.** The
+round-two fix carried `user.*` xattrs. `security.capability` is carried
+by erofs too — `setcap cap_net_raw+ep` on a binary survives
+`mkbrick.pack` — and was stripped, so a folded `ping` is silently
+unprivileged in a valid content-addressed image. The filter is a
+deny-list of the overlay namespaces now rather than an allow-list of the
+namespaces somebody thought of: an allow-list has been wrong twice here,
+each time found by a reviewer and never by the list.
+
+**A test that let the code under test decide whether it ran.** A defect
+in `is_opaque` flipped `check_a_filesystem_that_cannot_carry_the_marker_is_refused`
+from FAIL to SKIP, printing a reason that blamed the kernel — and the
+Makefile guard reads a skip as success, so `make test` stayed green on a
+real code defect. The environment question is asked of the kernel now.
+Generalised: **never let the function under test decide whether its own
+test runs.**
+
+**`test -f` closed deletion and not emptying.** Truncate the suite to
+zero bytes and `python3` exits 0 having run nothing — green, two echoed
+command lines with nothing between them, which is precisely the output
+the failure it was meant to close produces. Existence is not execution.
+The gate now greps the run's own summary for a nonzero pass count, so the
+evidence is something the suite printed. Controlled five ways: truncated,
+a comment, deleted, all-skip and one-fails all give `make exit: 2`;
+pristine gives 0.
+
+### A disagreement left open rather than settled
+
+`control` and I differ on where the merged root's mode and xattrs come
+from, and the disagreement is recorded rather than resolved by whoever
+edited last.
+
+Measured, real overlay, lower root 0751 and upper root 0700: the kernel
+shows **0700 and the upper's xattrs**. So matching the kernel means
+taking the upper's, which is what the code now does and what the oracle
+now pins. `control` leans the other way — a house should not lose its
+brick's root mode because `tools/stage-layers.py` created `upper` at
+0755 — and that argument is good.
+
+The tension is real: the oracle's premise (reproduce what the house saw)
+and the identity's premise (a house that wrote nothing changes nothing)
+give different answers for `/` alone, and only for `/`. It is decided
+for the kernel because that is the premise the whole oracle rests on, and
+the consequence is written where it belongs: **the stager should create
+`upper` with the brick's root mode.** They agree today at 0755, so
+nothing is broken now; the fix, when the day comes, is in the stager and
+not in the fold, because in the fold it would mean disagreeing with what
+the house saw.
