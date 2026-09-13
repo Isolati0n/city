@@ -625,6 +625,24 @@ def test_baker_rejects():
            f"lids=none must be ACCEPTED -- it is how a bare house is "
            f"declared, and refusing it would leave no way to say it"
            f"\n{p.out}{p.err}")
+
+    # AND THE --probe PATH, which is the OTHER way this baker makes
+    # houses. It kept its own `--lids seccomp` default after the city
+    # rule landed, so "lids= is required and has no default" was true of
+    # a house line and false of the program -- a lid set chosen for four
+    # houses on the path nobody was reading. `claims`. Pinned in both
+    # directions for the same reason the city pair is.
+    p = run(["python3", CC, "--probe", "/bin/true",
+             "--out", f"{WORK}/probe-nolids.blob"])
+    expect(p.returncode != 0 and "--lids is required" in (p.out + p.err),
+           f"--probe with no --lids must be refused: the probe city "
+           f"declares nothing itself, so a default there picks a lid set "
+           f"for every house it makes\n{p.out}{p.err}")
+    p = run(["python3", CC, "--probe", "/bin/true", "--lids", "none",
+             "--out", f"{WORK}/probe-none.blob"])
+    expect(p.returncode == 0,
+           f"--lids none must be ACCEPTED on the probe path too"
+           f"\n{p.out}{p.err}")
     open(city, "w").write("house a /bin/true kind=oneshot window=1 lids=none\n")
     p = run(["python3", CC, "--city", city, "--out", f"{WORK}/nope.blob"])
     expect(p.returncode != 0, "window= must fail the bake")
@@ -636,7 +654,10 @@ def test_baker_rejects():
     expect("hard total" in (p.out + p.err),
            f"window= was refused, but not by the D18 branch -- the message "
            f"does not explain why\n{p.out}{p.err}")
-    print("ok baker-reject-dupname+window")
+    print("ok baker-reject-dupname+window+lids (duplicate name and "
+          "window= refused by reason; lids= omitted refused and lids=none "
+          "accepted, which is the pair -- a baker refusing both would "
+          "satisfy the refusal alone)")
 
 
 def test_fuzz_checker():

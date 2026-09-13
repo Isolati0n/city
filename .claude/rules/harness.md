@@ -279,19 +279,25 @@ machine will not have it.
 
 ## A claim that needs a real boot goes to the operator, with the fixture
 
-**Do not reason about what a boot would do. Hand it over.** This machine
-has no boot at all, `landlock` is UNAVAILABLE and the kernel cannot
-mount vfat — `print_environment()` says all three on every run — so a
-whole class of question cannot be settled here and has been costing
-rounds that a run would have ended.
+**Do not reason about what a boot would do on hardware. Hand it over.**
+This machine boots `nw-root` as genuine PID 1 on every suite run — under
+`unshare --pid --fork --mount-proc`, which is what the whole section
+above is an inventory of — and has no BOOTLOADER boot at all.
+`print_environment()` names the Landlock and vfat gaps; the absent
+hardware boot it does not name, because no test here asks for one.
+
+*(This paragraph said "no boot at all" and said `print_environment()`
+announced three things when it announces two of them. `claims` ran the
+block and quoted the suite's own `ok dawn-real-boot` line back.)*
 
 The operator reports a machine that can (2026-09-13): Ubuntu
 6.8.0-139 under QEMU, real ext4 and real FAT32, erofs and `mkfs.erofs`
-present, Landlock at ABI 7 on the host clone, with six boots and a
-ceiling ladder already run there. Written as **reported**, not as fact,
+present, Landlock at ABI 7 on the host clone, with boots and a ceiling
+ladder already run there. Written as **reported**, not as fact,
 because nothing here can check it and an environment claim this file
 states as fact is the shape `CLAUDE.md`'s green-suite corollary exists
-to catch.
+to catch — which applies to how many runs it took as much as to what
+they found, so no number is given for that either.
 
 What to hand over is the **fixture**, not the question: the city, the
 blob, the probe and the exact line whose output decides it. A question

@@ -159,6 +159,28 @@ The boundary that does matter here is not between files, it is **trust**:
   passing that in would be an override; the brick lets the stager
   establish the property itself.
 
+- **`lids=` is required in a city file, and `none` is how a bare house
+  is declared.** Omitting it used to bake the same byte `lids=none`
+  bakes, so a deliberate bare house and a forgotten one were
+  indistinguishable — measured: the two blobs are byte-identical.
+  The floor's height is not the question; its height being unrecorded
+  was.
+
+  **Bake time only, and it cannot be otherwise.** The blob has one lids
+  byte and `_pad` is required zero, so distinguishing an omission from a
+  declaration needs a layout change and a magic bump. Nothing at runtime
+  relies on declaredness — `nwspawn.c` passes the VALUE on — so the
+  "any rule the runtime relies on must be in `nwcheck.c` too" clause
+  has no subject here.
+
+  **A city file written before 2026-09-13 with no `lids=` no longer
+  bakes**, and the two tools that re-bake a user's city turn that into
+  their own message rather than the baker's: `tools/fold-house.py`
+  reports `does not bake`, `tools/stage-candidate.py` reports `the baker
+  refused this city`. Recorded for the same reason the one-field sidecar
+  above is — self-diagnosing, but only if you know to read past the
+  wrapper. `claims`.
+
 - **Check the struct sizes, do not eyeball them.** The Python
   `struct.pack` format and the C struct must agree. Take the format from
   `bake()` in the baker, run `struct.calcsize` on it, and compare against

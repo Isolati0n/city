@@ -182,14 +182,23 @@ sections after this one and are deliberately not numbered here.
    log pipe on 1 and 2. `close_others` sweeps the rest. There is no third
    thing, and no mechanism for granting one.
 
-   **It provisions CAPABILITY, and that half was never written down.**
-   A house is uid 0, and unless a lid says otherwise it can mknod,
-   mount, unshare and chroot inside its own namespace — measured on a
-   real boot by the operator on 2026-09-13 against a house declaring
-   `lids=newns` and nothing else, all four returning 0. "The init
-   provisions nothing" was true about the descriptor table and read as
-   a statement about what a house can do. Both halves are true; only one
-   of them was here.
+   **It does not DROP capability, which is a different act and was
+   stated here as if it were the same one.** Nothing in the TCB lowers
+   privilege — `grep -nE "setuid|setgid|setresuid|capset" *.c` returns
+   nothing — so a house is uid 0 with what it inherited. That much is
+   checkable in this tree, which is what this list requires. What a
+   house can then DO is invariant 6's subject, and the syscall evidence
+   is the operator's: on a real boot (2026-09-13) a house declaring
+   `lids=newns` and nothing else ran mknod, mount, unshare and chroot,
+   all returning 0.
+
+   **A `lids=none` house is worse than that measurement, not equal to
+   it.** `CLONE_NEWNS` appears once in the TCB, gated on the bit, so a
+   house with no lids has no mount namespace of its own and those verbs
+   act on the CITY's. The first version of this paragraph carried
+   "inside its own namespace" over from a `newns` measurement to the
+   bare case, which is the one place the qualifier does not hold.
+   `claims`.
 
    What follows from it is invariant 6's business and not this one's:
    the lid set is the only thing that lowers it, and `lids=` is required
@@ -681,7 +690,7 @@ count. Record a completed review with `--record <agent>`.
 | a limit or the blob layout changed | `drift` | invariant 3 otherwise depends on someone remembering |
 | a brief, this file, `.claude/rules/*.md`, `HISTORY.md`, or an environment claim changed | `claims` | kind-1 statements rot silently, and a diff of pure prose is not a safe diff — every such round here has come back with findings |
 | a speed or scale claim was made | `measurement` | never report a single sample |
-| any diff, before writing the report | `make prereport` | not an agent; five shapes that have each cost a round |
+| any diff, before the first push | `make prereport` | not an agent; five shapes that have each cost a round |
 | a numbered invariant here changed | `make checkbrief` | not an agent; verifies the annotations, and exits 1 when the tree contradicts one |
 
 **`make prereport`'s calibration number: four, on `4e22204`'s diff.** Keep
@@ -741,10 +750,18 @@ round two to round zero. Running it last means the reviewers spend a
 round on what a build step already knew.
 
 It also has to be the LAST thing before the push rather than the last
-thing before the prose: `dee1516`'s message said `prereport clean` on
-two lines that same commit added, because the gates ran, then the
-HISTORY sections were written, then it was committed. A gate result is
-about the tree that existed when it ran.
+thing before the prose: `dee1516`'s message said `prereport clean` while
+`make prereport PREREPORT_BASE="dee1516^ dee1516"` reports
+`HISTORY.md` lines that same commit added, because the gates ran, then
+the HISTORY sections were written, then it was committed. A gate result
+is about the tree that existed when it ran.
+
+**And a clean final run is what makes this compatible with the review
+gate.** `tools/review-gate.sh` keys on file CONTENT, so an edit prompted
+by that last `prereport` invalidates a recorded review and re-owes it.
+If the final run is not clean, the fix costs another review round —
+which is the cost this rule exists to avoid, arriving from the other
+side. `claims`.
 
 It reads the diff and asks five questions that have each cost a
 review round here: a comment claiming a mechanism is load-bearing, an
@@ -924,15 +941,22 @@ Two habits follow from this:
   conclusion and then the next prose change took four rounds anyway,
   which is the weakest-rule pattern applied to a rule about rounds.
 
-  The rule: dispatch `claims` once. If a second round finds something,
-  the answer is **deletion of the passage**, not another correction —
-  because the corrections are where the defects came from. Measured
-  across four rounds on one passage: the rule being corrected never
-  accrued a defect, and the retractions did, almost exclusively.
+  The rule: dispatch `claims` once. A second round is still worth
+  running; what changes is what you may do with its findings — and that
+  splits exactly the way the two bullets above split it, which the first
+  version of this rule flattened.
 
-  A second round is still worth running; what changes is what you are
-  allowed to do with its findings. Correcting is how a passage grows a
-  fifth round.
+  A **false statement** a second round finds is deleted, not reworded.
+  That is where the measured evidence is: across the rounds on one
+  passage the retractions accrued defects and the rule being corrected
+  did not.
+
+  A **rule** a second round finds is re-filed to kind 2 or kind 3, with
+  the reasoning intact, exactly as the bullet above requires. Deleting a
+  rule because a reviewer found something in it is the instruction this
+  file spends two bullets forbidding, and the first version of this one
+  prescribed it for everything. `claims` caught it in the round that
+  introduced it.
 
 ## The characteristic failure
 

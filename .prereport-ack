@@ -331,3 +331,9 @@ prose-count	HISTORY.md	**Two controls in the same script, two different ways of 
 # in test_baker_rejects -- omitting the key is refused AND lids=none is
 # accepted, so a baker refusing both would fail the second half.
 unpaired-absence	bakery/nw-cc.py	if lids is None:
+# A sentinel on the --probe path, the twin of the city-file one above:
+# argparse has no default now, so None means the flag was not given.
+# Paired in test_baker_rejects -- `--probe` with no `--lids` refused,
+# `--lids none` accepted. The pair is what makes it a claim: a baker
+# refusing both would satisfy the refusal half alone.
+unpaired-absence	bakery/nw-cc.py	if args.lids is None:

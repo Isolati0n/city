@@ -334,13 +334,24 @@ def load_city(path: str):
             # somebody forgot. The floor's HEIGHT is not the defect;
             # its height being unrecorded is.
             #
-            # This is what a bare house actually is, measured on a real
-            # boot by the operator (2026-09-13): a house with
-            # `lids=newns` and nothing else ran mknod, mount, unshare of
-            # mount and user namespaces, and chroot, all returning 0. It
-            # is uid 0 with essentially full capability inside its own
-            # namespace. Declaring that is a different act from
-            # defaulting into it.
+            # What a bare house is, and the measurement is NARROWER than
+            # the claim it was first used for. The operator measured a
+            # house with `lids=newns` on a real boot (2026-09-13):
+            # mknod, mount, unshare of mount and user namespaces, and
+            # chroot all returned 0. Nothing here drops privilege --
+            # `grep -nE "setuid|setgid|capset" *.c` returns nothing --
+            # so uid 0 is checkable in this tree; the syscall results
+            # are the operator's.
+            #
+            # `lids=none` IS WORSE THAN THAT MEASUREMENT, NOT EQUAL TO
+            # IT. `CLONE_NEWNS` appears once in the TCB, gated on the
+            # bit (`nwsup.c`, `lid_newns`), so a house with no lids has
+            # no mount namespace of its own and those verbs land on the
+            # CITY's. "inside its own namespace" was the qualifier that
+            # made the sentence sound survivable, and it is exactly the
+            # one that does not hold for the case the message is about.
+            # `claims` caught it in the string printed to whoever just
+            # wrote a bare house.
             #
             # BAKE TIME ONLY, and that is the honest scope rather than a
             # gap: the blob has one lids byte and 0 is 0, so nothing in
@@ -353,11 +364,11 @@ def load_city(path: str):
                 raise SystemExit(
                     f"house {name}: lids= is required and has no default. "
                     f"Say lids=none to declare a house with no lids -- "
-                    f"which on a real boot is uid 0 able to mknod, mount, "
-                    f"unshare and chroot inside its own namespace. "
-                    f"Omitting the key baked the identical byte, so a "
-                    f"deliberate bare house and a forgotten one read the "
-                    f"same.")
+                    f"which is uid 0 with no mount namespace of its own, "
+                    f"so a mount, mknod or chroot it makes lands on the "
+                    f"CITY's namespace. Omitting the key baked the "
+                    f"identical byte, so a deliberate bare house and a "
+                    f"forgotten one read the same.")
             # exec_path is resolved inside the brick, so it is already the
             # path the house will see and must not be rewritten against the
             # baker's cwd. Without a brick it names a machine path.
@@ -379,13 +390,25 @@ def main():
     ap.add_argument("--out", default="plan.blob")
     ap.add_argument("--probe", default="")
     ap.add_argument("--city", default="")
-    ap.add_argument("--lids", default="seccomp")
+    # NO DEFAULT HERE EITHER. `--probe` bakes four houses, and a default
+    # here made "lids= is required and has no default" true of a house
+    # line and false of the program -- the same silent choice the house
+    # rule removes, on the path nobody was reading. `claims`. Both
+    # in-tree callers (the Makefile and tools/mkboot.sh) already pass it.
+    ap.add_argument("--lids")
     args = ap.parse_args()
     if args.city:
         houses = load_city(args.city)
     else:
         if not args.probe:
             raise SystemExit("--probe or --city required")
+        if args.lids is None:
+            raise SystemExit(
+                "--lids is required with --probe and has no default. The "
+                "probe city declares nothing itself, so a default here "
+                "would choose a lid set for four houses on your behalf -- "
+                "which is what lids= being required in a city file exists "
+                "to stop. Use --lids none to say no lids.")
         houses = default_city(os.path.abspath(args.probe), parse_lids(args.lids))
     bake(args.out, houses)
 
