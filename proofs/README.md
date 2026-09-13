@@ -31,11 +31,11 @@ assumes names are non-empty and NUL-padded because `name_ok` runs first in
 |---|---|---|
 | `leaf_path_ok.c` | `path_ok_len` | every `NW_PATH_LEN`-byte string |
 | `leaf_name_ok.c` | `name_ok` | every `NW_NAME_LEN`-byte string |
-| `leaf_name_dup.c` | `name_dup` | every pair of non-empty NUL-padded names (**not** all 2^(8·32) byte strings: the padding is assumed, and `leaf_name_ok.c` proves `name_ok` delivers it) |
+| `leaf_name_dup.c` | `field_dup` at the `layer` offset (see the status note below for `name`'s) | every pair of non-empty NUL-padded field values (**not** all 2^(8·32) byte strings: the padding is assumed, and `leaf_name_ok.c` proves `name_ok` delivers it) |
 | `caller_nw_check.c` | `nw_check` | every byte of a one-unit blob **except the 8 that carry `n_units`/`n_binds`**, leaves abstracted; run again at one bind |
 
 `leaf_name_dup` proves the property the runtime actually depends on: running
-`name_dup` over units in order against a table that started empty reports a
+`field_dup` over units in order against a table that started empty reports a
 duplicate **exactly when** two of them share a name. Both directions, because
 a checker that answers `NW_E_DUPNAME` to everything satisfies the first one.
 
@@ -86,7 +86,25 @@ a checker that answers `NW_E_DUPNAME` to everything satisfies the first one.
   the next reader would take it for a result about the real tree. Same
   shape as the suite's shared stage path, answered the same way.
 
-- **Do not run this beside `make test`.** `leaf_name_dup` is the long one
+- **STATUS, 2026-09-13: the `name`-offset run has not completed, and the
+  reason is a measurement rather than an omission.** `run.sh` runs
+  `field_dup` at two offsets because `name` sits at offset 0, where
+  `(const char *)&u[i] + off` is a no-op and the arithmetic the
+  generalisation introduced is never exercised. The `layer` run passed:
+  `0 of 411 failed, 2595s`. Its vacuity control did not start — the
+  unwindset guard misreported a cbmc that failed to run (fixed; see
+  `check_unwindset`) — and the two `name` runs were never reached.
+
+  So what is verified today is: the composition builds (`mkcomp` finds
+  `field_dup`), all four harnesses type-check against it, `path_ok`,
+  `name_ok` and the caller proofs pass with every control failing, and
+  the duplicate property holds at the `layer` offset at N=3. What is not
+  is the `layer` vacuity control and the `name` offset, either direction.
+
+  **Budget forty-three minutes per `field_dup` run before starting**, and
+  do not read "not completed" as "nobody got round to it".
+
+- **Do not run this beside `make test`.** `leaf_field_dup` is the long one
   and CBMC is killed under memory or CPU pressure; `run.sh` refuses a run
   that produced no result line rather than reading it as a pass, which is
   the guard working. Measured on a 4-CPU machine: a full run contending
@@ -94,23 +112,43 @@ a checker that answers `NW_E_DUPNAME` to everything satisfies the first one.
   proofs alone, and read a `NO RESULT LINE` as "it did not finish", not as
   a failure of the property.
 
-- **N is bounded.** The caller runs at one unit and no binds; `name_dup` at
-  two names. Raise them with `PROOF_UNITS` / `PROOF_BINDS`, and the cost
-  climbs steeply — `leaf_name_dup` at two names is already 88 s, because the
-  probe chain multiplies the 32-byte comparison; at three it had not
-  returned after seven minutes and 2.8 GB when this was written. Nothing
-  here is a proof about a 64-unit plan. The suite's `non-provision-at-max`
+- **N is bounded.** The caller runs at one unit and no binds; the
+  duplicate proof at `PROOF_UNITS`, which `run.sh` defaults to **three**
+  since `d84da58`. Raise them with `PROOF_UNITS` / `PROOF_BINDS`, and the
+  cost climbs steeply — at two names it is 88 s, because the probe chain
+  multiplies the 32-byte comparison.
+
+  **At three it costs 2595 s and 3.1 GB, measured 2026-09-13**, one run,
+  on the 4-CPU machine this file's other figures come from. This bullet
+  said "at three it had not returned after seven minutes and 2.8 GB …
+  that run is not affordable yet" — written before `d84da58` made three
+  the default, and left standing for two days while the default was
+  exactly the configuration it called unaffordable. It is affordable; it
+  is forty-three minutes. A note that was true and became differently
+  untrue is worse than one that was always wrong, because the number in
+  it still reads as current.
+
+  Nothing here is a proof about a 64-unit plan. The suite's `non-provision-at-max`
   boots one; that is a test, not a proof, and the two are the argument
   together.
-- **`name_dup`'s probe chain is not reached at the default N**, and this is
-  the sharpest thing on this page. At two units, equal names have equal
-  hashes, so a duplicate's match is always in the slot it hashes to;
-  truncating the chain to a single slot leaves the proof SUCCESSFUL.
-  Probing needs three units — two colliding names and a third duplicating
-  the displaced one — and that run is not affordable yet. The chain is
-  covered from the other side, by `test_dupname_refused`, which plants a
-  real collision and does fail when the chain is truncated. Neither artifact
-  covers it alone; say which one you mean.
+- **`field_dup`'s probe chain needs three units, and three is the default**,
+  which is the sharpest thing on this page and was the opposite of it
+  until 2026-09-13. At two units, equal names have equal hashes, so a
+  duplicate's match is always in the slot it hashes to; truncating the
+  chain to a single slot leaves the proof SUCCESSFUL. Probing needs three
+  — two colliding names and a third duplicating the displaced one.
+
+  This bullet was headed "*is not reached at the default N*" and closed
+  "*that run is not affordable yet*". `d84da58` made three the default on
+  2026-09-11 and neither sentence was updated; `0a42f63` broke
+  `make proof` outright the next day, so nobody ran the configuration
+  either sentence was about. Both are corrected from a run, not from
+  reading.
+
+  The chain is still covered from the other side too, by
+  `test_dupname_refused`, which plants a real collision and does fail
+  when the chain is truncated. Neither artifact covers it alone; say
+  which one you mean.
 - **The composition is only as good as its stub list.** The caller's stubs
   assume exactly what the leaf proofs assert, and those two lists are kept in
   step **by hand**, in comments that name each other. A post-condition
@@ -120,7 +158,7 @@ a checker that answers `NW_E_DUPNAME` to everything satisfies the first one.
   because CBMC does not — it accepted a stub declared
   `int slot[static NW_DUP_SLOTS]` against a `struct nw_dup_tab *` and went
   on to solve.
-- **`hash_name`, `name_dup` and the CRC are unconstrained at the caller.**
+- **`hash_name`, `field_dup` and the CRC are unconstrained at the caller.**
   That is the stronger claim, not a gap: `nw_check` must reach the same
   verdicts for any hash, any duplicate judgement and any checksum. The CRC's
   own correctness is discharged elsewhere and differently — `test_difftest`

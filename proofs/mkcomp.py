@@ -21,7 +21,13 @@ import sys
 # definition. Removing any name from this list means the caller proof runs
 # against the real function, which is sound but usually too expensive -- that
 # is the whole reason the composition exists.
-LEAVES = ["name_ok", "path_ok_len", "hash_name", "name_dup", "nw_crc32_split"]
+# `name_dup` became `field_dup` in 0a42f63, when the duplicate pass was
+# generalised to a second field (the layer id) by taking an offset. This
+# list was not updated, so `make proof` FAILED -- loudly, at this script,
+# with "expected exactly one definition of name_dup, found 0" -- from
+# 2026-09-12 until 2026-09-13, and nobody ran it. The script's refusal
+# worked perfectly; what it could not do is make anyone look.
+LEAVES = ["name_ok", "path_ok_len", "hash_name", "field_dup", "nw_crc32_split"]
 
 
 def strip_body(src, fn):

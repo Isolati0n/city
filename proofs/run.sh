@@ -223,8 +223,34 @@ check_unwindset() {   # check_unwindset <file> <args...>
         prev=$a
     done
     [ -n "$set_arg" ] && [ -n "$f" ] || return 0
-    loops=$(cbmc --show-loops -I"$ROOT" -I"$OUT" "$@" 2>/dev/null \
-            | sed -n 's/^Loop \(.*\):$/\1/p')
+    # STDERR KEPT, AND THE EXIT STATUS CHECKED. This was
+    # `cbmc --show-loops ... 2>/dev/null`, so a cbmc that FAILED TO RUN
+    # produced no output and the guard below reported the failure as
+    # "--unwindset names X, which is not a loop in this program" --
+    # blaming the bound for the tool not running, with the diagnosis
+    # printed and the real error thrown away.
+    #
+    # Measured 2026-09-13: immediately after leaf_field_dup_layer's
+    # 2595-second, 3.1 GB solve, this invocation produced nothing and the
+    # run stopped with `Loops here:` followed by an empty list. A program
+    # with NO loops at all is impossible here -- there are 25 -- so the
+    # empty list was the tell, and it was the only one, because the
+    # message it printed was about something else entirely.
+    #
+    # That is this repository's characteristic failure inside the guard
+    # written to catch a silent one: a true-looking sentence next to a
+    # tool that did not do what it says.
+    loops_raw=$(cbmc --show-loops -I"$ROOT" -I"$OUT" "$@" 2>&1)
+    loops_rc=$?
+    loops=$(printf '%s\n' "$loops_raw" | sed -n 's/^Loop \(.*\):$/\1/p')
+    if [ $loops_rc -ne 0 ] || [ -z "$loops" ]; then
+        echo "proofs: cbmc --show-loops did not produce a loop list" >&2
+        echo "proofs: (exit $loops_rc). This is the TOOL failing, not a" >&2
+        echo "proofs: bound naming a loop that is absent -- every program" >&2
+        echo "proofs: here has loops. Its output:" >&2
+        printf '%s\n' "$loops_raw" | sed 's/^/proofs:   /' >&2
+        return 1
+    fi
     echo "$set_arg" | tr ',' '\n' | while IFS= read -r pair; do
         [ -n "$pair" ] || continue
         nm=${pair%%:*}
@@ -322,10 +348,30 @@ if wanted name_ok; then
 fi
 
 if wanted name_dup; then
-    expect PASS leaf_name_dup $DUP_UNW -DPROOF_UNITS=$DUP_UNITS \
-        proofs/leaf_name_dup.c
-    expect FAIL leaf_name_dup_vacuity $DUP_UNW -DPROOF_UNITS=$DUP_UNITS \
-        -DPROOF_VACUITY proofs/leaf_name_dup.c
+    # BOTH OFFSETS. 0a42f63 generalised name_dup into field_dup by adding
+    # an `off` argument, and nw_check now runs the pass over `name` and
+    # over `layer`. `name` is at offset 0, where `(const char *)&u[i] +
+    # off` is a no-op -- so the run that had always existed exercises
+    # none of the arithmetic the generalisation introduced. Running only
+    # `name` would be a proof passing at the one value where the thing it
+    # is about does nothing.
+    #
+    # The layer run is first because it is the one that can fail for the
+    # new reason; the name run is kept because offset 0 is a real call
+    # site and not merely the degenerate one.
+    for f in layer name; do
+        case $f in
+        layer) off="offsetof(struct nw_unit, layer)" ;;
+        name)  off="offsetof(struct nw_unit, name)" ;;
+        esac
+        expect PASS leaf_field_dup_$f $DUP_UNW -DPROOF_UNITS=$DUP_UNITS \
+            -DPROOF_FIELD_OFF="$off" -DPROOF_FIELD_NAME=$f \
+            proofs/leaf_name_dup.c
+        expect FAIL leaf_field_dup_${f}_vacuity $DUP_UNW \
+            -DPROOF_UNITS=$DUP_UNITS \
+            -DPROOF_FIELD_OFF="$off" -DPROOF_FIELD_NAME=$f \
+            -DPROOF_VACUITY proofs/leaf_name_dup.c
+    done
 fi
 
 if wanted caller; then

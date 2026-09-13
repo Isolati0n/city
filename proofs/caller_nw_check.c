@@ -31,7 +31,7 @@ uint32_t nondet_u32(void);
  *   name_ok      leaf_name_ok.c   -- non-empty, NUL-padded within the field
  *   path_ok_len  leaf_path_ok.c   -- absolute, NUL-terminated, no ".."
  *
- * hash_name, name_dup and the CRC are unconstrained. That is deliberate and
+ * hash_name, field_dup and the CRC are unconstrained. That is deliberate and
  * it is the stronger claim: nw_check must reach the same verdicts for ANY
  * hash, ANY duplicate judgement and ANY checksum. The CRC's own correctness
  * is a separate and easy obligation -- the suite's difftest against
@@ -71,8 +71,14 @@ static int path_ok_len(const char *s, int max)
 
 static uint32_t hash_name(const char *s) { (void)s; return nondet_u32(); }
 
-static int name_dup(struct nw_dup_tab *t, const struct nw_unit *u, uint32_t i)
-{ (void)t; (void)u; (void)i; return nondet_int(); }
+/* field_dup, not name_dup: 0a42f63 generalised the duplicate pass to a
+ * second field by taking an offset, and this stub kept the old name and
+ * arity. gcc would have rejected it against the generated declaration --
+ * which is exactly what the signature check in run.sh exists for -- but
+ * mkcomp.py refused first, so `make proof` never got this far. */
+static int field_dup(struct nw_dup_tab *t, const struct nw_unit *u,
+                     uint32_t i, size_t off)
+{ (void)t; (void)u; (void)i; (void)off; return nondet_int(); }
 
 uint32_t nw_crc32_split(const void *a, uint32_t na, const void *b, uint32_t nb)
 { (void)a; (void)na; (void)b; (void)nb; return nondet_u32(); }

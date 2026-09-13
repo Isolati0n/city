@@ -8623,3 +8623,89 @@ is still right: under the documented iterate-for-speed workflow
 next run's refusal loop reads. That is `CLAUDE.md`'s corrupted mode of
 the evidence-destroying bullet, and the unlink makes it impossible
 rather than unlikely. Pinned by nothing; written down instead.
+
+## 78. `make proof` was red for a day, and the guard blamed the wrong thing (2026-09-13)
+
+Base `9e7d311`. `tcb-review` reported it while reviewing the resource
+block: `make proof` fails at `proofs/mkcomp.py`, because `0a42f63`
+renamed `name_dup` to `field_dup` when the duplicate pass was
+generalised to the layer id and the script's `LEAVES` was not updated.
+A FAIL rather than the documented SKIP, and the evidence is the
+script's own branch rather than a tool being on the PATH: `run.sh`
+prints `proofs: cbmc is not installed -- this is a SKIP, not a pass.`
+and exits 3 when it is absent. It printed the version and `make`
+reported `Error 1`.
+
+The script refused correctly and loudly. What it could not do is make
+anyone look. Red from 2026-09-12 to 2026-09-13, which is the whole of
+the resource block's development: every new check in `nwcheck.c` landed
+in a file whose CBMC oracle was dead.
+
+### The rename was not the only thing stale
+
+`name` is at **offset 0**. So the harness that had always existed ran
+`field_dup` with `(const char *)&u[i] + off` as a no-op: the pointer
+arithmetic the generalisation introduced was never exercised, by
+anything. A proof passing at the one value where the mechanism it is
+about does nothing — `LargestCityFits` at `MaxFds = 16`, with a solver
+attached.
+
+The harness takes the offset as a parameter now, defaults to `layer`'s
+so a hand-run exercises the arithmetic, and `run.sh` runs both.
+
+### What the run cost, and what the README said it would
+
+```
+  leaf_field_dup_layer       PASS (want PASS)  ** 0 of 411 failed  2595s
+```
+
+Forty-three minutes, 3.1 GB. `proofs/README.md` said of that exact
+configuration: *"at three it had not returned after seven minutes and
+2.8 GB when this was written … that run is not affordable yet."*
+`d84da58` made three the default on 2026-09-11 and the note was not
+updated; `0a42f63` broke `make proof` the next day, so **nobody ran the
+configuration either sentence was about**. Both corrected from the run.
+
+A note that was true and became differently untrue is worse than one
+that was always wrong, because the number in it still reads as current.
+
+### And the guard printed a true-looking sentence about the wrong thing
+
+The run stopped after that first proof:
+
+```
+proofs: --unwindset names field_dup.1, which is not a loop in
+proofs: this program. CBMC ignores it silently, so the
+proofs: bound is not applied. Loops here:
+proofs:   
+```
+
+`field_dup.1` **is** a loop in that program — measured, 25 of them, in
+both the ordinary and the vacuity build. What happened is that
+`check_unwindset` ran `cbmc --show-loops … 2>/dev/null`, cbmc failed to
+run (immediately after the 2595-second, 3.1 GB solve), and an empty
+result was read as "the loop is absent". The tool not running and the
+bound naming nothing produce the same evidence, and the guard printed
+the second.
+
+The tell was the empty list — a program with no loops at all is
+impossible here — and it was the only one, because every word of the
+message was about something else. That is this project's characteristic
+failure inside a guard written to catch a silent one, in the file whose
+own comments say `--unwindset` failures are silent and must be caught.
+
+Fixed: stderr kept, exit status checked, and a tool failure reported as
+a tool failure.
+
+### What is verified and what is not
+
+Verified: the composition builds, all four harnesses type-check against
+it, `leaf_path_ok_128`, `leaf_name_ok`, `caller_nw_check` and
+`caller_nw_check_bind` pass with all four controls failing (45 s), and
+the duplicate property holds at the `layer` offset at N=3.
+
+Not: the `layer` vacuity control, and the `name` offset in either
+direction. **Recorded with the reason, not as a gap.** The next reader
+needs to know it costs forty-three minutes a run before deciding
+whether to start one, or "not completed" reads as "nobody got round to
+it" and they begin it expecting it to finish.
