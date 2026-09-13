@@ -8393,10 +8393,18 @@ the one a control is run to establish.
 The layout and ledger controls are quoted in their own sections above.
 
 *(This section was headed "because the dispatched `control` never
-returned" when `ddfcb56` was pushed. It returned afterwards, with three
-findings none of these mutations reached — §76. The heading is
-corrected rather than the claim retracted in place: it was true when
-written and the reason it stopped being true is a section of its own.)*
+returned" when `ddfcb56` was pushed. It returned afterwards — §76. The
+heading is corrected rather than the claim retracted in place: it was
+true when written and the reason it stopped being true is a section of
+its own.*
+
+*The first version of this parenthesis added "with three findings none
+of these mutations reached", and the table directly above it disproves
+that: `drop parse_bytes's zero refusal` IS §76's third finding, and its
+quoted `FAIL: baker accepted mem-high=0` is the evidence for it. The
+mutation reached it; nobody read the output as saying so, which is a
+different and worse thing. `claims`, on the retraction that cites the
+rule about retractions carrying new claims.)*
 
 ## 76. The refusal nothing could perform, again, one level down (2026-09-13)
 
@@ -8418,9 +8426,13 @@ the commit that removed an instance of it.
 test could have pinned it. `str.split(",")` yields at least one part; a
 non-integer part is already refused, a backwards range is already
 refused, and an index outside `0..CPU_INDEX_MAX` is already refused, so
-every surviving part sets a bit. Measured against the real function over
-a 7239-input corpus: **zero inputs reached it**, and `grep` for its
-message across the suite returns nothing.
+every surviving part sets a bit. Measured by restoring the branch as a
+raise and driving it with a cross-product corpus of one-, two- and
+three-part lists over the alphabet the parser accepts: **no input
+reached it**, and at `ddfcb56` `grep` for its message across the suite
+returned nothing. (A corpus SIZE stood here and in the source comment —
+a number nothing in the tree generates or stores, which is a claim
+about how hard somebody looked rather than about the tree. `claims`.)
 
 That is `NW_E_RESZERO` exactly, in the baker instead of the enum — a
 refusal carrying a message that argues its own necessity, that nothing
@@ -8446,13 +8458,28 @@ string. `control` moved `check(houses, binds)` below the write in
 test printed `ok` on all of its cases while a blob of a refused plan sat
 at `--out`.
 
-The suite was not wholly blind: `path-traversal-refused` caught it. But
-this test covers the rules `nwcheck.c` has no subject for, which is the
-half nothing else can see, and its sibling on the probe path had
-asserted the same thing since the `lids=` round — so the shape was
-already in the file, one test over. A refusal that has already written
-the blob is one an operator walks past: the exit code is in a log and
-the file is in the slot.
+The suite was not wholly blind: `path-traversal-refused` caught it — by
+a traceback rather than by name. And its sibling on the probe path had
+asserted the same thing since **`33cf074`, the previous `control`
+round**, so the shape was already in the file, one test over, put there
+by the immediately preceding reviewer. (This said "since the `lids=`
+round", which is `2917068` and does not carry the assertion; `claims`
+ran the log. The wrong attribution made this read as a long-standing
+shape overlooked for several rounds, when it had been there for exactly
+one commit — which is the less flattering version.) A refusal that has
+already written the blob is one an operator walks past: the exit code
+is in a log and the file is in the slot.
+
+**And what the new assertion covers is narrower than this paragraph
+first claimed.** Most of the cases are refused during *parsing*, before
+`bake()` runs at all, so no blob can exist for them wherever `check()`
+sits and the assertion is vacuous for every one. Its live inputs are
+the cross-field pairs — the memory ordering, nice-without-`sched=other`,
+capacity-without-layer — which are exactly the rules `nwcheck.c` ALSO
+enforces, not the baker-only half. It is still worth having: nothing
+else in the suite pins `check()`'s position for those. But "covers the
+half nothing else can see" was backwards, and `claims` enumerated it
+rather than reasoning about it.
 
 Fixed and controlled: the same mutation now gives `the baker refused a
 throttle exactly at the backstop AND wrote .../br.blob anyway.`
@@ -8491,6 +8518,16 @@ admits the other's value**, not "one value per field". On the
 pre-commit tree `cpus=0` and `sched=other` both baked to `1`, so
 swapping `cpu_mask` and `sched_policy` in `pack_res` produced
 byte-identical output and the layout test passed under a comment saying
-every permutation was separated. `ddfcb56` declares `cpus=0,4` and the
-same mutation goes red naming the position — but the fix was the values,
-and the rule is the one above.
+every permutation was separated. `ddfcb56` declares `cpus=0,4`, and the
+same mutation now produces different bytes, which the layout assertion
+would name.
+
+**Under `make test` it does not get that far, and saying it did was
+this section's own mistake repeated.** `cpus=63` is `1 << 63`, which no
+longer fits the byte the swap gives it, so the baker raises inside an
+earlier test's acceptance loop and the run dies there. That is the
+trailer-swap episode five paragraphs above, re-committed in the section
+that quotes it: *"the suite went red" and "the assertion I wrote went
+red" are different claims*. `claims`. The fix was the values and the
+rule is the one above; what is not established is which assertion
+catches it under the target.

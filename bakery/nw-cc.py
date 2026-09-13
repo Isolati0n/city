@@ -178,8 +178,13 @@ def parse_cpus(v):
     # at least one part; a part that is not an integer is already
     # refused, a backwards range is already refused, and an index
     # outside 0..CPU_INDEX_MAX is already refused, so every surviving
-    # part sets a bit. Measured over a 7239-input corpus: zero inputs
-    # reached it.
+    # part sets a bit. Measured by restoring the branch as a raise and
+    # driving it with a cross-product corpus of one-, two- and
+    # three-part lists over the alphabet the parser accepts: no input
+    # reached it. (A corpus SIZE stood here -- a number nothing in the
+    # tree generates or stores, which is a claim about how hard somebody
+    # looked. `claims`. The named guards below are what a reader can
+    # re-run.)
     #
     # That is NW_E_RESZERO one level down -- a refusal whose message
     # argues its own necessity, that nothing can perform -- shipped in

@@ -3046,11 +3046,20 @@ def test_baker_refuses_bad_resources():
          "a scheduler policy outside the closed set"),
         # THE ZEROES, one per key that takes a size. NOT because the
         # refusal is per-key -- it is ONE guard in parse_bytes,
-        # parameterised by the key name, which is what makes the five
-        # messages look separate. `control` deleted it and all five went
-        # red at once. So these are cheap redundancy against the guard
-        # being split later, and the comment that stood here described a
-        # control that cannot be run, which is worse than no comment.
+        # parameterised by the key name, which is what makes the
+        # messages look separate. Deleting it makes every one of them
+        # bake clean; a suite run stops at the first, `FAIL: baker
+        # accepted mem-high=0`, which is what HISTORY 75's control table
+        # quotes. So these are cheap redundancy against the guard being
+        # split later.
+        #
+        # The comment that stood here first invoked a reviewer for a
+        # control nobody could run; its replacement then said "all five
+        # went red at once", which `expect()` cannot produce -- it
+        # raises on the first failure. A sentence written to remove an
+        # unrunnable control result, asserting an unrunnable control
+        # result. `claims`.
+        #
         # `cpu-weight=0` IS a different path -- the range check -- and
         # is genuinely separate.
         (f"{bare} mem-high=0", "Omit mem-high=", "mem-high=0"),
@@ -3105,10 +3114,27 @@ def test_baker_refuses_bad_resources():
         # `check()` below the write in `bake()` -- every message here
         # identical, every exit code identical -- and this test printed
         # ok on all of its cases while a blob of a refused plan sat at
-        # --out. (The suite was not wholly blind: `path-traversal-refused`
-        # caught it. This test, which covers the rules nwcheck.c has no
-        # subject for, was.) Its sibling on the probe path already
-        # asserted this; that is where the shape comes from.
+        # --out. The suite was not wholly blind: `path-traversal-refused`
+        # caught it, by a traceback rather than by name. Its sibling on
+        # the probe path already asserted this, since 33cf074; that is
+        # where the shape comes from.
+        #
+        # WHAT THIS ASSERTION ACTUALLY COVERS, because the first version
+        # of this comment had it backwards. Most cases above are refused
+        # during PARSING, before bake() is called at all, so no blob can
+        # exist for them wherever check() sits -- the assertion is
+        # vacuous for every one of those. Its live inputs are exactly
+        # the cross-field pairs, which reach check(): mem-equal,
+        # mem-inverted, nicepol under batch, nicepol under idle, nicepol
+        # with no sched at all, and cap-no-layer. Those are the rules
+        # nwcheck.c ALSO enforces, not the baker-only half. So this pins
+        # check()'s position relative to the write for those cases and
+        # says nothing about the ones refused during parsing. `claims`
+        # enumerated it.
+        #
+        # (Named rather than counted, and the first version of this
+        # paragraph counted them -- in the file whose own rules say
+        # never to, inside the fix for two counts in this same file.)
         expect(not os.path.exists(out),
                f"the baker refused {what} AND wrote {out} anyway. The "
                f"refusal has to happen before the write, or a refused "
