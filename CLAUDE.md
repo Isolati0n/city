@@ -909,6 +909,44 @@ sentence is not the evidence. The test that fails without the mechanism is the
 evidence, and until it exists, the behaviour is a hypothesis however carefully
 it is worded.
 
+**And that rule goes quiet exactly where writing escapes scrutiny**, because
+removing the behaviour requires a behaviour to remove. A specification for an
+unwritten mechanism cannot be tested against by construction, so the rule has
+nothing to say about it and the writing passes uninspected.
+
+The test that applies earlier: **could any existing thing falsify a single
+sentence of this?** Ask it of a design note, a plan, a critique, a set of
+expectations — anything written before the thing it describes.
+
+It is *not* "how far ahead of the implementation is it", which is a weaker
+question and a different one. A document can be a year ahead and still name a
+constant, a file, or a grep whose answer would refute it; another can describe
+next week's work and rest on nothing checkable at all. Distance is not the
+variable. **When the answer is *nothing can*, the writing has stopped being a
+claim about the world and become a claim about itself.**
+
+That is not a reason to delete it, and deleting it would lose the reasons,
+which are the part that does not survive implementation. It is a reason to
+**label it, and to make the label the first line rather than a caveat at the
+end** — plus, per statement, what would have to exist for it to be checked.
+That is kind 3 from *How briefs are written* applied at the scale of a whole
+document, and it sharpens kind 3: a kind-3 statement names its prerequisite,
+and this test asks whether *any* statement in the document has one that exists
+yet.
+
+**Measure the falsifiable surface rather than asserting it is small.**
+`docs/NW-EXPECTATIONS-UNANCHORED.md` is the worked instance, labelled
+unanchored on its own first line. Everything checkable in it was checked:
+`grep -cE 'SIGCHLD|waitpid|signalfd'` over `pid1.c` and `nwsup.c`, the absence
+of any layer-size bound, and `blob.h`'s two `NW_KIND_*` constants. Those
+three greps are its whole falsifiable surface, and the surface is the
+measurement worth recording — not the document's length, which says nothing
+about how much of it the tree can answer.
+
+*The test arrived from another agent's review and is recorded with its origin,
+which is the same discipline: an argument's provenance is checkable and its
+persuasiveness is not.*
+
 The discipline already exists here and should be named as such: the negative
 controls. `brick-is-a-root` was believed only after removing `lid_brick()`
 made it fail, *and* after keeping the log line while skipping the
