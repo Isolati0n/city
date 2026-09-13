@@ -22,10 +22,12 @@ and the old layer is left alone, so the previous brick plus the previous
 layer still boots -- which is what makes this reversible by switching
 slots rather than by undoing anything.
 
-THE EXCEPTION THIS MAKES, named because it is the first of its kind. One
-privileged helper runs on the LIVE machine; everything privileged before
-this ran offline or at boot. What keeps it defensible is not that it is
-small. It is that it cannot change what is running:
+THE EXCEPTION THIS SITS UNDER, and `tools/stage-candidate.py` made it
+first: a privileged helper running on the LIVE machine and writing the
+machine root. That tool's own docstring states the rule in these words
+and this is the second helper under it, not the first. What keeps
+either defensible is not that it is small. It is that it cannot change
+what is running:
 
   - it folds only a house that is already closed, established below
     rather than trusted;

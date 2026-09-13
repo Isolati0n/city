@@ -7396,10 +7396,11 @@ Neither is a second opinion on the other.
 
 ### What the controls found
 
-Seven mutations, all red now, and two of them were green first.
+Every mutation named in the test's docstring is red now. Three
+were green first, and they are the interesting ones.
 
-**Removing a pairing left the suite green**, because the scans still
-worked and so the pairings were never consulted. A pairing is
+**Removing either pairing left the suite green**, because the scans
+still worked and so the pairings were never consulted. A pairing is
 load-bearing only against a *broken scan*, so the suite now supplies one
 — patching `scan_environ` to answer `[]` for everything and requiring
 the refusal. That is not the monkeypatch-the-subject shape `control`
@@ -7422,5 +7423,4 @@ reason string.
 `expect(g.stdout.readline() == "ok", f"...{g.stderr.read()}")` builds its
 message **eagerly**, and reading a live child's stderr blocks until that
 child closes it — which this one never does, because it is holding a
-mount open on purpose. The suite produced no output at all for ten
-minutes. The failure path of a check, taken on the success path.
+mount open on purpose. The suite produced no output at all. The failure path of a check, taken on the success path.

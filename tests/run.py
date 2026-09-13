@@ -5372,10 +5372,12 @@ def test_fold_house_refuses_a_house_that_is_not_closed():
     and each is an absence that needs its pairing.
 
     Negative controls, all run:
-      - neuter `scan_environ` to return [] -> the live-NW_LAYER case
-        passes and the fold captures a live layer;
-      - neuter `scan_mountinfo` -> the grandchild case passes, which is
-        the one the environ scan cannot see;
+      - neuter `scan_environ` to return [] -> the PAIRING catches it
+        first and case 1 fails on its reason string. Not "the fold
+        captures a live layer", which is the hazard the scan guards
+        against and not what the control does;
+      - neuter `scan_mountinfo` -> likewise, and it also dies at case 1
+        rather than reaching the grandchild case;
       - delete the environ PAIRING -> a scan that finds nothing because
         it is broken reads as a closed house;
       - delete the mountinfo pairing -> same, on the other scan;
@@ -5385,11 +5387,14 @@ def test_fold_house_refuses_a_house_that_is_not_closed():
         fires, and without that refusal the candidate re-applies the
         layer's whiteouts over the brick that just absorbed them.
 
-    The machine-root ids this creates are keyed to the pid and removed
-    in a `finally`, for the reason
-    `test_candidate_stager_never_touches_the_live_slot` records: a red
-    run otherwise leaves them behind and the next run reads them as a
-    tool defect."""
+    NOTHING HERE REACHES THE MACHINE ROOT, and that is asserted rather
+    than arranged: `root=` is passed through to the stager, so every
+    layer lands under the test root inside the stage and `make stage`
+    removes it. A pid-keyed `finally` sweeping `/nw/layers` stood here
+    for one round and had never fired once -- `claims` measured
+    `/nw/layers` unchanged across a run -- which is the silence rule in
+    the cleanup written to obey `harness.md`. The sweep is gone and the
+    property it was insuring against is checked instead."""
     why = erofs_available()
     if why:
         raise Unavailable(why)
@@ -5398,12 +5403,33 @@ def test_fold_house_refuses_a_house_that_is_not_closed():
             "the kernel has no overlay driver, so the mountinfo pairing "
             "cannot mount its marker and the grandchild half of the "
             "closed-house check goes untested")
+    before = sorted(os.listdir(_layer_dir())) if os.path.isdir(
+        _layer_dir()) else []
     made = []
+    summary = None
     try:
-        return _fold_house_body(made)
+        # The body RETURNS its ok line rather than printing it, so a
+        # machine-root leak cannot be preceded by an announcement of
+        # success. The first version printed inside the body and the
+        # control produced `ok fold-house (...)` immediately followed by
+        # `FAIL: the machine root gained ...`, which is loud and reads
+        # backwards.
+        summary = _fold_house_body(made)
     finally:
-        for gone in made:
-            shutil.rmtree(f"{_layer_dir()}/{gone}", ignore_errors=True)
+        # THE PROPERTY, not a cleanup. Everything this test creates goes
+        # under its own root inside the stage, so the machine root must
+        # be untouched -- checked here rather than swept, because a
+        # sweep of a directory nothing writes cannot fail and reads as
+        # working. It runs in the `finally` so a RED run is checked too:
+        # a refusal that leaked a layer is exactly the case a sweep
+        # would have hidden.
+        after = sorted(os.listdir(_layer_dir())) if os.path.isdir(
+            _layer_dir()) else []
+        expect(after == before,
+               f"the machine root gained layer(s) {sorted(set(after) - set(before))}; "
+               f"this test passes root= through to the stager and must "
+               f"leave {_layer_dir()} alone")
+    print(summary)
 
 
 def _fold_house_body(made):
@@ -5613,10 +5639,10 @@ def _fold_house_body(made):
     expect(raised is not None and "whiteout" in raised,
            f"reusing the live layer id was accepted: {raised}")
 
-    print(f"ok fold-house (closed established by two paired scans -- environ "
-          f"and mountinfo, the second seeing a grandchild the first cannot; "
-          f"{lid} folded onto {H[:8]} -> {newh[:8]} with new id {nid}; live "
-          f"slot and current untouched; candidate staged in {slot})")
+    return (f"ok fold-house (closed established by two paired scans -- "
+            f"environ and mountinfo, the second seeing a grandchild the "
+            f"first cannot; {lid} folded onto {H[:8]} -> {newh[:8]} with new "
+            f"id {nid}; live slot and current untouched; candidate in {slot})")
 
 
 def main():

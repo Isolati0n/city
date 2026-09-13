@@ -374,13 +374,25 @@ sections after this one and are deliberately not numbered here.
 8. **CRC32 is diagnostic** (threat model is corruption, not tampering). The
    structural checks in `nwcheck.c` are the actual safety property. The seal
    must be *verified*, not merely read — that was bug 1.
-9. **A fold establishes that no SUPERVISOR exists for the unit, not that
-   no house process is running.** Moved here from *Waiting on a
-   prerequisite* on 2026-09-13, when `tools/fold-house.py` gave the rule
-   a subject. The distinction is the rule: "the house is not running" is
-   satisfied by a longrun house between restarts, which is about to
-   write again, while "no supervisor" is exactly "this unit will not run
-   again before the next boot".
+9. **A fold of a live machine's layer goes through
+   `tools/fold-house.py`, which establishes that no SUPERVISOR exists
+   for the unit — not that no house process is running.** Moved here
+   from *Waiting on a prerequisite* on 2026-09-13, when that tool gave
+   the rule a subject. The distinction is the rule: "the house is not
+   running" is satisfied by a longrun house between restarts, which is
+   about to write again, while "no supervisor" is exactly "this unit
+   will not run again before the next boot".
+
+   **`bakery/fold.py` IS NOT COVERED AND IS NOT MEANT TO BE.** It is the
+   fold engine, it has its own CLI, and it checks nothing: `grep` for
+   `scan_environ`, `NotClosed` or `NW_LAYER` in it returns nothing, and
+   `claims` ran it against a layer whose supervisor was live with both
+   scans non-empty and it exited 0. The invariant is about the *caller*,
+   and the engine is unguarded by design so the tree-level tests can
+   exercise merging with no privileges at all. The first version of this
+   invariant said "a fold" without the qualifier — the kind-3 bullet it
+   replaced had carried it, and the promotion dropped it, which is the
+   promotion losing the one clause that made the sentence true.
 
    Two scans, because they answer different questions and neither
    answers both. No process carrying `NW_LAYER=<id>` covers the
@@ -391,8 +403,17 @@ sections after this one and are deliberately not numbered here.
    that exec'd with a fresh environment, which the first scan cannot see
    at all: measured, `scan_environ` returns `[]` for exactly the process
    `scan_mountinfo` finds.
-   <<filecontains:tools/fold-house.py:def scan_environ>>
-   <<filecontains:tools/fold-house.py:def scan_mountinfo>>
+   <<count:tools/fold-house.py:_paired_environ_probe:2>>
+   <<count:tools/fold-house.py:_paired_mountinfo_probe:2>>
+   A **count**, definition plus call site, because that is the mutation
+   the record says was green: dropping a pairing from `require_closed`
+   while both scans still work leaves the suite passing unless the suite
+   supplies a broken scan, which it now does. `filecontains` on the two
+   scan names stood here for one round and pinned only that two names
+   exist — `claims` gutted both function bodies with the names intact
+   and `checkbrief` reported `ok`. Nothing annotatable pins what the
+   scans *do*; `test_fold_house_refuses_a_house_that_is_not_closed` is
+   what does, and it is red under every mutation named in its docstring.
 
    **Each scan is an absence and each is paired**, or an empty result
    would mean "closed" and "broken" identically. The environ pairing

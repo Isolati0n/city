@@ -39,11 +39,11 @@ an image it produced.
 THE PRECONDITION IS THE CALLER'S, AND NOTHING HERE IMPLEMENTS IT. A
 fold of a LIVE layer is the silent-wrong-artifact case -- the image
 mounts, boots and holds a half-written file, and nothing in the bytes
-says so. `CLAUDE.md` records the rule (a fold establishes that no
-SUPERVISOR exists for the unit, not that no house process is running)
-as waiting on the helper that does not exist yet. This module is the
-fold engine; it does not check, and an operator pointing it at a
-running house gets no warning. Said here because the argument for
+says so. `CLAUDE.md` invariant 9 states the rule and SCOPES IT TO
+`tools/fold-house.py`, which is the caller that establishes it. This
+module is the fold engine; it does not check, deliberately, so the
+tree-level tests can exercise merging with no privileges at all -- and
+an operator pointing it at a running house gets no warning. Said here because the argument for
 having no --force is the same argument, and a reader meeting one
 without the other would reasonably assume this file makes the check.
 """

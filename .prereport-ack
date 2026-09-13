@@ -255,7 +255,8 @@ unpaired-absence	tests/run.py	if "overlay" not in open("/proc/filesystems").read
 # THE paired positive itself, inverted: this asserts the grandchild does
 # NOT carry NW_LAYER, which is the precondition making the mountinfo case
 # test what it exists for rather than duplicating the environ case. Its
-# pair is the refusal three lines below, which must name upperdir.
+# pair is the refusal below it that must name upperdir -- naming the
+# assertion rather than counting lines, since the distance is a hostage.
 unpaired-absence	tests/run.py	expect(fh.scan_environ(lid) == [],
 # The pairing's own assertion: the scan must find a child exec'd WITH the
 # variable. Absence here means the scan is broken, which is the whole
