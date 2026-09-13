@@ -103,6 +103,62 @@ The boundary that does matter here is not between files, it is **trust**:
   `nwcheck.c` and a refusal in the baker. The id is validated as a NAME,
   not a path — `nw-sup` composes `NW_LAYER_DIR "/" <id> "/" upper` itself,
   so the same argument that retired the brick path applies.
+- **The `.layers` sidecar pairs each id with its brick, and the pairing
+  is load-bearing.** The baker writes `<layer-id> <brick>` per line;
+  `tools/stage-candidate.py` reads field 1 to tell a candidate that
+  reuses a live layer over the SAME brick -- an unchanged house keeping
+  its data across a plan change, which is what keying a layer by a
+  declared id is for -- from one that reuses it over a different brick,
+  which after a fold stacks the folded contents over themselves.
+  `tools/stage-layers.py` reads field 0 and ignores the rest, because it
+  creates directories and the brick does not bear on that. The two
+  `tools/stage-layers.py` and `tools/stage-candidate.py` disagreeing
+  about a one-field line is not the asymmetry `control` found before:
+  they are answering different questions, and `tools/stage-candidate.py`
+  refuses because its question has no answer without the field.
+
+  The writer is the baker; the readers are `tools/stage-layers.py`,
+  `tools/stage-candidate.py` and `tests/run.py` — which also WRITES
+  sidecars by hand, in the stager test's fixtures. Those hand-written
+  copies are not drift: they are what pins the format, because a
+  mutation to the baker has to leave them still accepted. Adding a
+  field to a file that many programs read is the drift class invariant
+  3 is about, so it is written here rather than left to be
+  rediscovered.
+
+  **The separator is unpinned and that is fine; the readings are not.**
+  Every reader uses `str.split()`, so a tab is genuinely equivalent and
+  a baker emitting one leaves `make test` green — `drift` ran it. What
+  is worth knowing is that no assertion names the separator, so a
+  reader written as `split(" ", 1)` would work against the baker and
+  break on a hand-edited sidecar.
+
+  **`tools/mkboot.sh` copies neither sidecar into the ESP.** Latent
+  only: its city is brickless, so `.layers` is empty. The moment that
+  city grows a brick house the burned image carries a plan declaring
+  layers with nothing naming them, and `.claude/rules/runtime.md`'s THE
+  RECOVERY — which is `python3 tools/stage-layers.py <blob>` — cannot
+  run on that slot. `drift`.
+
+  **`tools/stage-candidate.py` refuses a line that is not exactly an id and a
+  brick — not "at least".** So the next field added breaks it for every
+  plan that declares a layer, loudly and with a message naming the file
+  and the line, until that reader is updated. A brickless plan has an
+  empty sidecar and no line to refuse. Deliberate, and the consequence to know:
+  adding a field is a change to that tool, not only to the baker.
+
+  **A live slot staged before 2026-09-13 has a one-field sidecar** if
+  its plan declares a layer, and `tools/stage-candidate.py` then refuses
+  every candidate against it until the live plan is re-baked. A
+  brickless live plan is unaffected, which is the common case in the
+  suite — so this will not show up there. The refusal says so; `claims` found it by reading
+  the guard rather than by hitting it.
+
+  The reason it is a sidecar field rather than an argument from the
+  caller is that the fold helper knows which ids it did not fold and
+  passing that in would be an override; the brick lets the stager
+  establish the property itself.
+
 - **Check the struct sizes, do not eyeball them.** The Python
   `struct.pack` format and the C struct must agree. Take the format from
   `bake()` in the baker, run `struct.calcsize` on it, and compare against

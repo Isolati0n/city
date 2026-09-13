@@ -198,8 +198,24 @@ def bake(path, houses):
     # second copy of the blob layout to find out which directories to
     # create. Staging reads this; nw-sup does NOT create layer dirs, and
     # adding a creator there is what this file exists to avoid.
+    # THE ID, THEN THE BRICK IT IS STACKED OVER. The brick
+    # is not decoration -- `tools/stage-candidate.py` refuses a candidate
+    # that reuses a live layer id, and the reason it gives is a FOLD:
+    # the folded brick already contains that layer's contents, so
+    # reusing the id stacks them over themselves and the old whiteouts
+    # re-delete files now baked in. That reason is about the folded
+    # house and nothing else, and the refusal was over every shared id,
+    # so a two-house city could never fold one house and keep the
+    # other's data. Distinguishing them needs the brick, and the
+    # alternative -- the fold helper telling the stager which ids it did
+    # not fold -- is an override rather than a check. The baker has both
+    # values here, so the stager can establish the property itself.
+    #
+    # No "no brick" spelling, because NW_E_LAYERPAIR makes a layer
+    # without a brick unrepresentable in both directions.
     open(path + ".layers", "w").write(
-        "".join(h["layer"] + "\n" for h in houses if h["layer"]))
+        "".join(h["layer"] + " " + h["brick"] + "\n"
+                for h in houses if h["layer"]))
     print(f"wrote {path} units={len(houses)} binds={len(binds)} "
           f"crc=0x{crc:08x} bytes={len(blob)} sha256={digest}")
 

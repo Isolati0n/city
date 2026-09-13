@@ -373,7 +373,8 @@ def stage_layers(blob, reset=True):
     # without inheriting the previous suite RUN's, and a test that boots
     # the same plan twice keeps what the first boot wrote.
     if reset:
-        for lid in (l.strip() for l in open(blob + ".layers") if l.strip()):
+        for lid in (l.split()[0] for l in open(blob + ".layers")
+                    if l.strip()):
             if lid in _LAYERS_RESET:
                 continue
             _LAYERS_RESET.add(lid)
@@ -2205,6 +2206,88 @@ def test_brick_image_is_sealed():
           "untouched -- the seal moved under the overlay, it did not go)")
 
 
+def test_the_layer_reset_fires_once_per_run():
+    """`stage_layers()` resets an id the FIRST time this process sees it
+    and never again. Both halves, in one run, on a fresh machine.
+
+    THE POINT IS THE FIRST HALF, and what makes it worth a test is when
+    it goes wrong. `drift` left the sidecar reader on its old one-field
+    reading (`l.strip()` where the two-field format needs
+    `l.split()[0]`) and the whole reset mechanism was disabled --
+    `rmtree` targeting the path `"<id> <brick>"`, which never exists.
+    The suite stayed GREEN on a fresh machine and only turned red on a
+    SECOND consecutive run, when the state a previous run left showed
+    up. CI on a fresh container is a first run, so nothing would ever
+    have seen it.
+
+    `test_layer_survives_a_restart` cannot: its `states[0] == "absent"`
+    is an absence whose paired positive is "an earlier run left
+    something", which no single run supplies. This one supplies it, by
+    planting the state itself.
+
+    Controls:
+      - reader back to `l.strip()` -> the first half fails, naming the
+        sentinel that survived a reset that should have removed it;
+      - reset unconditionally (drop the `_LAYERS_RESET` membership
+        test) -> the second half fails, and a durability-across-reboot
+        test becomes impossible to write.
+
+    No brick image is needed: the blob is never booted, and `brick=` is
+    a hash the baker range-checks rather than a file it opens."""
+    lid = f"l-reset-{os.getpid()}"
+    blob = f"{WORK}/reset-{os.getpid()}.blob"
+    city = f"{WORK}/reset-{os.getpid()}.city"
+    open(city, "w").write(
+        f"house resetprobe {BIN}/unit-probe kind=oneshot "
+        f"lids=newns,seccomp brick={'ab' * 32} layer={lid}\n")
+    b = run(["python3", CC, "--city", city, "--out", blob])
+    expect(b.returncode == 0, f"bake the reset probe\n{b.out}{b.err}")
+
+    sentinel = f"{_layer_dir()}/{lid}/upper/planted"
+    try:
+        expect(lid not in _LAYERS_RESET,
+               f"{lid} has been staged already in this process, so the "
+               f"first-sighting half below would test the second")
+        os.makedirs(os.path.dirname(sentinel), exist_ok=True)
+        open(sentinel, "w").write("a previous run left this\n")
+        expect(os.path.exists(sentinel),
+               "the sentinel was not planted, so its later absence "
+               "would prove nothing")
+
+        stage_layers(blob)
+        expect(not os.path.exists(sentinel),
+               f"first sighting of {lid} did not reset it: {sentinel} "
+               f"survived. A test inherits whatever the previous suite "
+               f"RUN left under this id")
+
+        # A SECOND BLOB NAMING THE SAME ID, because the rule is once per
+        # (process, ID) and one blob cannot tell that from once per
+        # (process, BLOB). `control` keyed `_LAYERS_RESET` on the blob
+        # path and this test stayed green -- and the case where the two
+        # readings diverge is two plans naming one layer, which is
+        # exactly an unchanged house keeping its data across a plan
+        # change, the property this whole round is about. Under that
+        # mutation the second plan's stage wipes it.
+        blob2 = f"{WORK}/reset2-{os.getpid()}.blob"
+        b2 = run(["python3", CC, "--city", city, "--out", blob2])
+        expect(b2.returncode == 0, f"bake the second plan\n{b2.out}{b2.err}")
+        open(sentinel, "w").write("this boot wrote this\n")
+        stage_layers(blob2)
+        expect(os.path.exists(sentinel),
+               f"a later sighting of {lid}, through a DIFFERENT blob "
+               f"naming it, reset it. Production never "
+               f"wipes a layer, and a durability-across-reboot test is "
+               f"two boots of one blob -- per-boot reset makes it "
+               f"unwritable")
+    finally:
+        shutil.rmtree(f"{_layer_dir()}/{lid}", ignore_errors=True)
+
+    print(f"ok layer-reset-once-per-run (planted state removed on the "
+          f"first sighting of {lid} and kept on the second; the id is "
+          f"read from a two-field sidecar, which is the reading a fresh "
+          f"machine cannot otherwise check)")
+
+
 def test_layer_survives_a_restart():
     """A house's write into its own root is still there after it dies.
 
@@ -3936,10 +4019,24 @@ def _candidate_stager_body(_sh, _ids_made):
            "the layer dir survived its own removal, so its later presence "
            "would prove nothing")
 
+    # TWO HOUSES ON DIFFERENT BRICKS, because the sidecar assertion
+    # below is about which brick each id is paired WITH, and in a
+    # one-house city every pairing is the same pairing. `control`
+    # mutated the baker to pair every id with `houses[0]["brick"]` and
+    # the suite stayed green -- against a single house that mutation is
+    # the identity, since every line keeps its field count and the one
+    # brick it could name. The first fix here compared the brick to a
+    # declared value and kept the one-house fixture, which checked the
+    # same nothing more precisely.
+    lid_b = f"l-cs-b-{tag}"
+    _ids_made.append(lid_b)
+    _sh.rmtree(f"{_layer_dir()}/{lid_b}", ignore_errors=True)
     cand_city = f"{WORK}/cand-new.city"
     open(cand_city, "w").write(
         f"house candone {BIN}/unit-probe kind=oneshot "
-        f"lids=newns,seccomp brick={'ab' * 32} layer={lid}\n")
+        f"lids=newns,seccomp brick={'ab' * 32} layer={lid}\n"
+        f"house candtwo {BIN}/unit-probe kind=oneshot "
+        f"lids=newns,seccomp brick={'cd' * 32} layer={lid_b}\n")
 
     g = _stage()
     expect(g.returncode == 0, f"staging a legal candidate must succeed, or "
@@ -3951,8 +4048,27 @@ def _candidate_stager_body(_sh, _ids_made):
 
     v = run([chk, f"{slots}/B/plan.blob"])
     expect(v.returncode == 0, f"candidate does not validate\n{v.out}{v.err}")
-    expect(open(f"{slots}/B/plan.blob.layers").read().split() == [lid],
-           "candidate sidecar does not name the layer")
+    _side = [l.split() for l in
+             open(f"{slots}/B/plan.blob.layers").read().splitlines()
+             if l.strip()]
+    expect([f[0] for f in _side] == [lid, lid_b],
+           f"candidate sidecar does not name the layers: {_side}")
+    # AND THE BRICK BESIDE IT, MATCHED TO THE HOUSE THAT DECLARED IT.
+    # The clash guard reads field 1 to tell a reused layer from a folded
+    # one; a sidecar that dropped it makes every candidate refuse with a
+    # parse error, which is a refusal and would satisfy the refusal
+    # cases below.
+    #
+    # `control` showed the arity check alone is not the claim its
+    # message makes: pairing every id with `houses[0]["brick"]` leaves
+    # the field count untouched and left this green, so the assertion
+    # named a property it did not check -- the sentence and the check
+    # disagreeing inside one `expect()`, which is the MAKE_BLOCK shape
+    # from CLAUDE.md. The brick is compared to the one the city
+    # declares.
+    expect(_side == [[lid, "ab" * 32], [lid_b, "cd" * 32]],
+           f"the layer sidecar must pair each id with the brick of the "
+           f"house that declares it: {_side}")
     # The .sha256 sidecar describes THIS candidate, not the previous one.
     import hashlib as _hl
     expect(os.path.exists(f"{slots}/B/plan.blob.sha256"),
@@ -3964,9 +4080,10 @@ def _candidate_stager_body(_sh, _ids_made):
            "the .sha256 sidecar describes a different blob than the one "
            "in the slot -- a stale sidecar is the silent-wrong-artifact "
            "class, and tests/run.py's hash pin reads exactly this file")
-    for leaf in ("upper", "work"):
-        expect(os.path.isdir(f"{_layer_dir()}/{lid}/{leaf}"),
-               f"the stager did not create {lid}/{leaf}")
+    for i in (lid, lid_b):
+        for leaf in ("upper", "work"):
+            expect(os.path.isdir(f"{_layer_dir()}/{i}/{leaf}"),
+                   f"the stager did not create {i}/{leaf}")
 
     # The machine still boots the LIVE plan, candidate beside it.
     #
@@ -4089,14 +4206,122 @@ def _candidate_stager_body(_sh, _ids_made):
     open(clash_city, "w").write(
         f"house clashone {BIN}/unit-probe kind=oneshot "
         f"lids=newns,seccomp brick={'cd' * 32} layer={clash_lid}\n")
-    open(f"{slots}/A/plan.blob.layers", "w").write(clash_lid + "\n")
+    # OVER A DIFFERENT BRICK. That is the whole rule since 2026-09-13:
+    # the candidate's house sits on brick cd..cd, so a live sidecar
+    # pairing the same id with ab..ab is the fold shape the guard names.
+    open(f"{slots}/A/plan.blob.layers", "w").write(
+        f"{clash_lid} {'ab' * 32}\n")
     r = _stage(city=clash_city)
     expect(r.returncode != 0
-           and "names layer(s) the live plan is using" in (r.out + r.err),
-           f"a candidate reusing the running plan's layer was staged; the "
-           f"tool would print 'untouched' while wiring it to a running "
-           f"house's writable area\n{r.out}{r.err}")
+           and "over a DIFFERENT brick" in (r.out + r.err),
+           f"a candidate reusing the running plan's layer over another "
+           f"brick was staged; the folded brick already holds that "
+           f"layer's contents, so the old whiteouts re-delete files now "
+           f"baked in\n{r.out}{r.err}")
     _no_new_layers("layer clash", clash_lid)
+
+    # THE OTHER DIRECTION, and it is the only instrument that can see
+    # this one. The guard refused EVERY shared id until 2026-09-13, so a
+    # two-house city could never fold one house and keep the other's
+    # data -- and no refusal test could tell, because a refusal test is
+    # satisfied by a refusal for any reason at all. Only a legal
+    # candidate that must be ACCEPTED separates them.
+    # `.claude/rules/plan.md`'s missing-DIRECTION lesson, in the stager.
+    open(f"{slots}/A/plan.blob.layers", "w").write(
+        f"{clash_lid} {'cd' * 32}\n")
+    r = _stage(city=clash_city)
+    expect(r.returncode == 0,
+           f"a candidate reusing a live layer over the SAME brick must "
+           f"be accepted -- that is an unchanged house keeping its data "
+           f"across a plan change, which is what keying a layer by a "
+           f"declared id is for\n{r.out}{r.err}")
+    # AND IT SUCCEEDS, so it CREATES {clash_lid} on the machine root --
+    # the refusals above leave nothing, this one does not. `control`
+    # measured it.
+    #
+    # SO `_no_new_layers({clash_lid})` IS SPENT from here down. The two
+    # refusal cases below reuse this city and this id, and what keeps
+    # them correct is that neither calls it -- not that either got a
+    # fresh id. This comment claimed the opposite in the diff that
+    # added them, which `claims` caught by reading the cases against
+    # the sentence above them. A new case that wants `_no_new_layers`
+    # needs its own id, the way the two-id case has.
+
+    # PER ID, NOT OVER THE SET OF BRICKS -- and only a candidate with
+    # TWO shared ids can tell those apart. `control` keyed the guard on
+    # "does the candidate name any brick the live plan does not", which
+    # is green for every case above: with one layer id, per-id and
+    # set-wide give the same answer always. Here one shared id sits over
+    # the same brick and one over a different one, so the set-wide form
+    # names both and the honest one names only the changed house.
+    #
+    # The absence is paired: naming the changed id is the positive, and
+    # without it "does not name the unchanged id" is satisfied by a tool
+    # that refuses nothing.
+    keep_lid = f"l-cs-keep-{tag}"
+    move_lid = f"l-cs-move-{tag}"
+    _ids_made += [keep_lid, move_lid]
+    for i in (keep_lid, move_lid):
+        _sh.rmtree(f"{_layer_dir()}/{i}", ignore_errors=True)
+    # MOVER LANDS ON A BRICK THE LIVE PLAN ALREADY USES, and that is the
+    # separating input rather than a detail. `control` keyed the guard on
+    # `want[i] not in live_ids.values()` -- "a brick the live plan uses
+    # ANYWHERE" instead of "the same brick FOR THIS ID" -- and both
+    # assertions below still held, because mover's new brick appeared
+    # nowhere live. Two forms that agree throughout a fixture's range
+    # cannot pin each other; only an input that separates them can, which
+    # is `LargestCityFits`'s lesson arriving in the stager.
+    two_city = f"{WORK}/cand-two-{tag}.city"
+    open(two_city, "w").write(
+        f"house keeper {BIN}/unit-probe kind=oneshot "
+        f"lids=newns,seccomp brick={'cd' * 32} layer={keep_lid}\n"
+        f"house mover {BIN}/unit-probe kind=oneshot "
+        f"lids=newns,seccomp brick={'cd' * 32} layer={move_lid}\n")
+    open(f"{slots}/A/plan.blob.layers", "w").write(
+        f"{keep_lid} {'cd' * 32}\n{move_lid} {'ab' * 32}\n")
+    r = _stage(city=two_city)
+    expect(r.returncode != 0 and move_lid in (r.out + r.err),
+           f"the candidate reuses {move_lid} over a different brick and "
+           f"was not refused for it\n{r.out}{r.err}")
+    expect(keep_lid not in (r.out + r.err),
+           f"the refusal named {keep_lid} too, which sits over the SAME "
+           f"brick -- the guard is keyed on the set of bricks rather "
+           f"than per id, so it refuses an unchanged house's carry-over "
+           f"whenever any other house in the plan changed\n{r.out}{r.err}")
+    _no_new_layers("two-id clash", keep_lid, move_lid)
+
+    # THE FIELDS THE OTHER WAY ROUND ARE REFUSED BY SHAPE, and this
+    # case exists because the tree already refused them by ACCIDENT.
+    # `drift` reversed the baker and the guard read {brick: id}, which
+    # inverted it -- the case it exists for came back `clash=[]` and was
+    # accepted. What stopped the run was `tools/stage-layers.py`
+    # rejecting a 64-character string as a layer id, i.e. NW_NAME_LEN
+    # being 32; the guard had already given the wrong answer.
+    #
+    # Reversing the baker cannot pin the fix, either: the suite dies at
+    # the first `boot()` that stages layers, hundreds of lines before
+    # this tool runs. Measured -- that control returns `FAIL:
+    # stage-layers failed`. So the input is written HERE, where the
+    # guard is the first reader to see it.
+    open(f"{slots}/A/plan.blob.layers", "w").write(
+        f"{'cd' * 32} {clash_lid}\n")
+    r = _stage(city=clash_city)
+    expect(r.returncode != 0
+           and "lowercase hex brick" in (r.out + r.err),
+           f"a sidecar with the fields reversed must be refused by "
+           f"shape; read as {{brick: id}} it inverts the reuse check "
+           f"rather than failing it\n{r.out}{r.err}")
+
+    # A ONE-FIELD SIDECAR IS REFUSED, because without the brick the
+    # question has no answer. Named separately from the clash refusal:
+    # a parse error is also a refusal, so if the baker ever dropped
+    # field 1 every clash case above would pass for the wrong reason.
+    open(f"{slots}/A/plan.blob.layers", "w").write(clash_lid + "\n")
+    r = _stage(city=clash_city)
+    expect(r.returncode != 0 and "not an id and a brick" in (r.out + r.err),
+           f"a live sidecar with no brick field must refuse rather than "
+           f"guess whether the shared id is a fold\n{r.out}{r.err}")
+
     os.unlink(f"{slots}/A/plan.blob.layers")
     r = _stage()
     expect(r.returncode != 0 and "cannot read" in (r.out + r.err),
@@ -4273,8 +4498,12 @@ def _candidate_stager_body(_sh, _ids_made):
           f"from current=A and refused with three slots; boot through "
           f"--slots ran the live house and no [candone] tag; live-slot, "
           f"three bad names, ill-formed current, baker, failed validation, "
-          f"missing nw-check, layer clash and missing live sidecar each "
-          f"refused by reason; a symlinked slot and a stale live "
+          f"missing nw-check, a layer clash over a different brick, a "
+          f"one-field live sidecar, a reversed-field sidecar and a "
+          f"missing live sidecar each "
+          f"refused by reason; the SAME-brick carry-over accepted, which "
+          f"is the only direction that can see an over-strict clash "
+          f"guard; a symlinked slot and a stale live "
           f"sidecar refused too; --root and the .sha256 sidecar pinned; "
           f"ids keyed to this pid and removed at the end)")
 
@@ -5403,10 +5632,34 @@ def test_fold_house_refuses_a_house_that_is_not_closed():
             "the kernel has no overlay driver, so the mountinfo pairing "
             "cannot mount its marker and the grandchild half of the "
             "closed-house check goes untested")
-    before = sorted(os.listdir(_layer_dir())) if os.path.isdir(
-        _layer_dir()) else []
-    made = []
+    before = set(os.listdir(_layer_dir())) if os.path.isdir(
+        _layer_dir()) else set()
+
+    def _ours(i):
+        """Ids THIS test could have created, and no others.
+
+        `control` ran an unrelated writer against `/nw/layers` while the
+        test ran and turned it red on a correct tree; the note in
+        `.claude/rules/harness.md` says to expect exactly that, because a
+        distinct NW_STAGE does not isolate the machine root and the test
+        immediately before this one writes there. Comparing the whole
+        directory made this test an assertion about the machine rather
+        than about the tool."""
+        # ONE CLAUSE PER PREFIX THE BODY USES, and the pairing below is
+        # what keeps them in step. `control` found `fo` unpaired because
+        # `made` never held it; the fix for that added a third house on
+        # `fz` and forgot the clause, and the pairing caught it on the
+        # first run -- the same gap, in the fix for it, found by the
+        # mechanism instead of by a reviewer. A new fixture layer here
+        # needs a clause here and a `made.append` there, and omitting
+        # either turns the test red.
+        return (i.endswith("-h1")                       # a derived fold id
+                or i.startswith(f"fh{os.getpid()}")     # h1's layer
+                or i.startswith(f"fo{os.getpid()}")     # other's layer
+                or i.startswith(f"fz{os.getpid()}"))    # zlast's layer
+
     summary = None
+    made = []
     try:
         # The body RETURNS its ok line rather than printing it, so a
         # machine-root leak cannot be preceded by an announcement of
@@ -5423,12 +5676,35 @@ def test_fold_house_refuses_a_house_that_is_not_closed():
         # working. It runs in the `finally` so a RED run is checked too:
         # a refusal that leaked a layer is exactly the case a sweep
         # would have hidden.
-        after = sorted(os.listdir(_layer_dir())) if os.path.isdir(
-            _layer_dir()) else []
-        expect(after == before,
-               f"the machine root gained layer(s) {sorted(set(after) - set(before))}; "
-               f"this test passes root= through to the stager and must "
-               f"leave {_layer_dir()} alone")
+        #
+        # IT MUST NOT REPLACE THAT FAILURE, THOUGH. `control` combined a
+        # leak with a body that dies, and the reported failure was this
+        # check while the real one vanished from the output -- a cleanup
+        # assertion masking the defect it was standing beside. So when an
+        # exception is already in flight it reports and does not raise,
+        # and the body's failure is what the run ends on.
+        # AND `_ours` IS PAIRED, or an empty `leaked` says nothing: a
+        # filter that matched nothing would make the check below vacuous
+        # and it would read exactly like a clean run. `make prereport`
+        # asked, and the answer was the `made` list -- which this round
+        # had just deleted as dead code, when what it was missing was a
+        # reader. Every id the body created must be one `_ours` claims.
+        after = set(os.listdir(_layer_dir())) if os.path.isdir(
+            _layer_dir()) else set()
+        if sys.exc_info()[0] is None:
+            expect(made and all(_ours(i) for i in made),
+                   f"_ours does not recognise the ids this test made "
+                   f"({made}), so the machine-root check below is "
+                   f"satisfied by a filter that matches nothing")
+        leaked = sorted(i for i in (after - before) if _ours(i))
+        if leaked and sys.exc_info()[0] is None:
+            expect(False,
+                   f"the machine root gained layer(s) {leaked}; this test "
+                   f"passes root= through to the stager and must leave "
+                   f"{_layer_dir()} alone")
+        elif leaked:
+            print(f"ALSO: the machine root gained layer(s) {leaked} on a "
+                  f"run that was already failing", file=sys.stderr)
     print(summary)
 
 
@@ -5461,21 +5737,106 @@ def _fold_house_body(made):
     os.makedirs(up); os.makedirs(f"{root}{_layer_dir()}/{lid}/work")
     open(f"{up}/saved-by-the-house", "w").write("this must survive\n")
 
+    # TWO HOUSES, AND THE OTHER CARRIES EVERY FIELD city_text WRITES.
+    # With one plain house, `control` replaced the unit lookup with
+    # `houses[0]` and passed -- folding the wrong house is invisible when
+    # there is only one -- and deleted the binds loop, the budget, the
+    # kind and the lid names from the formatter, each passing, each
+    # producing a candidate that bakes and passes nw-check and boots a
+    # DIFFERENT plan. Only cross-field rules error out; a dropped field
+    # does not.
+    #
+    # THREE HOUSES, AND THE FOLDED ONE IS IN THE MIDDLE. Ordering, not
+    # size, is what pins the lookup, and a two-element list has only
+    # two positions: with `h1` first the `houses[0]` mutation passed,
+    # and writing `other` first made `h1` into `houses[-1]`, which
+    # `control` then showed passes too. Moving the target off both ends
+    # kills both. It does not kill `houses[1]` -- no fixed layout can,
+    # and the only thing that would is folding two different units in
+    # one test, which is not built.
+    os.makedirs(f"{tree}/mnt", exist_ok=True)
+    open(f"{tree}/bin/other", "wb").write(b"#!/bin/sh\nexit 0\n")
+    os.chmod(f"{tree}/bin/other", 0o755)
+    H2, _img2 = mkbrick.pack(tree, f"{root}{mkbrick.brick_dir()}", quiet=True)
+    lid2 = f"fo{os.getpid()}"
+    # APPENDED, or `_ours`'s fo-prefix clause is paired by nothing.
+    # `control` renamed this id to `oth<pid>` and leaked it onto the
+    # machine root: the pairing still passed, because it never held
+    # this id, and the leak check let it through. An assertion that
+    # excludes a filter matching NOTHING does not exclude one matching
+    # SOME -- the claim-with-parts shape, inside the assertion written
+    # to close it.
+    made.append(lid2)
+    os.makedirs(f"{root}{_layer_dir()}/{lid2}/upper")
+    os.makedirs(f"{root}{_layer_dir()}/{lid2}/work")
+    lid3 = f"fz{os.getpid()}"
+    made.append(lid3)
+    os.makedirs(f"{root}{_layer_dir()}/{lid3}/upper")
+    os.makedirs(f"{root}{_layer_dir()}/{lid3}/work")
     city = f"{root}/live.city"
     open(city, "w").write(
+        f"house other /bin/other kind=longrun budget=7 "
+        f"lids=newns,newnet,seccomp,landlock brick={H2} layer={lid2} "
+        f"bind=/mnt\n"
         f"house h1 /bin/prog kind=oneshot lids=newns,seccomp "
-        f"brick={H} layer={lid}\n")
+        f"brick={H} layer={lid}\n"
+        f"house zlast /bin/other kind=oneshot lids=newns,seccomp "
+        f"brick={H2} layer={lid3}\n")
     b = run(["python3", CC, "--city", city, "--out", f"{slots}/A/plan.blob"])
     expect(b.returncode == 0, f"bake the live plan\n{b.out}{b.err}")
     open(f"{slots}/current", "w").write("A\n")
     live_before = open(f"{slots}/A/plan.blob", "rb").read()
     cur_before = open(f"{slots}/current", "rb").read()
 
-    def _live_intact(w):
-        expect(open(f"{slots}/A/plan.blob", "rb").read() == live_before,
-               f"{w}: the live plan changed")
-        expect(open(f"{slots}/current", "rb").read() == cur_before,
-               f"{w}: slots/current changed")
+    def _slot_state():
+        """THE WHOLE LIVE SLOT, not the files somebody named.
+        `_live_intact` compared
+        `plan.blob` and `current`, so `control` clobbered the live
+        `.layers` sidecar and the suite printed "live slot and current
+        untouched" -- and that sidecar is what the stager's clash check
+        reads and what THE RECOVERY in runtime.md points the stager at.
+        Also the brick dir and the candidate slot, because a refusal that
+        produced either is exactly the artifact this tool exists not to
+        make."""
+        out = {}
+        for d in (f"{slots}/A", f"{slots}/B", f"{root}{mkbrick.brick_dir()}"):
+            if os.path.isdir(d):
+                for n in sorted(os.listdir(d)):
+                    f = os.path.join(d, n)
+                    if os.path.isfile(f):
+                        out[f] = hashlib.sha256(open(f, "rb").read()).hexdigest()
+        out[f"{slots}/current"] = open(f"{slots}/current", "rb").read().hex()
+        return out
+
+    def _refuse(w, call, want):
+        """Run something that MUST refuse, then run every post-check.
+
+        `control` moved `require_closed` to after the stager call: the
+        tool still raised NotClosed and the suite stayed green while the
+        "refusal" had folded a LIVE layer into a brick, created a layer
+        directory and written a validated candidate slot that boots it.
+        The test asserted only that the exception was raised. It also
+        never called `_live_intact` after case 5, so a refusal that
+        overwrote the live plan printed "untouched".
+
+        Both are the same failure -- a post-check a call site can omit --
+        so the wrapper owns them and a new case cannot forget."""
+        was = _slot_state()
+        raised = None
+        try:
+            call()
+        except (fh.NotClosed, SystemExit) as e:
+            raised = str(e)
+        expect(raised is not None, f"{w}: was not refused at all")
+        expect(want in raised, f"{w}: refused for the wrong reason: {raised}")
+        now = _slot_state()
+        changed = sorted(k for k in set(was) | set(now)
+                         if was.get(k) != now.get(k))
+        expect(not changed,
+               f"{w}: the refusal changed {changed} -- a refusal that "
+               f"printed its reason AFTER doing the work satisfies every "
+               f"other assertion here")
+        return raised
 
     def _fold(**kw):
         return fh.fold_house(slots, city, "h1", root=root,
@@ -5485,20 +5846,11 @@ def _fold_house_body(made):
     env = dict(os.environ, NW_LAYER=lid)
     p = sp.Popen(["sleep", "60"], env=env)
     try:
-        raised = None
-        try:
-            _fold()
-        except fh.NotClosed as e:
-            raised = str(e)
-        expect(raised is not None,
-               "the helper folded a layer while a process still carried its "
-               "NW_LAYER; that process is the supervisor, the house, or a "
-               "child of one, and it can still write")
+        raised = _refuse("a live NW_LAYER", _fold, "still carries NW_LAYER")
         expect(str(p.pid) in raised,
                f"refused, but did not name the process holding it: {raised}")
     finally:
         p.kill(); p.wait()
-    _live_intact("environ refusal")
 
     # 2. THE GRANDCHILD: holds the upperdir mounted, carries no NW_LAYER.
     #    The environ scan is blind to it by construction, which is why
@@ -5526,21 +5878,13 @@ def _fold_house_body(made):
         expect(fh.scan_environ(lid) == [],
                "the grandchild carries NW_LAYER after all, so this case is "
                "not testing what the mountinfo scan exists for")
-        raised = None
-        try:
-            _fold()
-        except fh.NotClosed as e:
-            raised = str(e)
-        expect(raised is not None and "upperdir" in raised,
-               f"the helper folded a layer a grandchild had mounted, which "
-               f"no environ scan can see: {raised}")
+        _refuse("a grandchild holding the upperdir", _fold, "upperdir")
     finally:
         try:
             g.stdin.write("x\n"); g.stdin.flush()
         except (BrokenPipeError, ValueError):
             pass
         g.stdin.close(); g.wait(timeout=20)
-    _live_intact("mountinfo refusal")
 
     # 2b. A BROKEN SCAN MUST NOT READ AS A CLOSED HOUSE, which is the
     #     only input that makes either pairing load-bearing. Removing a
@@ -5557,51 +5901,78 @@ def _fold_house_body(made):
         real = getattr(fh, patch)
         setattr(fh, patch, lambda *_a, **_k: [])
         try:
-            raised = None
-            try:
-                _fold()
-            except fh.NotClosed as e:
-                raised = str(e)
-            expect(raised is not None and marker in raised,
-                   f"with {patch} returning [] for everything, the helper "
-                   f"did not refuse: an empty scan then means only that "
-                   f"the scan is broken, and the {which} pairing is what "
-                   f"has to say so. Got: {raised}")
+            _refuse(f"a broken {which} scan", _fold, marker)
         finally:
             setattr(fh, patch, real)
-    _live_intact("broken-scan refusal")
 
     # 3. A CITY THAT IS NOT THE RUNNING PLAN.
     other = f"{root}/other.city"
     open(other, "w").write(
         f"house h1 /bin/prog kind=longrun lids=newns,seccomp "
         f"brick={H} layer={lid}\n")
-    raised = None
-    try:
-        fh.fold_house(slots, other, "h1", root=root,
-                      nw_check=f"{BIN}/nw-check", quiet=True)
-    except SystemExit as e:
-        raised = str(e)
-    expect(raised is not None and "does not bake to" in raised,
-           f"a city that is not the live plan was accepted: {raised}")
-    _live_intact("city refusal")
+    _refuse("a city that is not the live plan",
+            lambda: fh.fold_house(slots, other, "h1", root=root,
+                                  nw_check=f"{BIN}/nw-check", quiet=True),
+            "does not bake to")
 
     # 4. THE PAIRED POSITIVE, and it is the whole point: with nothing
     #    holding the layer, the fold happens and saves both sides.
+    #
+    #    IT IS ALSO THE PAIRING FOR `_slot_state` ITSELF. Every refusal
+    #    above ends in "nothing changed", and nothing established that
+    #    the function can SEE a change -- one that returned a constant
+    #    would satisfy all of them, which is `make prereport`'s
+    #    unpaired-absence shape found in the wrapper written to close
+    #    exactly that class one level up.
+    state_before = _slot_state()
     newh, nid, slot = _fold()
+    state_after = _slot_state()
+    moved = sorted(k for k in set(state_before) | set(state_after)
+                   if state_before.get(k) != state_after.get(k))
+    expect(any(k.endswith(".img") for k in moved)
+           and any(f"{slots}/B/" in k for k in moved),
+           f"a successful fold left the brick dir and the candidate slot "
+           f"looking unchanged to _slot_state, so its emptiness after a "
+           f"refusal says nothing: {moved}")
     expect(os.path.exists(img), "the OLD brick was not left in place")
     expect(os.path.exists(f"{root}{mkbrick.brick_dir()}/{newh}.img"),
            "the new brick was not written")
+    made.append(nid)
     expect(nid != lid,
            f"the candidate reuses the live layer id {nid}; its whiteouts "
            f"would re-delete the files the fold just baked in")
-    made.append(nid)
     expect(os.path.exists(f"{up}/saved-by-the-house"),
            "the old layer was consumed; the previous brick plus the "
            "previous layer must still boot")
-    _live_intact("after a successful fold")
+    expect(open(f"{slots}/A/plan.blob", "rb").read() == live_before,
+           "the live plan changed across a successful fold")
+    expect(open(f"{slots}/current", "rb").read() == cur_before,
+           "slots/current changed across a successful fold")
     expect(slot == "B" and os.path.exists(f"{slots}/B/plan.blob"),
            f"no candidate was staged in {slot}")
+
+    # THE ROUND TRIP, PINNED BY BYTES. city_text is a hand-written
+    # formatter and every field it drops still bakes: `control` deleted
+    # the binds loop and got a candidate that passed nw-check reporting
+    # `binds=0` while the live city declares a bind. So the candidate is
+    # compared against one baked from a city written out here by hand,
+    # with only h1's brick and layer changed.
+    want_city = f"{root}/expected.city"
+    open(want_city, "w").write(
+        f"house other /bin/other kind=longrun budget=7 "
+        f"lids=newns,newnet,seccomp,landlock brick={H2} layer={lid2} "
+        f"bind=/mnt\n"
+        f"house h1 /bin/prog kind=oneshot budget=3 lids=newns,seccomp "
+        f"brick={newh} layer={nid}\n"
+        f"house zlast /bin/other kind=oneshot budget=3 "
+        f"lids=newns,seccomp brick={H2} layer={lid3}\n")
+    wb = run(["python3", CC, "--city", want_city, "--out", f"{root}/want.blob"])
+    expect(wb.returncode == 0, f"bake the expected city\n{wb.out}{wb.err}")
+    expect(open(f"{root}/want.blob", "rb").read()
+           == open(f"{slots}/B/plan.blob", "rb").read(),
+           "the candidate does not match a plan written by hand with only "
+           "h1's brick and layer changed -- city_text dropped or altered "
+           "a field, and a dropped field still bakes and still validates")
 
     # and the new brick really carries both sides
     m = f"{root}/verify"; os.makedirs(m)
@@ -5631,13 +6002,8 @@ def _fold_house_body(made):
            f"second candidate would boot the first one's data")
 
     # 5. REUSING THE ID IS REFUSED, asked for explicitly.
-    raised = None
-    try:
-        _fold(new_layer=lid)
-    except SystemExit as e:
-        raised = str(e)
-    expect(raised is not None and "whiteout" in raised,
-           f"reusing the live layer id was accepted: {raised}")
+    _refuse("reusing the live layer id", lambda: _fold(new_layer=lid),
+            "whiteout")
 
     return (f"ok fold-house (closed established by two paired scans -- "
             f"environ and mountinfo, the second seeing a grandchild the "
@@ -5661,6 +6027,7 @@ def main():
         test_shutdown_does_not_restart, test_term_signal, test_dawn_real_boot,
         test_kind_required, test_kind_exit0, test_seccomp_kills,
         test_brick_is_a_root, test_brick_image_is_sealed,
+        test_the_layer_reset_fires_once_per_run,
         test_layer_survives_a_restart,
         test_many_brick_houses_all_start, test_brick_needs_newns,
         test_baker_refuses_bad_layers,
@@ -5691,8 +6058,34 @@ def main():
             # test's own name, so counts_as_passed() below excludes it and
             # the stray-name check cannot fire on it.
             skip(name, u.why)
-        except SystemExit:
-            # expect()'s FAIL path. Already loud, already non-zero; let it go.
+        except SystemExit as e:
+            # expect()'s FAIL path is already loud and already non-zero;
+            # let it go. It does NOT name the test -- `claims` ran a
+            # failure and got the bare message -- and the first version
+            # of this comment said it did, which put the justification
+            # for passing it through on something false, in the same
+            # block written because an unnamed failure line reads as
+            # somebody running a tool by hand. Naming it on that path
+            # means rewriting every failure message and is not done
+            # here; the branch below names it for the other kind.
+            #
+            # ANY OTHER SystemExit IS A TOOL EXITING, and this branch used
+            # to let those go too -- so a tool this suite IMPORTS (the
+            # stager, the baker, the fold helper, all of which raise
+            # SystemExit to refuse) ended the run printing its own refusal
+            # and nothing else: no `FAIL`, no test name, and a log whose
+            # last green line was the test BEFORE the one that died. Found
+            # by a control, not by reading: narrowing the clash guard's
+            # negative control killed the run at `fold-house` with only
+            # `stage-candidate: ...` on the last line, which reads as the
+            # tool being run by hand rather than as a test failing.
+            #
+            # Same rule as the crash branch below and for the same reason
+            # -- the question is what this looks like when it did not run.
+            if not str(e).startswith("FAIL"):
+                print(f"FAIL: {name} -- a tool it calls exited: {e}",
+                      file=sys.stderr)
+                raise SystemExit(f"FAIL: {name} exited through a tool")
             raise
         except BaseException:
             # ANY OTHER EXCEPTION IS A FAILURE, ANNOUNCED AS ONE. This used

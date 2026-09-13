@@ -52,7 +52,8 @@
   "shutdown-does-not-restart",
   "slot-b",
   "specs-are-checked",
-  "term-signal"
+  "term-signal",
+  "the-layer-reset-fires-once-per-run"
  ],
  "skipped": {
   "dawn-real-boot:vfat-esp": "kernel has no FAT driver (/proc/filesystems lists none), so the ESP is ext4 and FAT's execute bit, ownership and 4 GiB cap stay untested -- which is what docs/options/06 reasons from",

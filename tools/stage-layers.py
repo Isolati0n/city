@@ -8,13 +8,15 @@ got an empty layer", which is the same defect as a house whose data sits
 orphaned under a renamed key. A missing layer is a loud failure at
 nw-sup's `mount layer` instead.
 
-Today the harness calls this, because nothing stages candidates yet. When
-a real stager lands it calls this too -- the point is that there is one
-creator and it takes the layer ids from the plan, not two creators that
-have to agree.
+`tools/stage-candidate.py` calls this, and so does the harness. The
+point is that there is one creator and it takes the layer ids from the
+plan, not two creators that have to agree. (This said the candidate
+stager did not exist yet, for a day after it landed -- and survived a
+round that edited the next sentence of the same paragraph.)
 
 The ids come from the `.layers` sidecar the baker writes beside the blob,
-one per line. That is why this tool does not parse the blob: a third copy
+one per line, as `<layer-id> <brick>`; this tool reads the id and ignores
+the brick. That is why this tool does not parse the blob: a third copy
 of the unit layout (after blob.h and the baker) is the drift class
 invariant 3 is about, and the baker already knows every id it packed.
 
@@ -57,7 +59,16 @@ def stage(blob_path, root=""):
     declares. Returns the ids. Idempotent: staging twice keeps the data,
     which is the whole point of the layer."""
     side = blob_path + ".layers"
-    # THE SIDECAR MUST DESCRIBE THE BLOB BESIDE IT, and this tool is the
+    # THE BLOB MUST BE THE ONE `.sha256` WAS WRITTEN FOR, which is
+    # WEAKER than "the sidecar describes the blob" -- the sentence that
+    # stood here, next to a check that does not make it. `.sha256` is
+    # the hash of the BLOB, so it says the blob is unchanged since the
+    # sidecars were written; it says nothing about the sidecar's own
+    # contents. `drift` replaced this sidecar with garbage, left the
+    # blob and `.sha256` alone, and this tool created the directories
+    # the garbage named without a remark. What the check does buy is
+    # the interrupted-stage case below, which is what it was added
+    # for. This tool is the
     # one `.claude/rules/runtime.md`'s THE RECOVERY tells an operator to
     # run on a slot. `tools/stage-candidate.py` renames `.sha256`, then
     # `.layers`, then the blob, so an interrupted stage leaves new
@@ -101,8 +112,19 @@ def stage(blob_path, root=""):
                 f"there. Refusing. Write the hexdigest alone into that "
                 f"file if you are repairing it -- `sha256sum` emits "
                 f"'<hash>  <name>', which this compares whole.")
+    # FIELD 0 IS THE ID; field 1 is the brick it stacks over, and this
+    # tool has no use for it -- it creates directories. A one-field
+    # sidecar (the format before the brick was added) therefore still
+    # answers this tool's question completely, and is accepted.
+    #
+    # That is NOT the two-readers-disagreeing defect `control` found
+    # above, which was this tool and the stager answering the SAME
+    # question differently. `tools/stage-candidate.py` refuses a
+    # one-field sidecar because the question it asks -- does this
+    # candidate reuse a live layer over a DIFFERENT brick -- has no
+    # answer without field 1. Different question, different verdict.
     try:
-        ids = [l.strip() for l in open(side) if l.strip()]
+        ids = [l.split()[0] for l in open(side) if l.strip()]
     except OSError as e:
         raise SystemExit(
             f"stage-layers: no layer sidecar beside {blob_path} ({e}). The "

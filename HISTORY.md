@@ -7424,3 +7424,412 @@ reason string.
 message **eagerly**, and reading a live child's stderr blocks until that
 child closes it — which this one never does, because it is holding a
 mount open on purpose. The suite produced no output at all. The failure path of a check, taken on the success path.
+
+## 74. The guard's reason was about one house and it refused every house (2026-09-13)
+
+Base `a81f0c8`. The fold helper landed at `b137453` against a
+**one-house** fixture. Giving the fixture a second, untouched house —
+which is what an operator folding one house of a city actually has —
+turned `test_fold_house_refuses_a_house_that_is_not_closed` red on a
+refusal from a tool the helper calls:
+
+```
+stage-candidate: the candidate names layer(s) the live plan is using: fo10651.
+A candidate gets its own layer -- sharing wires it to a running house's
+writable area, and after a fold it would stack the folded contents over
+themselves.
+```
+
+The candidate is the same city with one house's brick and layer id
+replaced. Every other house keeps its layer id — it must, because the
+id is what carries a house's data across a plan change, and that is the
+whole reason a layer is keyed by a declared id rather than by the house
+name. So the guard made a fold of a two-house city impossible except by
+orphaning the other house's data, which is the failure the keying
+exists to prevent.
+
+### The guard's own two reasons split, and only one of them was general
+
+*"After a fold it would stack the folded contents over themselves"* is
+about the house that was folded. Its brick now contains that layer's
+contents; reusing the id replays the copy-ups over themselves and the
+old whiteouts re-delete files now baked in.
+
+*"Sharing wires it to a running house's writable area"* reads general
+and is not. Nothing is wired at stage time: `stage_layers.stage()` is
+`os.makedirs(..., exist_ok=True)` and its docstring says idempotent is
+the point. What sharing decides is what the house sees at the **next
+boot** — and exactly one plan runs at a time, so an unchanged house
+finding its own data there is the intended behaviour, not a hazard.
+
+### Only the acceptance direction could see it
+
+Every stager refusal test stayed green, because a refusal test is
+satisfied by a refusal for any reason at all. The instrument that found
+it is a legal candidate that must be **accepted** — `.claude/rules/plan.md`'s
+missing-DIRECTION lesson from §53, arriving in a different file. Not a
+missing test: a missing direction. The suite now carries the pair inside
+`test_candidate_stager_never_touches_the_live_slot`, the refusal keyed
+to a *different* brick and the acceptance keyed to the same one.
+
+**The two-house fold fixture is what found it, and it is not the
+instrument.** It reaches the guard through `fold_house()` and reports
+the defect as a fold failing; the carry-over case calls the stager
+directly and reports it as the guard being wrong. Both are kept — the
+far one is what would have caught this without anybody suspecting the
+stager. (The distance was written as a number of tools and was wrong;
+`claims` counted the chain.)
+
+### The fix is a field, not an argument
+
+Distinguishing the two needs the brick each layer sits over. The fold
+helper knows which ids it did not fold and could pass them in — that is
+an **override**, the shape this guard exists to resist. The `.layers`
+sidecar carries `<layer-id> <brick>` instead, written by the baker,
+which has both values in hand, so the stager establishes the property
+itself.
+
+`tools/stage-layers.py` reads field 0 and accepts a one-field line;
+`tools/stage-candidate.py` refuses one. That is not §69's
+two-readers-disagreeing defect: they are answering different questions.
+One asks which directories to create, which field 0 answers completely.
+The other asks whether a shared id sits over a different brick, which
+has no answer without field 1 — so it refuses rather than guesses,
+which is what the sidecar checks either side of it already do.
+
+**What is deliberately NOT distinguished:** a fold from an ordinary
+brick upgrade that keeps its data. Both change the brick and both are
+refused, so there is still no upgrade-with-data path through this tool.
+
+That is **not a cost of this change**, and the first draft of this
+section said it was. The previous guard refused every shared id, which
+refused that case too — this one only widens what is accepted, and
+leaves the harder half exactly where it was. An open design question,
+older than this round, recorded rather than papered over with a flag.
+
+### Controls, all run, all quoted
+
+| mutation | result |
+|---|---|
+| clash guard back to refusing every shared id | `FAIL: a candidate reusing a live layer over the SAME brick must be accepted`, and `fold-house` red |
+| clash guard refuses nothing | `FAIL: a candidate reusing the running plan's layer over another brick was staged` |
+| `_layer_bricks` accepts a one-field line | `FAIL: a live sidecar with no brick field must refuse rather than guess whether the shared id is a fold` |
+| baker drops the brick field | `FAIL: staging a legal candidate must succeed, or every refusal below is satisfied by a tool that refuses everything` |
+
+### And the first control's diagnostic was the wrong shape
+
+Restoring the blanket refusal ended the run with `stage-candidate: the
+candidate reuses layer(s)…` as its last line — no `FAIL`, no test name,
+and the last green line belonging to the *previous* test. It reads as
+somebody running the tool by hand.
+
+`main()` re-raises `SystemExit` untouched because that is `expect()`'s
+own path. The tools this suite imports — the stager, the baker, the
+fold helper — refuse by raising `SystemExit` too, and the branch could
+not tell them apart. It now does, on `expect()`'s `FAIL` prefix, and
+prints `FAIL: <test> -- a tool it calls exited: <reason>`.
+
+§50's crash branch was added for exactly this and stops one exception
+short of it. The control was aimed at the stager; the finding was in
+the runner. Nothing found it by reading, including the round that wrote
+the branch beside it.
+
+### Then `claims` found the branch's own justification was false
+
+The comment kept it saying `expect()`'s `SystemExit` is passed through
+because it "already names the test in its message". It does not — the
+message is whatever the caller typed, and §74's own controls table
+quotes four such lines with no test name in any of them. So the
+justification for the untouched half stood on something the corrected
+half's evidence already disproved, in the same comment block, written
+in the same minute. Corrected to say what is true, and the gap is
+named rather than closed: naming the test on `expect()`'s path means
+rewriting every failure message.
+
+`claims` also corrected two section citations here (§67 for §69, §69
+for §50), a bind count in a test comment that was wrong the day it was
+written, an unnamed instance-count in `.claude/rules/plan.md`, a
+present-tense sentence in `.claude/rules/harness.md` describing runner
+behaviour this round had just removed, and a distance in this section
+given as a number of tools. Every one is the weakest-rule pattern:
+prose about getting prose right, wrong in the writing of it.
+
+### And the fix for one of those findings turned the brief gate red
+
+`claims` observed that "the stager" was ambiguous in the new `plan.md`
+bullet, because the sentence before it is about a different tool. The
+fix named the file — and named it bare, as `stage-candidate.py`, which
+`install-agents.sh --check` refuses: it requires a brief to name a path
+that exists, or to declare the absence. `make test` stopped at that
+step, before the suite:
+
+```
+install-agents: FAIL plan.md names `stage-candidate.py`, which does not
+exist (fix the brief, or declare it with <!-- nw-init:absent-ok ... -->)
+make: *** [Makefile:166: test] Error 1
+```
+
+Worth recording for what caught it rather than for the mistake. The
+suite alone is green on that tree — `tests/run.py` never reads a brief.
+It was caught only because the run being reported was the **target**,
+which is the partial-gate trap in `.claude/rules/harness.md` firing in
+the direction that rule was written for, one round after that rule's
+own section was edited. The cheap step that runs first is the one worth
+not skipping.
+
+### `control`: two of this round's own additions did not check what they said
+
+**The pairing assertion pinned ARITY.** `expect(all(len(f) == 2 …),
+"the layer sidecar must pair each id with its brick")` — and pairing
+every id with `houses[0]["brick"]` keeps two fields on every line, so
+it stayed green. The message named a property the check did not make:
+the sentence and the check disagreeing inside one `expect()`, which is
+`CLAUDE.md`'s `MAKE_BLOCK` shape arriving in the round that cites it.
+It compares against the brick the city declares now.
+
+**The two-house fixture fixed one half of what it was added for.** The
+folded unit is `h1` and `h1` was written first, so it *is* `houses[0]`
+— `control` re-ran the wrong-unit mutation against two houses and it
+passed exactly as it had against one. The second house does earn its
+place: deleting `city_text`'s binds loop is red with it and green
+without, measured both ways. But the lookup half needed the folded
+house not to be at index 0, which is a fixture *ordering* property and
+not a fixture *size* one. `other` is written first now.
+
+Worth separating from an ordinary miss. Adding the house was the fix
+for a `control` finding in the previous round, and it closed the
+finding's stated case while leaving the mutation that produced it
+green. A fix inherits the standard of the change it fixes — §53 — and
+this is that rule with the reviewer's own example as the thing that
+slipped.
+
+**And the guard could be keyed on the set of bricks.** `clash = every
+shared id, if the candidate names any brick the live plan does not`
+leaves `candidate-stager` green: with one layer id in the fixture,
+per-id and set-wide agree on every input. Only `fold-house` saw it,
+from three tools away. Pinned now by a candidate with two shared ids —
+one over the same brick, one over a different one — where the refusal
+must name the changed house and must **not** name the unchanged one,
+the naming being the pairing that stops "does not name it" being
+satisfied by a tool that refuses nothing. Same lesson as
+`LargestCityFits`: two forms that agree throughout the fixture's range
+cannot pin each other, and only an input that separates them can.
+
+**And the first fix for the pairing finding was the identity.**
+Comparing the sidecar's brick against a declared value, in a fixture
+with one house, checks the same nothing more precisely: `houses[0]` IS
+that house. Control B was green against the corrected assertion, which
+is the finding's own property defeating its fix — the same shape as
+the two-house fixture above, in the same round, found the same way.
+The candidate city has two houses on different bricks now, and the
+mutation cannot satisfy `[[lid, ab], [lid_b, cd]]`.
+
+Both halves of that are worth carrying: a fixture is not a pin unless
+its inputs can tell the mutation apart from the honest code, and
+"two of something" is not that property — the two-house fold fixture
+failed on ORDERING and the two-house stager fixture on the bricks
+being DISTINCT. Size was the thing both fixes reached for and neither
+needed.
+
+### And the cleanup assertion replaced the failure it stood beside
+
+The machine-root check runs in a `finally` deliberately, so a red run
+is checked too. `control` combined a leak with a body that dies and
+the run reported the cleanup check while the real failure vanished
+from the output. It also went red on a correct tree from an unrelated
+writer to `/nw/layers` — which is not hypothetical, because a distinct
+`NW_STAGE` does not isolate the machine root and the test immediately
+before this one writes there.
+
+Both halves fixed without giving up the `finally`: the comparison is
+scoped to ids this test could have created, and when an exception is
+already in flight it prints and does not raise.
+
+### The cleanup fix's own filter was unpaired, and the pairing was the code deleted for being dead
+
+Scoping the machine-root check to `_ours(i)` introduced a filter that
+nothing checked: one matching nothing makes `leaked` always empty, the
+assertion vacuous, and the run indistinguishable from a clean one.
+`make prereport` asked the question (`asserts an absence: 'is None'`)
+and the answer was already in the diff — `made`, the list `control`
+had reported as appended to and never read, which this round deleted.
+
+What it was missing was a **reader**, not a deletion. It now carries
+the ids the body created, and the wrapper requires `_ours` to claim
+every one of them before believing that none of them reached the
+machine root. Deleting an unread variable is the obvious move and it
+was the wrong one: the variable was the paired positive that the
+assertion beside it needed.
+
+### One thing left as a hypothesis, labelled rather than closed
+
+`control` deleted the new `except SystemExit` branch and ran the whole
+target: `EXIT=0`, `PASSED, WITH SKIPS`. Nothing in the tree falsifies
+it, and nothing can while the suite passes — a passing suite is one in
+which no imported tool exits, so the branch lives on a path only a
+failing run takes. The evidence for it is a hand-run control, which is
+real evidence and is not a test. `.claude/rules/harness.md` says so
+beside the paragraph rather than letting it read as covered.
+
+### `drift`: the consumer that had to change is the one a fresh run cannot check
+
+The format change touched three readers. Two are pinned by the cases
+above. The third is `tests/run.py`'s once-per-run layer reset, and
+leaving it on the old one-field reading disables the reset entirely —
+`rmtree` targeting the path `"<id> <brick>"`, which never exists. The
+suite is **green on a fresh machine** and turns red only on a SECOND
+consecutive run, when the state a previous run left shows up. CI on a
+fresh container is a first run.
+
+`test_layer_survives_a_restart` cannot see it: `states[0] == "absent"`
+is an absence whose paired positive is "an earlier run left
+something", which no single run supplies. `test_the_layer_reset_fires_
+once_per_run` supplies it by planting the state itself — plant a
+sentinel, require the first sighting to remove it and a later sighting
+to keep it. Both halves of the rule `.claude/rules/harness.md`
+describes, neither of which was tested. Controls: the old reader fails
+the first half naming the surviving sentinel; resetting on every
+sighting fails the second.
+
+### The reversal disarmed the guard, and was caught by a coincidence
+
+`drift` swapped the baker's two fields. `_layer_bricks` read the
+sidecar as `{brick: id}` and the guard **inverted**: the case it exists
+for — one live layer over a different brick — came back `clash=[]` and
+was accepted. The run still failed, further down, because
+`tools/stage-layers.py` rejects a 64-character string as a layer id.
+That is `NW_NAME_LEN` being 32, not a check anybody wrote for this.
+Shorten a brick hash below it, or relax that id check, and the
+reversal is silent AND the guard is off.
+
+Field 1 is shape-checked in `_layer_bricks` now, so the guard
+establishes its own input rather than inheriting an accident.
+
+**And the first attempt to pin the fix was itself unexercised.**
+Mutating the baker to write the fields reversed returns `FAIL:
+stage-layers failed` — the suite dies at the first `boot()` that stages
+layers, hundreds of lines before the stager runs, so the new check was
+never reached. A guard nothing exercises, added as the fix for a
+silence finding. The reversed sidecar is written directly into the live
+slot now, where `_layer_bricks` is the first reader to see it; removing
+the shape check turns that case red.
+
+### A comment that described a check the code does not make
+
+`tools/stage-layers.py` said "THE SIDECAR MUST DESCRIBE THE BLOB BESIDE
+IT" above a `.sha256` comparison. `.sha256` is the hash of the **blob**,
+so it establishes that the blob is unchanged since the sidecars were
+written and says nothing about the sidecar's contents. `drift` replaced
+the sidecar with garbage, left the blob and its hash alone, and the
+tool created the directories the garbage named without a remark. The
+check is still worth having — the interrupted-stage case is what it was
+added for — and the comment now says that instead.
+
+### Latent, recorded rather than fixed
+
+`tools/mkboot.sh` copies neither `.layers` nor `.sha256` into the ESP.
+Harmless today because its city is brickless and the sidecar is empty.
+The moment that city grows a brick house, the burned image carries a
+plan declaring layers with nothing naming them, and THE RECOVERY in
+`.claude/rules/runtime.md` — `python3 tools/stage-layers.py <blob>` —
+cannot run on that slot.
+
+### A hazard this round created for its own reviewers
+
+`drift`'s first snapshot of the working tree captured a control
+mutation of mine mid-flight (`_slot_state` returning a constant), and
+its first result came back red for that reason; it caught this by
+diffing against the real tree. Running mutation controls in the shared
+working tree while reviewers are copying it makes their results
+unreliable in a way that looks like a finding. Worth a scratch copy on
+both sides, and worth knowing that a reviewer's "the tree moved under
+me" is not always another agent's commit.
+
+### Round two: four of five controls stayed green, all against the fixes
+
+`control` and `claims` were re-dispatched against this round's fixes
+rather than against what they originally found. That is §53's rule, and
+it paid: **four of `control`'s five mutations passed.**
+
+- **`made` never held `lid2`.** `_ours` has three clauses and the
+  `fo<pid>` one was paired by nothing, so `control` renamed that id,
+  leaked it onto the machine root, and the suite printed green. The
+  comment beside the pairing said every id the body created must be one
+  `_ours` claims, which was false of the tree it shipped in. An
+  assertion that excludes a filter matching NOTHING does not exclude
+  one matching SOME — the claim-with-parts shape, inside the assertion
+  written to close that class.
+- **`houses[-1]` passes.** Writing `other` first did not fix the lookup,
+  it moved it: `h1` became the last element. A two-element list has two
+  ends and the previous fix swapped which one was free. The folded
+  house sits in the middle of three now. `houses[1]` is not killed by
+  any fixed layout, and the comment says so instead of implying
+  otherwise.
+- **A set-valued clash guard passes both two-id assertions**, because
+  `mover`'s brick appeared nowhere in the live plan, so "the same brick
+  for this id" and "a brick the live plan uses anywhere" agreed on
+  every input the fixture had. `mover` lands on a live brick now.
+  `LargestCityFits` again: only an input that separates two predicates
+  can pin either.
+- **The reset test pinned once-per-BLOB, not once-per-ID.** Both its
+  `stage_layers()` calls used one blob, so the two readings agreed
+  throughout — including on its own precondition, vacuously. It stages a
+  second blob naming the same id now, which is the diverging case and is
+  exactly an unchanged house keeping its data across a plan change.
+
+**And one left as a hypothesis rather than fixed.** The field-1 shape
+check is pinned as a function, not at both call sites: the suite reaches
+it through the live sidecar, and `stage()` bakes the candidate's sidecar
+itself moments before reading it, so no input can hand that site a
+reversed one. `control` skipped the check there alone and the suite
+stayed green. The candidate-side call is defence against a baker that
+drifts and its only evidence is a comment, which is said in the comment.
+
+`claims` found eight more, of which three were **false reasons in
+`.prereport-ack` entries** — two of them positional counts, in the same
+batch as an ack whose own text says a distance is a hostage. An ack is a
+claim that someone looked, so a wrong reason there is worse than no ack.
+Also: a convention comment contradicted by the two cases shipped
+directly beneath it; `tools/stage-layers.py`'s docstring still saying
+the candidate stager did not exist, in a paragraph this round edited
+two lines below; two `every plan` universals that a brickless plan
+falsifies; and a hand-written `64` for the brick width, added by a
+change about drift, directly under the docstring forbidding exactly
+that.
+
+### And the fix for the unpaired clause added an unpaired clause
+
+The fix for `control`'s `made`/`fo` finding also added a third house to
+kill `houses[-1]`, on an `fz` prefix, appended to `made` — and did not
+give `_ours` a clause for it. Identical gap, in the fix for it, one
+edit later.
+
+**The pairing caught it on the first run**, naming all five ids:
+
+```
+FAIL: _ours does not recognise the ids this test made (['fh15995',
+'fo15995', 'fz15995', '57eacc69446e-h1', 'c31cc2393611-h1']), so the
+machine-root check below is satisfied by a filter that matches nothing
+```
+
+That is the difference worth recording. The `fo` gap took a reviewer
+running a mutation to find; the `fz` gap took one ordinary run. A
+pairing turns a class of mistake from something a reviewer catches into
+something the suite catches, and the evidence for that is the author
+making the same mistake twice with two different outcomes.
+
+**The red baseline did not invalidate the three controls beside it.**
+Each died at its own assertion and earlier in the run than the pairing:
+the reset and stager tests both precede `fold-house`, and F2 died in
+`fold-house`'s first case, at which point the machine-root block
+correctly printed nothing and let the body's failure stand — the
+masking fix from earlier in this round, working, in the run that
+exposed a different defect.
+
+### One migration consequence, recorded because nothing enforces it
+
+A live slot staged before this change has a one-field `.layers`, and
+`stage-candidate.py` refuses every candidate against it until the live
+plan is re-baked. The refusal names the file and the line and says
+"Re-bake the plan", so it is self-diagnosing rather than silent. Found
+by `claims` reading the guard, not by hitting it.

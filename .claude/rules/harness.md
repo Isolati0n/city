@@ -428,8 +428,38 @@ name. A new brick test gets the skip for free and cannot forget it. The
 same move also makes a stray skip name structurally impossible, because the
 name is derived rather than typed.
 
+**And a TOOL EXITING is a failure, announced as one too.** `main()`
+tells `expect()`'s `SystemExit` from one raised by a tool this suite
+IMPORTS — the stager, the baker and the fold helper all refuse that
+way — on the `FAIL` prefix, and names the test for the second kind. It
+re-raised both untouched until 2026-09-13, so the stager refusing
+inside a test ended the run printing its own refusal and nothing else:
+no `FAIL`, no test name, and a log whose last green line belonged to
+the test before the one that died, which reads as somebody running the
+tool by hand. Found by running a negative control, whose diagnostic was
+the wrong shape; the control was about the stager and the finding was
+about the runner.
+
+The discriminator holds only while no imported tool raises a
+`FAIL`-prefixed `SystemExit` — `grep -rn 'SystemExit(\s*f\?"FAIL'
+tools/*.py bakery/*.py` returns nothing. Note what it does **not**
+buy: `expect()`'s own path still does not name the test, because the
+message is whatever the caller typed.
+
+**NOTHING IN THE TREE FALSIFIES THIS BRANCH, and that is said here
+rather than left to be discovered.** `control` deleted it and ran the
+whole target: `EXIT=0`, `PASSED, WITH SKIPS`. It cannot be otherwise —
+a passing suite is one in which no imported tool exits, so the branch
+is on a path only a failing run takes. Under this project's own rule
+that makes it a **hypothesis**, however carefully worded, and the
+sentences above are evidence from a hand-run control rather than from
+anything `make test` would notice. A test for it would have the suite
+assert on its own diagnostic output, which is not obviously worth the
+machinery; what is not acceptable is letting the paragraph read as
+covered.
+
 **And a crash is a failure, announced as one.** `main()` catches anything
-that is not `SystemExit` (which is `expect()`'s own path), prints
+that is not `SystemExit` — which the branch above handles — prints
 `FAIL: <test> raised an unhandled exception`, and exits non-zero
 deliberately. It previously escaped as a traceback: the interpreter does
 exit non-zero on that — measured, 1 direct and 2 through `make` — but

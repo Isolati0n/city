@@ -265,3 +265,51 @@ unpaired-absence	tests/run.py	expect(fh.scan_environ(lid) == [],
 unpaired-absence	tools/fold-house.py	if p.pid not in seen:
 # Not a test: a lookup miss, reported with the names that were available.
 unpaired-absence	tools/fold-house.py	if target is None:
+# An ORDINAL naming the sidecar field, not a count of anything. "field 1"
+# is the position the reader indexes; there is nothing here to grow.
+prose-count	tests/run.py	# field 1 every clash case above would pass for the wrong reason.
+# A parser guard, not an assertion: it decides whether a mountinfo line
+# holds an upperdir= option at all. The paired positive is the marker
+# overlay `_paired_mountinfo_probe` mounts, which the scan must find
+# before any empty result is believed. Named rather than located: the
+# first version of this ack gave a distance and got it wrong, in the
+# same batch as an ack saying a distance is a hostage.
+unpaired-absence	tools/fold-house.py	if " - overlay " not in line and ",upperdir=" not in line:
+# Paired, and the pairing was added because prereport asked. Case 4
+# takes _slot_state() either side of a SUCCESSFUL fold and requires the
+# brick dir and the candidate slot to appear in the difference, so a
+# _slot_state that could not see a change turns the test red THERE --
+# after the refusals above it have passed vacuously, not before them.
+# The first version of this ack had that ordering backwards and
+# contradicted the code comment it was acking. `claims`.
+unpaired-absence	tests/run.py	expect(not changed,
+# Not an assertion: the guard that stops the machine-root check REPLACING
+# the body's own failure. On a clean run it asserts; with an exception in
+# flight it prints and lets the real failure stand. `control` produced the
+# masking case that this exists to prevent.
+unpaired-absence	tests/run.py	if leaked and sys.exc_info()[0] is None:
+# Same guard, on the pairing above it. The paired positive IS this line:
+# it requires _ours to claim every id the body made, so an empty `leaked`
+# cannot be produced by a filter that matches nothing. prereport asked for
+# this pairing and it was added; the hit is the guard, not the absence.
+unpaired-absence	tests/run.py	if sys.exc_info()[0] is None:
+# Quoting `make prereport`'s own output inside the record of the round it
+# fired in. Not an assertion.
+unpaired-absence	HISTORY.md	`make prereport` asked the question (`asserts an absence: 'is None'`)
+# Paired by the line above it, which requires the refusal to NAME move_lid.
+# Alone, "does not name keep_lid" is satisfied by a tool that refuses
+# nothing; together they mean the guard is keyed per id.
+unpaired-absence	tests/run.py	expect(keep_lid not in (r.out + r.err),
+# A precondition, not a claim about the mechanism: it establishes that this
+# id has NOT been staged in this process, so the half below is testing the
+# first sighting rather than a later one. Without it the test could silently
+# become a second copy of the second half.
+unpaired-absence	tests/run.py	expect(lid not in _LAYERS_RESET,
+# Paired by the `expect(os.path.exists(sentinel), "the sentinel was not
+# planted, so its later absence would prove nothing")` that precedes it.
+# The test plants the state itself precisely so this absence means the
+# reset fired rather than that nothing was ever there.
+unpaired-absence	tests/run.py	expect(not os.path.exists(sentinel),
+# English, not a count of a list: "folding two different units in one test"
+# names a thing that does not exist. Nothing here can grow past it.
+prose-count	tests/run.py	# one test, which is not built.

@@ -73,6 +73,82 @@ def _blob_h(name):
     raise SystemExit(f"stage-candidate: blob.h has no {name}")
 
 
+def _layer_bricks(path):
+    """`{layer-id: brick}` from a `.layers` sidecar.
+
+    A ONE-FIELD LINE IS FATAL, and that is not symmetry with
+    `tools/stage-layers.py`, which accepts one. That tool asks which
+    directories to create and field 0 answers it completely. This one
+    asks whether a shared id sits over a different brick, and without
+    field 1 there is no answer -- so it refuses rather than guessing,
+    which is the same rule as the unreadable sidecars either side of
+    this.
+    """
+    out = {}
+    for n, line in enumerate(open(path), 1):
+        if not line.strip():
+            continue
+        f = line.split()
+        if len(f) != 2:
+            raise SystemExit(
+                f"stage-candidate: {path}:{n} has {len(f)} field(s), not "
+                f"an id and a brick. A sidecar the baker wrote pairs "
+                f"them; this tool needs the brick to tell a reused layer "
+                f"from a folded one, and will not guess. Re-bake the "
+                f"plan.")
+        # FIELD 1 IS SHAPE-CHECKED. Removing this turns the
+        # reversed-sidecar case in `test_candidate_stager_never_touches_
+        # the_live_slot` red, which is the evidence; the paragraph below
+        # is why it was added.
+        #
+        # WHAT THAT PINS IS THE FUNCTION, NOT BOTH CALL SITES. The suite
+        # reaches this through the LIVE sidecar read; the candidate read
+        # above it is unexercised, because `stage()` bakes that sidecar
+        # itself moments earlier and no input can hand it a reversed
+        # one. `control` skipped the check on the candidate site alone
+        # and the suite stayed green. The candidate-side call is
+        # defence against a baker that drifts, and its only evidence is
+        # this comment -- which under this project's rule makes it a
+        # hypothesis, said here rather than left to read as covered.
+        #
+        # The alphabet half is narrower still: `NW_NAME_LEN` is 32, so
+        # no legal layer id reaches this length, and a length-only
+        # check would pass every case the suite has. It is there for a
+        # producer that is not the baker.
+        #
+        # `drift` reversed the baker's fields and this tool read the
+        # sidecar as {brick: id}, which INVERTED the guard: the case it
+        # exists for -- one live layer over a different brick -- came
+        # back `clash=[]` and was accepted. The run still failed, but
+        # further down and by a coincidence: `tools/stage-layers.py`
+        # rejects a 64-character string as a layer id because
+        # NW_NAME_LEN is 32. Shorten a brick hash below that, or relax
+        # that id check, and the reversal is silent AND the guard is
+        # disarmed. Checked here so the guard establishes its own input.
+        #
+        # The baker's `_is_hex64` spells the same closed lowercase
+        # alphabet; a layer id cannot match it, because `[A-Za-z0-9_-]`
+        # of length 64 is over NW_NAME_LEN and the baker refuses it.
+        # WIDTH FROM blob.h, not spelled. `_blob_h`'s own docstring two
+        # functions up says a second copy of a limit is the drift class
+        # invariant 3 is about, and the first version of this check
+        # wrote `64` twice -- a fourth hand-written copy of the brick
+        # width, added by a change whose entire subject is that drift
+        # class. `claims` found it under the docstring forbidding it.
+        hexlen = int(_blob_h("NW_BRICK_HASH")) * 2
+        if len(f[1]) != hexlen or any(c not in "0123456789abcdef"
+                                      for c in f[1]):
+            raise SystemExit(
+                f"stage-candidate: {path}:{n} pairs {f[0]!r} with "
+                f"{f[1]!r}, which is not a {hexlen}-character lowercase "
+                f"hex brick. The baker writes the id first; a sidecar with "
+                f"the fields the other way round reads as {{brick: id}} "
+                f"here and inverts the reuse check rather than failing "
+                f"it.")
+        out[f[0]] = f[1]
+    return out
+
+
 def slot_name_ok(nm):
     """The alphabet and bound PID 1 accepts for a slot name.
 
@@ -274,13 +350,49 @@ def stage(slots, city, slot=None, root="", nw_check=None, quiet=False):
         # stacks them over themselves and the old whiteouts re-delete
         # files now baked in.
         #
+        # OVER THE SAME BRICK IT IS PERMITTED, and that is a narrowing
+        # of what this refused until 2026-09-13. Both reasons above are
+        # about a house whose brick CHANGED -- the fold reason says so,
+        # and the wiring reason is about the next boot, where exactly
+        # one plan runs and an unchanged house keeping its id is the
+        # whole purpose of keying a layer by a declared id rather than
+        # by the house name. Refusing every shared id meant a two-house
+        # city could never fold one house without orphaning the other's
+        # data, which is the failure the keying exists to prevent.
+        #
+        # It was invisible from the rejection side: a refusal test is
+        # satisfied by a refusal for any reason, so the case that found
+        # it is a legal candidate that MUST be accepted --
+        # `.claude/rules/plan.md`'s missing-DIRECTION lesson, arriving
+        # in the stager. The instrument is the same-brick carry-over
+        # case in `test_candidate_stager_never_touches_the_live_slot`,
+        # which stages a candidate sharing a live id and requires exit
+        # 0; the two-house fixture in the fold-house test is what found
+        # it, from further away. The refusal case beside the carry-over
+        # is the other direction, and neither substitutes.
+        #
+        # ESTABLISHED HERE, not taken from the caller. The fold helper
+        # knows which ids it did not fold, and passing that in would be
+        # an override -- the shape this guard exists to resist. The
+        # brick in the sidecar lets this tool answer for itself.
+        #
+        # What is NOT distinguished: a fold from an ordinary brick
+        # upgrade that keeps its data. Both change the brick and both
+        # are refused, so there is no upgrade-with-data path through
+        # this tool. That is NOT a cost of this narrowing -- the
+        # previous guard refused every shared id, so it refused that
+        # too. This change only widens what is accepted, and the
+        # remaining refusal is the conservative half of a distinction
+        # nothing here can draw. An open design question, and older
+        # than this line.
+        #
         # Both sides come from the sidecar the baker writes, so neither
         # needs a second copy of the blob layout. A live plan with no
         # sidecar is a refusal for the reason an unreadable `current`
         # is: the tool cannot establish the property, and guessing is
         # how it goes wrong quietly. If two plans ever need to share a
         # layer, that is a design decision and this is where it is made.
-        want = {l.strip() for l in open(blob + ".layers") if l.strip()}
+        want = _layer_bricks(blob + ".layers")
         live_side = os.path.join(slots, live, "plan.blob.layers")
         # THE LIVE SIDECAR MUST DESCRIBE THE LIVE BLOB, and this tool is
         # the reason it might not. The renames below put the sidecars in
@@ -309,7 +421,7 @@ def stage(slots, city, slot=None, root="", nw_check=None, quiet=False):
         try:
             want_sha = open(live_sha).read().strip()
             got_sha = hashlib.sha256(open(live_blob, "rb").read()).hexdigest()
-            live_ids = {l.strip() for l in open(live_side) if l.strip()}
+            live_ids = _layer_bricks(live_side)
         except OSError as e:
             raise SystemExit(
                 f"stage-candidate: cannot read the live plan's sidecars "
@@ -326,14 +438,19 @@ def stage(slots, city, slot=None, root="", nw_check=None, quiet=False):
                 f"hexdigest alone into that file -- `sha256sum` emits "
                 f"'<hash>  <name>', which this compares whole and "
                 f"would reject forever.")
-        clash = sorted(want & live_ids)
+        clash = sorted(i for i in (want.keys() & live_ids.keys())
+                       if want[i] != live_ids[i])
         if clash:
             raise SystemExit(
-                f"stage-candidate: the candidate names layer(s) the live "
-                f"plan is using: {' '.join(clash)}. A candidate gets its "
-                f"own layer -- sharing wires it to a running house's "
-                f"writable area, and after a fold it would stack the "
-                f"folded contents over themselves.")
+                f"stage-candidate: the candidate reuses layer(s) the live "
+                f"plan is using, over a DIFFERENT brick: "
+                f"{' '.join(clash)}. The folded brick already contains "
+                f"that layer's contents, so reusing the id stacks them "
+                f"over themselves and the old whiteouts re-delete files "
+                f"now baked in. A folded house gets a new layer id. "
+                f"(Reusing an id over the SAME brick is how an unchanged "
+                f"house keeps its data across a plan change, and is "
+                f"permitted.)")
 
         # The layer directories this plan names, through the one creator.
         #

@@ -114,17 +114,45 @@ def scan_mountinfo(upper_path):
     the layer mounted. mountinfo is the kernel's own answer and is
     visible across mount namespaces by scanning every pid."""
     hit = []
-    want = f"upperdir={upper_path}"
+    want = os.path.realpath(upper_path)
     for pid in _pids():
         try:
             with open(f"/proc/{pid}/mountinfo") as f:
                 for line in f:
-                    if want in line:
+                    opt = _upperdir_of(line)
+                    if opt is not None and os.path.realpath(opt) == want:
                         hit.append(int(pid))
                         break
         except (OSError, ValueError):
             continue
     return hit
+
+
+def _upperdir_of(line):
+    """The `upperdir=` value from a mountinfo line, or None.
+
+    RESOLVED, NOT COMPARED AS TEXT. `ovl_show_options` prints back the
+    string the mounter supplied, so `//x/upper` and `link/x/upper` name
+    the same directory and a substring match sees neither: `control`
+    escaped the check with a doubled slash and with a symlinked parent,
+    on a real overlay, and the fold proceeded both times.
+
+    STILL NOT COVERED, and said rather than implied: a `mount --bind` of
+    the upper is writable and never appears as `upperdir=` at all. The
+    production shape IS caught -- a child that mounts the overlay and
+    then `pivot_root`s into it exactly as `lid_brick()` does keeps the
+    option string, verified -- so what escapes is another route to the
+    same directory: an operator's `nsenter` or bind during recovery, or
+    a house with `mount(2)` available. Narrowing that means comparing
+    the mount root by device and inode, which cannot be done for another
+    namespace's mountpoint from here."""
+    if " - overlay " not in line and ",upperdir=" not in line:
+        return None
+    for field in line.rstrip("\n").split():
+        for opt in field.split(","):
+            if opt.startswith("upperdir="):
+                return opt[len("upperdir="):]
+    return None
 
 
 def _paired_environ_probe(layer_id):
@@ -192,18 +220,30 @@ def _paired_mountinfo_probe():
     Checking that /proc/self/mountinfo opens tests the open. Checking
     that the scan finds ANY overlay tests the machine. Only a mount this
     probe made, at a path nothing else uses, tests the match."""
-    tmp = tempfile.mkdtemp(prefix="fold-house-probe-")
-    up = os.path.join(tmp, "upper")
-    for d in ("upper", "lower", "work", "mnt"):
-        os.makedirs(os.path.join(tmp, d))
-    cmd = (f"mount -t overlay fold-house-probe -o "
-           f"lowerdir={tmp}/lower,upperdir={up},workdir={tmp}/work "
-           f"{tmp}/mnt || exit 1; echo ok; read _")
-    p = subprocess.Popen(
-        ["unshare", "-m", "--propagation", "private", "sh", "-c", cmd],
-        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-        text=True)
+    # EVERYTHING INSIDE THE try. `mkdtemp`, the `makedirs` and the
+    # `Popen` were outside it, so a machine without `unshare` left the
+    # directory behind and raised `FileNotFoundError` -- which `main()`
+    # catches as neither `NotClosed` nor `MergeError`, so the tool exited
+    # on a traceback rather than the documented refusal. `control`.
+    tmp = p = None
     try:
+        tmp = tempfile.mkdtemp(prefix="fold-house-probe-")
+        up = os.path.join(tmp, "upper")
+        for d in ("upper", "lower", "work", "mnt"):
+            os.makedirs(os.path.join(tmp, d))
+        cmd = (f"mount -t overlay fold-house-probe -o "
+               f"lowerdir={tmp}/lower,upperdir={up},workdir={tmp}/work "
+               f"{tmp}/mnt || exit 1; echo ok; read _")
+        try:
+            p = subprocess.Popen(
+                ["unshare", "-m", "--propagation", "private", "sh", "-c", cmd],
+                stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE, text=True)
+        except OSError as e:
+            raise NotClosed(
+                f"the mountinfo probe could not start: {e}. Without it the "
+                f"scan below is unpaired, so an empty result would be "
+                f"satisfied by a broken scan as much as by a closed house.")
         ready = p.stdout.readline()
         if ready.strip() != "ok":
             raise NotClosed(
@@ -218,12 +258,27 @@ def _paired_mountinfo_probe():
                 f"mounted with upperdir={up} while it ran. The scan is "
                 f"broken, so its emptiness says nothing.")
     finally:
-        try:
-            p.stdin.write("x\n"); p.stdin.flush()
-        except (BrokenPipeError, ValueError):
-            pass
-        p.stdin.close(); p.wait(timeout=10)
-        subprocess.run(["rm", "-rf", tmp], check=False)
+        # KILL, THEN CLEAN, AND THE CLEAN MUST NOT BE SKIPPABLE. The
+        # `p.wait(timeout=10)` used to sit above the `rm -rf`, so a child
+        # that outlived the timeout raised `TimeoutExpired` past the
+        # cleanup line and left BOTH a temp directory and a live child
+        # holding an overlay in its own namespace. There was no `kill`
+        # anywhere. `control` reproduced both.
+        if p is not None:
+            try:
+                p.stdin.write("x\n"); p.stdin.flush()
+            except (BrokenPipeError, ValueError, AttributeError):
+                pass
+            try:
+                p.stdin.close()
+            except (BrokenPipeError, ValueError, AttributeError):
+                pass
+            try:
+                p.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                p.kill(); p.wait(timeout=10)
+        if tmp is not None:
+            subprocess.run(["rm", "-rf", tmp], check=False)
 
 
 def require_closed(layer_id, upper_path):
@@ -252,6 +307,7 @@ def require_closed(layer_id, upper_path):
 
 # --- the helper ----------------------------------------------------------
 
+_HASH_CHARS = 12
 _LID_BITS = (("newns", 1), ("newnet", 2), ("seccomp", 4), ("landlock", 8))
 
 
@@ -316,7 +372,17 @@ def derive_layer_id(unit, image_hash, name_len):
 
     Not the unit name alone -- that is the id the old layer already has,
     and reusing it is the failure this tool exists to avoid."""
-    stem = f"{unit}-{image_hash[:12]}"
+    # THE HASH GOES FIRST so truncation can never eat it. It was last,
+    # and `stem[:name_len - 1]` then removed content-keying entirely for
+    # a legal house name: `NW_NAME_LEN` is 32, so a 30-character name --
+    # which the baker accepts -- left zero hash characters and two
+    # different saves derived the identical id. Reproduced end to end on
+    # the unmutated tool: different bricks, same id, both staging
+    # cleanly, which is the collision assertion 4b names and the
+    # stacked-over-itself failure the module docstring says a fresh id
+    # prevents. Degradation began at 19 characters, so the fixture's
+    # short names could never have shown it. `control`.
+    stem = f"{image_hash[:_HASH_CHARS]}-{unit}"
     return stem[:name_len - 1]
 
 

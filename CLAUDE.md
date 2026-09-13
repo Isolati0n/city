@@ -1031,6 +1031,15 @@ one directory, and a bind gives it durable state in two. So the sentence the
 whole label rests on is answerable, in both directions. `HISTORY.md` §71 has
 the episode.
 
+**And it keeps becoming answerable as the tree grows, which is the part
+worth watching.** The document names a queue — the fold helper, then
+resource blocks — and `tools/fold-house.py` exists now, so that sentence
+is checkable and stale. The document itself is NOT edited: it was
+relayed and committed verbatim with its provenance, and rewriting it
+would destroy the record of what was written before the thing it
+describes. The tracking belongs here, where the label is argued for.
+`claims` found it while checking what this round had made false.
+
 **Every absence is over a set somebody chose, and the chooser is part of the
 claim.** "No layer-size bound" is the obvious case — on a kernel with an
 on-disk quota format it would be true of the codebase and false of the
