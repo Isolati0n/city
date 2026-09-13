@@ -28,6 +28,7 @@
   "dawn-real-boot",
   "difftest",
   "dupname-refused",
+  "fold-house-refuses-a-house-that-is-not-closed",
   "fuzz-checker",
   "halt-spawner",
   "happy",

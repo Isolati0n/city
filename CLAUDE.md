@@ -374,6 +374,45 @@ sections after this one and are deliberately not numbered here.
 8. **CRC32 is diagnostic** (threat model is corruption, not tampering). The
    structural checks in `nwcheck.c` are the actual safety property. The seal
    must be *verified*, not merely read — that was bug 1.
+9. **A fold establishes that no SUPERVISOR exists for the unit, not that
+   no house process is running.** Moved here from *Waiting on a
+   prerequisite* on 2026-09-13, when `tools/fold-house.py` gave the rule
+   a subject. The distinction is the rule: "the house is not running" is
+   satisfied by a longrun house between restarts, which is about to
+   write again, while "no supervisor" is exactly "this unit will not run
+   again before the next boot".
+
+   Two scans, because they answer different questions and neither
+   answers both. No process carrying `NW_LAYER=<id>` covers the
+   supervisor and the house together — `nwspawn.c` sets it and the house
+   inherits it, and `clearenv()` cannot remove it because
+   `/proc/pid/environ` is served from the exec-time VMA. No process
+   whose `mountinfo` shows that layer's `upperdir` covers a grandchild
+   that exec'd with a fresh environment, which the first scan cannot see
+   at all: measured, `scan_environ` returns `[]` for exactly the process
+   `scan_mountinfo` finds.
+   <<filecontains:tools/fold-house.py:def scan_environ>>
+   <<filecontains:tools/fold-house.py:def scan_mountinfo>>
+
+   **Each scan is an absence and each is paired**, or an empty result
+   would mean "closed" and "broken" identically. The environ pairing
+   execs a child *with* the variable and requires the scan to find it —
+   and it costs a fork, which the design did not expect: setting the
+   variable in the helper's own environment is invisible to
+   `/proc/self/environ` and would additionally have made every
+   subprocess the fold spawns look like a live house. The mountinfo
+   pairing mounts a marker overlay in its own namespace and requires
+   the scan to see it. Removing either pairing while both scans work
+   leaves everything green, so the suite supplies a broken scan on
+   purpose.
+
+   **This depends on invariant 1 and the dependence is silent.** A
+   supervisor that has exited cannot come back only because PID 1 has no
+   respawn path. If PID 1 ever grows one, nothing here starts failing —
+   the check becomes a race that reports nothing and the fold
+   occasionally captures a live layer. Invariant 1's `absent-in`
+   annotations for `respawn` and `restart` are the guard.
+   `HISTORY.md` §65, §66 and §73.
 
 *Renumbered 2026-09-10: the old invariant 7 left the enforced list (see
 Waiting on a prerequisite, below), so old 8 → 7 and old 9 → 8. Invariants 1–6
@@ -403,32 +442,6 @@ Statements here are real rules with no subject yet. They become enforceable
 the moment the prerequisite lands, and they are recorded so nobody has to
 rediscover them.
 
-- **A fold establishes that no SUPERVISOR exists for the unit, not that
-  no house process is running.** The prerequisite is the fold helper of
-  scratch-becomes-saved. **The fold ENGINE exists — `bakery/fold.py`,
-  landed 2026-09-13 — and does not implement this; its own docstring
-  says so and says an operator pointing it at a running house gets no
-  warning.** What is missing is the caller that establishes the
-  precondition. The asymmetry matters and a first telling smoothed it
-  away: `bakery/fold.py` has never used the phrase "fold helper" — it
-  calls itself the fold engine and disclaims the check, and it did so in
-  the commit that landed it, so the qualifier was missing here rather
-  than there. `claims`. (A first correction said this bullet was "the
-  only place" it was missing, which is a completeness claim, and false:
-  `docs/NW-EXPECTATIONS-UNANCHORED.md` uses the phrase unqualified too.) "The house is not
-  running" is satisfied by a longrun house between restarts, which is
-  about to write; the supervisor is the thing whose absence means the
-  unit will not run again before the next boot, because it stops
-  looping for a oneshot that exited 0, a budget exhausted, or
-  `stopping`, and every other way it can terminate is terminal too.
-  Folding a live layer is the silent-wrong-artifact case: the image
-  mounts, boots, and holds a half-written file, and nothing in the
-  bytes says so. **This depends on invariant 1** — a supervisor that
-  has exited cannot come back only because PID 1 has no respawn path,
-  and if PID 1 ever grows one this check becomes a race *silently*:
-  nothing fails, the fold just occasionally captures a live layer.
-  Recorded here rather than only in the record because a reader of
-  this file alone would not find it. `HISTORY.md` §65 and §66.
 - **Authoritative state never auto-restarts on an integrity fault.** Inherited
   from `HISTORY.md` §11 and still correct. It has no subject today: there is
   no persistent state anywhere in the design, and no integrity-fault channel —

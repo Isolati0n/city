@@ -5361,6 +5361,264 @@ def write_coverage(passed, outdir=None):
     return os.path.relpath(path, ROOT)
 
 
+def test_fold_house_refuses_a_house_that_is_not_closed():
+    """The helper saves a CLOSED house and establishes closed itself.
+
+    THE SUBJECT IS THE SUPERVISOR, not the house process. "No supervisor
+    for this unit" is "this unit will not run again before the next
+    boot", which is the precondition. "The house is not running" is
+    satisfied by a longrun house between restarts, which is about to
+    write -- so the check is two scans that answer different questions,
+    and each is an absence that needs its pairing.
+
+    Negative controls, all run:
+      - neuter `scan_environ` to return [] -> the live-NW_LAYER case
+        passes and the fold captures a live layer;
+      - neuter `scan_mountinfo` -> the grandchild case passes, which is
+        the one the environ scan cannot see;
+      - delete the environ PAIRING -> a scan that finds nothing because
+        it is broken reads as a closed house;
+      - delete the mountinfo pairing -> same, on the other scan;
+      - delete `_verify_city_is_live` -> a city that is not the running
+        plan is folded against and staged;
+      - make `derive_layer_id` return the old id -> the reuse refusal
+        fires, and without that refusal the candidate re-applies the
+        layer's whiteouts over the brick that just absorbed them.
+
+    The machine-root ids this creates are keyed to the pid and removed
+    in a `finally`, for the reason
+    `test_candidate_stager_never_touches_the_live_slot` records: a red
+    run otherwise leaves them behind and the next run reads them as a
+    tool defect."""
+    why = erofs_available()
+    if why:
+        raise Unavailable(why)
+    if "overlay" not in open("/proc/filesystems").read():
+        raise Unavailable(
+            "the kernel has no overlay driver, so the mountinfo pairing "
+            "cannot mount its marker and the grandchild half of the "
+            "closed-house check goes untested")
+    made = []
+    try:
+        return _fold_house_body(made)
+    finally:
+        for gone in made:
+            shutil.rmtree(f"{_layer_dir()}/{gone}", ignore_errors=True)
+
+
+def _fold_house_body(made):
+    import importlib.util, subprocess as sp
+    sys.path.insert(0, os.path.join(ROOT, "bakery"))
+    import mkbrick
+
+    def by_path(n, rel):
+        sp_ = importlib.util.spec_from_file_location(n, os.path.join(ROOT, rel))
+        m = importlib.util.module_from_spec(sp_); sp_.loader.exec_module(m)
+        return m
+    fh = by_path("fh_t", "tools/fold-house.py")
+
+    root = f"{WORK}/fh-root"
+    shutil.rmtree(root, ignore_errors=True)
+    slots = f"{root}/slots"
+    os.makedirs(f"{slots}/A"); os.makedirs(f"{slots}/B")
+    os.makedirs(f"{root}{mkbrick.brick_dir()}")
+
+    tree = f"{root}/tree"; os.makedirs(f"{tree}/bin")
+    open(f"{tree}/bin/prog", "wb").write(b"#!/bin/sh\nexit 0\n")
+    os.chmod(f"{tree}/bin/prog", 0o755)
+    open(f"{tree}/shipped", "w").write("from the brick\n")
+    H, img = mkbrick.pack(tree, f"{root}{mkbrick.brick_dir()}", quiet=True)
+
+    lid = f"fh{os.getpid()}"
+    made.append(lid)
+    up = f"{root}{_layer_dir()}/{lid}/upper"
+    os.makedirs(up); os.makedirs(f"{root}{_layer_dir()}/{lid}/work")
+    open(f"{up}/saved-by-the-house", "w").write("this must survive\n")
+
+    city = f"{root}/live.city"
+    open(city, "w").write(
+        f"house h1 /bin/prog kind=oneshot lids=newns,seccomp "
+        f"brick={H} layer={lid}\n")
+    b = run(["python3", CC, "--city", city, "--out", f"{slots}/A/plan.blob"])
+    expect(b.returncode == 0, f"bake the live plan\n{b.out}{b.err}")
+    open(f"{slots}/current", "w").write("A\n")
+    live_before = open(f"{slots}/A/plan.blob", "rb").read()
+    cur_before = open(f"{slots}/current", "rb").read()
+
+    def _live_intact(w):
+        expect(open(f"{slots}/A/plan.blob", "rb").read() == live_before,
+               f"{w}: the live plan changed")
+        expect(open(f"{slots}/current", "rb").read() == cur_before,
+               f"{w}: slots/current changed")
+
+    def _fold(**kw):
+        return fh.fold_house(slots, city, "h1", root=root,
+                             nw_check=f"{BIN}/nw-check", quiet=True, **kw)
+
+    # 1. A PROCESS CARRYING NW_LAYER -- the supervisor or the house.
+    env = dict(os.environ, NW_LAYER=lid)
+    p = sp.Popen(["sleep", "60"], env=env)
+    try:
+        raised = None
+        try:
+            _fold()
+        except fh.NotClosed as e:
+            raised = str(e)
+        expect(raised is not None,
+               "the helper folded a layer while a process still carried its "
+               "NW_LAYER; that process is the supervisor, the house, or a "
+               "child of one, and it can still write")
+        expect(str(p.pid) in raised,
+               f"refused, but did not name the process holding it: {raised}")
+    finally:
+        p.kill(); p.wait()
+    _live_intact("environ refusal")
+
+    # 2. THE GRANDCHILD: holds the upperdir mounted, carries no NW_LAYER.
+    #    The environ scan is blind to it by construction, which is why
+    #    there are two scans rather than one done twice.
+    noenv = {k: v for k, v in os.environ.items() if k != "NW_LAYER"}
+    mnt = f"{root}/gc-mnt"; os.makedirs(mnt)
+    cmd = (f"mount -t overlay fh-test -o lowerdir={root}/tree,"
+           f"upperdir={up},workdir={root}{_layer_dir()}/{lid}/work {mnt} "
+           f"|| exit 1; echo ok; read _")
+    g = sp.Popen(["unshare", "-m", "--propagation", "private", "sh", "-c", cmd],
+                 env=noenv, stdin=sp.PIPE, stdout=sp.PIPE, stderr=sp.PIPE,
+                 text=True)
+    try:
+        # NOT `expect(readline() == "ok", f"...{g.stderr.read()}")`. The
+        # message argument is built EAGERLY, so reading a live child's
+        # stderr blocks until that child closes it -- and this child
+        # never does, because it is holding the mount open on purpose.
+        # The suite hung there with no output at all, inside the
+        # assertion written to report a failure. Read stderr only after
+        # the line says the child is gone.
+        first = g.stdout.readline().strip()
+        if first != "ok":
+            expect(False, f"the grandchild could not mount: "
+                          f"{g.stderr.read()[:200]}")
+        expect(fh.scan_environ(lid) == [],
+               "the grandchild carries NW_LAYER after all, so this case is "
+               "not testing what the mountinfo scan exists for")
+        raised = None
+        try:
+            _fold()
+        except fh.NotClosed as e:
+            raised = str(e)
+        expect(raised is not None and "upperdir" in raised,
+               f"the helper folded a layer a grandchild had mounted, which "
+               f"no environ scan can see: {raised}")
+    finally:
+        try:
+            g.stdin.write("x\n"); g.stdin.flush()
+        except (BrokenPipeError, ValueError):
+            pass
+        g.stdin.close(); g.wait(timeout=20)
+    _live_intact("mountinfo refusal")
+
+    # 2b. A BROKEN SCAN MUST NOT READ AS A CLOSED HOUSE, which is the
+    #     only input that makes either pairing load-bearing. Removing a
+    #     pairing while both scans work leaves everything above green:
+    #     the scan still catches the live process, so the pairing is
+    #     never consulted. Measured -- `drop-environ-pairing` passed.
+    #
+    #     Supplying a broken scan is not the monkeypatch-the-subject
+    #     shape `control` criticised elsewhere: the pairing is the
+    #     subject, and a scan that answers [] is its input.
+    for which, patch, marker in (
+            ("environ", "scan_environ", "probe child"),
+            ("mountinfo", "scan_mountinfo", "marker overlay")):
+        real = getattr(fh, patch)
+        setattr(fh, patch, lambda *_a, **_k: [])
+        try:
+            raised = None
+            try:
+                _fold()
+            except fh.NotClosed as e:
+                raised = str(e)
+            expect(raised is not None and marker in raised,
+                   f"with {patch} returning [] for everything, the helper "
+                   f"did not refuse: an empty scan then means only that "
+                   f"the scan is broken, and the {which} pairing is what "
+                   f"has to say so. Got: {raised}")
+        finally:
+            setattr(fh, patch, real)
+    _live_intact("broken-scan refusal")
+
+    # 3. A CITY THAT IS NOT THE RUNNING PLAN.
+    other = f"{root}/other.city"
+    open(other, "w").write(
+        f"house h1 /bin/prog kind=longrun lids=newns,seccomp "
+        f"brick={H} layer={lid}\n")
+    raised = None
+    try:
+        fh.fold_house(slots, other, "h1", root=root,
+                      nw_check=f"{BIN}/nw-check", quiet=True)
+    except SystemExit as e:
+        raised = str(e)
+    expect(raised is not None and "does not bake to" in raised,
+           f"a city that is not the live plan was accepted: {raised}")
+    _live_intact("city refusal")
+
+    # 4. THE PAIRED POSITIVE, and it is the whole point: with nothing
+    #    holding the layer, the fold happens and saves both sides.
+    newh, nid, slot = _fold()
+    expect(os.path.exists(img), "the OLD brick was not left in place")
+    expect(os.path.exists(f"{root}{mkbrick.brick_dir()}/{newh}.img"),
+           "the new brick was not written")
+    expect(nid != lid,
+           f"the candidate reuses the live layer id {nid}; its whiteouts "
+           f"would re-delete the files the fold just baked in")
+    made.append(nid)
+    expect(os.path.exists(f"{up}/saved-by-the-house"),
+           "the old layer was consumed; the previous brick plus the "
+           "previous layer must still boot")
+    _live_intact("after a successful fold")
+    expect(slot == "B" and os.path.exists(f"{slots}/B/plan.blob"),
+           f"no candidate was staged in {slot}")
+
+    # and the new brick really carries both sides
+    m = f"{root}/verify"; os.makedirs(m)
+    run(["mount", "-o", "ro,loop",
+         f"{root}{mkbrick.brick_dir()}/{newh}.img", m])
+    try:
+        holds = sorted(os.listdir(m))
+        expect("shipped" in holds and "saved-by-the-house" in holds,
+               f"the folded brick lost a side: {holds}")
+    finally:
+        run(["umount", m])
+
+    # 4b. THE DERIVED ID IS KEYED TO THE CONTENT, and that is the
+    #     property rather than "it differs from the old one". Two saves
+    #     of different content must not land on one layer id, or the
+    #     second candidate boots the first candidate's data. `control`
+    #     showed the gap: making derive_layer_id return the unit name
+    #     left everything above green, because in this fixture the unit
+    #     is not the layer id and so nothing collided.
+    open(f"{up}/second-save", "w").write("a later write\n")
+    newh2, nid2, _ = _fold()
+    made.append(nid2)
+    expect(newh2 != newh,
+           "folding a changed layer produced the same brick hash")
+    expect(nid2 != nid,
+           f"two different saves derived the same layer id {nid2}; the "
+           f"second candidate would boot the first one's data")
+
+    # 5. REUSING THE ID IS REFUSED, asked for explicitly.
+    raised = None
+    try:
+        _fold(new_layer=lid)
+    except SystemExit as e:
+        raised = str(e)
+    expect(raised is not None and "whiteout" in raised,
+           f"reusing the live layer id was accepted: {raised}")
+
+    print(f"ok fold-house (closed established by two paired scans -- environ "
+          f"and mountinfo, the second seeing a grandchild the first cannot; "
+          f"{lid} folded onto {H[:8]} -> {newh[:8]} with new id {nid}; live "
+          f"slot and current untouched; candidate staged in {slot})")
+
+
 def main():
     os.chdir(ROOT)
     print_environment()
@@ -5390,6 +5648,7 @@ def main():
         test_magic_moves_with_the_layout,
         test_old_magic_is_refused_as_magic,
         test_candidate_stager_never_touches_the_live_slot,
+        test_fold_house_refuses_a_house_that_is_not_closed,
         test_specs_are_checked,
         test_baker_writes_the_declared_layout,
         test_non_provision_at_max,

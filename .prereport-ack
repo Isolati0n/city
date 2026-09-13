@@ -241,3 +241,26 @@ unpaired-absence	bakery/test_fold.py	expect(not os.path.lexists(os.path.join(t.m
 unpaired-absence	bakery/test_fold.py	expect("user.overlay.somethingelse" not in got,
 # Prose in a record, not an assertion in a test.
 unpaired-absence	HISTORY.md	different failures and are not in tension, so the answer to "a review is
+
+# --- 2026-09-13, the fold helper ---
+# The mechanism-claim IS the finding: `control` measured that removing a
+# pairing left the suite green, and the broken-scan case beside this
+# comment is what makes the pairing load-bearing. Both pairings are red
+# under `drop-environ-pairing` and `drop-mountinfo-pairing`.
+mechanism-claim	tests/run.py	#     only input that makes either pairing load-bearing. Removing a
+# English: "one house per line" is the output format, not a quantity.
+prose-count	tools/fold-house.py	"""One house per line, in the syntax `load_city` reads.
+# A skip guard naming what goes untested, not an assertion.
+unpaired-absence	tests/run.py	if "overlay" not in open("/proc/filesystems").read():
+# THE paired positive itself, inverted: this asserts the grandchild does
+# NOT carry NW_LAYER, which is the precondition making the mountinfo case
+# test what it exists for rather than duplicating the environ case. Its
+# pair is the refusal three lines below, which must name upperdir.
+unpaired-absence	tests/run.py	expect(fh.scan_environ(lid) == [],
+# The pairing's own assertion: the scan must find a child exec'd WITH the
+# variable. Absence here means the scan is broken, which is the whole
+# point -- there is no positive to add, because this IS the positive for
+# every later empty result.
+unpaired-absence	tools/fold-house.py	if p.pid not in seen:
+# Not a test: a lookup miss, reported with the names that were available.
+unpaired-absence	tools/fold-house.py	if target is None:

@@ -7333,3 +7333,94 @@ them cheap rather than what preserved them, and a first telling of this
 section blurred the two. §66's own wording is the accurate one: "the
 commit was intact and the edits were redone." The tree at that moment
 held less than the fold rounds later did.
+
+
+## 73. The fold helper, and the pairing that caught its own design (2026-09-13)
+
+`tools/fold-house.py`. An operator closes a house and invokes it; it
+folds that house's layer onto its sealed brick, packs a new brick, and
+calls the stager to write a candidate slot naming it. **Saving is
+immediate and switching is deferred** — the brick exists when the tool
+returns, the old one is untouched, both remain, and the candidate boots
+at the next reboot. The operator does not reboot to save; they reboot to
+switch.
+
+The candidate always gets a **fresh layer id**, and that is not
+cosmetic. Reusing the old one stacks the just-folded content over itself
+and re-applies the layer's whiteouts, deleting the files the fold just
+baked in. A fresh id also leaves the old brick plus the old layer
+bootable, which is what makes this reversible by switching slots rather
+than by undoing anything.
+
+### The exception it makes
+
+One privileged helper now runs on the live machine; everything
+privileged before this ran offline or at boot. What keeps it defensible
+is not size: it folds only a house it has established is closed, it
+produces only a brick and a candidate, it never writes the live plan or
+`<slots>/current`, and nothing it produces takes effect without
+`nw-check` and a boot. The rule that has held throughout is not "nothing
+privileged runs live" but **nothing changes what is running without
+going through validation and a boot**.
+
+### The pairing caught the design's own error, on its first run
+
+The design said the environ scan's pairing was free: have the helper set
+`NW_LAYER` in its own environment and require the scan to find itself.
+It cannot. `/proc/pid/environ` is served from the **exec-time**
+environment VMA:
+
+    setenv visible in /proc/self/environ: False
+    exec-time visible in /proc/self/environ: True
+    still visible after environ.clear(): True
+
+The third line is the fact the *scan* rests on and it holds; the first
+is the fact the *pairing* rested on and it does not. The same asymmetry
+read from the other end — which is why the plan was plausible.
+
+Setting it would also have been actively harmful rather than merely
+useless: a child inherits libc's environment at exec, so every
+subprocess the fold spawns afterwards would have carried `NW_LAYER` and
+read as a live house to any later scan. The pairing costs a fork, like
+the mountinfo one, and the probe reported this before any test existed.
+
+### Two scans, because one is blind where the other looks
+
+Measured against a child holding the layer mounted in its own namespace
+with no `NW_LAYER` in its environment — the grandchild case:
+
+    scan_environ  -> []
+    scan_mountinfo-> [918]  (child is 918)
+
+Neither is a second opinion on the other.
+
+### What the controls found
+
+Seven mutations, all red now, and two of them were green first.
+
+**Removing a pairing left the suite green**, because the scans still
+worked and so the pairings were never consulted. A pairing is
+load-bearing only against a *broken scan*, so the suite now supplies one
+— patching `scan_environ` to answer `[]` for everything and requiring
+the refusal. That is not the monkeypatch-the-subject shape `control`
+criticised in the fold's own suite: the pairing is the subject and a
+broken scan is its input.
+
+**The derived layer id's content-keying was unpinned.** Making
+`derive_layer_id` return the unit name left everything green, because in
+that fixture the unit name is not the layer id and nothing collided. The
+property that matters is not "differs from the old one" but "two
+different saves cannot collide", so the suite now folds twice with
+changed content and requires both the brick hash and the id to move.
+
+Also: the reuse refusal is red via the *stager's* refusal rather than
+the helper's, which is correct redundancy — the test tells them apart by
+reason string.
+
+### And one hang, in an assertion written to report a failure
+
+`expect(g.stdout.readline() == "ok", f"...{g.stderr.read()}")` builds its
+message **eagerly**, and reading a live child's stderr blocks until that
+child closes it — which this one never does, because it is holding a
+mount open on purpose. The suite produced no output at all for ten
+minutes. The failure path of a check, taken on the success path.
