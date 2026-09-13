@@ -405,7 +405,13 @@ rediscover them.
 
 - **A fold establishes that no SUPERVISOR exists for the unit, not that
   no house process is running.** The prerequisite is the fold helper of
-  scratch-becomes-saved, which does not exist yet. "The house is not
+  scratch-becomes-saved. **The fold ENGINE exists — `bakery/fold.py`,
+  landed 2026-09-13 — and does not implement this; its own docstring
+  says so and says an operator pointing it at a running house gets no
+  warning.** What is missing is the caller that establishes the
+  precondition, and the two are called "the fold helper" in different
+  places, so this bullet and that file pointed at each other with one
+  qualifier between them missing. `claims`. "The house is not
   running" is satisfied by a longrun house between restarts, which is
   about to write; the supervisor is the thing whose absence means the
   unit will not run again before the next boot, because it stops
@@ -640,6 +646,16 @@ marker anywhere. Most of this file is ordinary wrapped prose and is
 never examined; the measured proportion is in `HISTORY.md` §63, not
 here. Whether a count in a brief is caught depends on where the line
 wraps.
+
+**There is a SECOND blindness, and widening the gate does not touch
+it.** `COUNTED` is a vocabulary, so a count of a noun it does not list
+is invisible even on a line the gate passes: `two checks` and `three
+files` match, `two constants` and `three greps` do not. Both of those
+went into the falsifiable-surface paragraph and `prereport` returned
+`no shapes matched`; `claims` found them by reading. So a clean run
+says a count is not there in a shape it knows, and nothing more — the
+gate decides which lines are read and the vocabulary decides which
+counts exist. Not fixed here, for the reason the next paragraph gives.
 
 A mechanism reading as working, in the tool bought to catch those. Not
 fixed in the round that found it — a matcher change is its own change.
@@ -910,9 +926,13 @@ evidence, and until it exists, the behaviour is a hypothesis however carefully
 it is worded.
 
 **And that rule goes quiet exactly where writing escapes scrutiny**, because
-removing the behaviour requires a behaviour to remove. A specification for an
-unwritten mechanism cannot be tested against by construction, so the rule has
-nothing to say about it and the writing passes uninspected.
+removing the behaviour requires a behaviour to remove. It does not fall
+silent — it returns the same verdict, *hypothesis*, for everything unwritten,
+which is the same as ranking nothing. A careful specification and an
+unfalsifiable one score identically under it, so neither is inspected.
+("Nothing to say about it" stood here for a round and contradicted the
+sentence three lines above, which says in as many words that such writing is
+a hypothesis. `claims`.)
 
 The test that applies earlier: **could any existing thing falsify a single
 sentence of this?** Ask it of a design note, a plan, a critique, a set of
@@ -927,25 +947,45 @@ claim about the world and become a claim about itself.**
 
 That is not a reason to delete it, and deleting it would lose the reasons,
 which are the part that does not survive implementation. It is a reason to
-**label it, and to make the label the first line rather than a caveat at the
-end** — plus, per statement, what would have to exist for it to be checked.
+**label it, at the top rather than as a caveat at the end** — plus, per
+statement, what would have to exist for it to be checked.
 That is kind 3 from *How briefs are written* applied at the scale of a whole
 document, and it sharpens kind 3: a kind-3 statement names its prerequisite,
 and this test asks whether *any* statement in the document has one that exists
 yet.
 
-**Measure the falsifiable surface rather than asserting it is small.**
-`docs/NW-EXPECTATIONS-UNANCHORED.md` is the worked instance, labelled
-unanchored on its own first line. Everything checkable in it was checked:
-`grep -cE 'SIGCHLD|waitpid|signalfd'` over `pid1.c` and `nwsup.c`, the absence
-of any layer-size bound, and `blob.h`'s two `NW_KIND_*` constants. Those
-three greps are its whole falsifiable surface, and the surface is the
-measurement worth recording — not the document's length, which says nothing
-about how much of it the tree can answer.
+**Measure the falsifiable surface rather than asserting it is small — and
+never say you have measured all of it.** `docs/NW-EXPECTATIONS-UNANCHORED.md`
+(its status is line 3, under the title) is the worked instance. Checked
+against the tree: the `SIGCHLD`/`waitpid`/`signalfd` counts in `pid1.c` and
+`nwsup.c`; the absence of a layer-size bound; and `NW_KIND_ONESHOT` and
+`NW_KIND_LONGRUN` in `blob.h`. Those held.
 
-*The test arrived from another agent's review and is recorded with its origin,
-which is the same discipline: an argument's provenance is checkable and its
-persuasiveness is not.*
+**This paragraph said they were its "whole falsifiable surface", and
+`claims` disproved that in the same round it was written.** Three more
+sentences the tree can answer, one of which it *disagrees* with — the
+document says a container's state is bounded to one directory, and a house
+with a declared bind has durable state in two, since `nwsup.c` binds
+`MS_BIND | MS_REC` with no `MS_RDONLY` and a full write grant, machine-side
+and outside the layer. So the exhaustiveness is gone rather than the number
+corrected: "three" would have been the same claim with a different integer,
+and what the phrase asserted was *how hard someone looked*, which this file's
+count rule already retired. Name what you checked; let the list be the claim
+and let the next reader add to it.
+
+Two smaller lessons from that audit, both about the checks rather than the
+document. Only two of the three above are greps — "no layer-size bound" is a
+negative over a set of files somebody chose, and naming the chooser is part
+of the claim, because on a kernel with an on-disk quota format it would be
+true of the codebase and false of the machine. And half of `nwsup.c`'s count
+is comment, the weakness invariant 1 records for its own `mount` grep,
+adopted here uncritically as a headline measurement.
+
+*The test comes from `docs/NW-EXPECTATIONS-UNANCHORED.md`, written by another
+agent from a review with a second and relayed by the operator; `a27563d`
+carries the attribution. Which of the two agents originated it is not
+something the tree records, and this sentence does not claim to know — an
+argument's provenance is checkable exactly as far as something wrote it down.*
 
 The discipline already exists here and should be named as such: the negative
 controls. `brick-is-a-root` was believed only after removing `lid_brick()`

@@ -7194,3 +7194,112 @@ passes is not good news. `control` caught it by noticing that a result
 did not match what the mutation implied, which is the diagnostic
 `CLAUDE.md`'s blinded-assertion bullet prescribes, arriving in the
 tooling instead of in a test.
+
+
+## 71. The exhaustiveness claim was the one nobody checked (2026-09-13)
+
+`docs/NW-EXPECTATIONS-UNANCHORED.md` landed as `a27563d`: a design review
+between two other agents, relayed by the operator, recorded as
+expectations and labelled unanchored. Not this session's work and not a
+task. What came out of it is a test worth keeping, and an audit of the
+sentence promoting it.
+
+### The test, and why the existing rule could not do this job
+
+"A sentence describing behaviour is worth nothing without a test that
+fails when the behaviour is removed" needs a behaviour to remove. For a
+specification of an unwritten mechanism it returns *hypothesis* — for
+all of them, carefully argued and unfalsifiable alike. It ranks nothing,
+so nothing is inspected.
+
+The earlier test: **could any existing thing falsify a single sentence of
+this?** Explicitly not "how far ahead of the implementation is it": a
+document can be a year out and still name a constant whose value would
+refute it, and another can describe next week and rest on nothing. When
+the answer is *nothing can*, the writing has stopped being a claim about
+the world and become a claim about itself.
+
+### The audit, which is the part worth reading
+
+The paragraph promoting the test named what had been checked in the
+document — the `SIGCHLD`/`waitpid`/`signalfd` counts, the absent
+layer-size bound, `blob.h`'s two kind constants — and called them its
+**whole falsifiable surface**. `claims` disproved that in the round the
+sentence was written, and found more than a fourth item:
+
+- **The tree DISAGREES with one sentence nobody had checked.** The
+  document says a container's state is bounded to one directory. A house
+  with a declared bind has durable state in two: `nwsup.c:251` mounts
+  `MS_BIND | MS_REC` with no `MS_RDONLY` and a full write grant,
+  machine-side and outside the layer. Verified here independently — the
+  only `MS_RDONLY` in the file is the erofs brick at line 194.
+- **"The supervisor blocks in `waitpid`" is true and is not established
+  by the count the paragraph cites.** A count of four is equally
+  consistent with polling; what makes "blocks" true is the *absence* of
+  `WNOHANG`, which is a different check.
+- **The queue sentence is checkable and the answer depends on a word.**
+  `bakery/fold.py` exists as of `c285b64`, so "the fold helper does not
+  exist yet" is false of the engine and true of the precondition
+  checker, which the engine's own docstring says it is not.
+
+**The fix is to delete the exhaustiveness, not to correct the number.**
+"Three" would have been the same claim with a different integer. What
+the phrase asserted was how hard somebody looked, which this file's
+count rule already retired, and it asserted it *inside a paragraph
+warning against unfalsifiable claims*. Name what you checked; let the
+list be the claim and let the next reader add to it.
+
+### Three smaller things the same audit found in the same paragraph
+
+- **An unnamed instance-count**, four words after a permitted one:
+  "`blob.h`'s two `NW_KIND_*` constants". Naming them costs nine
+  characters and removes the hostage. The permitted count in the same
+  sentence works only because its three items are named beside it.
+- **"The rule has nothing to say about it" contradicted the sentence
+  three lines above**, which says in as many words that such writing is
+  a hypothesis. The point survives as *it returns one verdict for
+  everything unwritten*; "nothing to say" overstated it into a
+  contradiction visible on the same screen.
+- **Only two of the three checks are greps.** "No layer-size bound" is a
+  negative over a set of files somebody chose, and the chooser was not
+  recorded — which matters, because on a kernel with an on-disk quota
+  format it is true of the codebase and false of the machine. Measured
+  here: `CONFIG_QUOTA=y` but no `QFMT_V1`/`QFMT_V2`/`QUOTA_TREE`, no XFS,
+  no btrfs, no tmpfs quota, the root mounted `noquota`, and `quotactl`
+  answering `ESRCH`. So nothing can bound a layer on THIS machine, and
+  nothing in the tree makes that so. A description of the model
+  presented as a description of the machine — which is the document's own
+  correction 1, arriving inside the document that states it.
+
+### And `prereport` cannot catch either count
+
+`COUNTED` is a vocabulary: `two checks` and `three files` match,
+`two constants` and `three greps` do not. Both went in and the run said
+`no shapes matched`. This is a *second* blindness beside the documented
+`_is_comment()` gate, and widening the gate would not touch it. Recorded
+in `CLAUDE.md` beside the first; not fixed here, because a matcher change
+is its own change.
+
+### The shape
+
+Every defect above is in the sentence that promotes a test for
+unfalsifiable writing, written by an author thinking about that test.
+The rule at its weakest in the change that introduces it, again — and
+found the way all of them are found, by somebody running something.
+
+## 72. Holding a commit is the safe state; holding a working tree is not
+
+Stated once as a general rule rather than as a defence of an instance,
+because it came up repeatedly across the fold rounds.
+
+`tools/review-gate.sh` blocks **pushing** unreviewed work. Committing is
+what protects against losing it. The two cover different failures and are
+not in tension, so the answer to "a review is owed and the work is
+finished" is: commit locally, hold the push, act on the review, then
+push.
+
+The loss half is not hypothetical. This session ran `git checkout -- .`
+to tidy up after a control, in a tree holding uncommitted work, and wiped
+its own edits — `HISTORY.md` §66. Nothing was lost only because the
+commit was intact, which is luck rather than the rule working, and the
+tree at that moment held less than the fold rounds later did.

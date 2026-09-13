@@ -239,3 +239,5 @@ unpaired-absence	bakery/test_fold.py	expect(not os.path.lexists(os.path.join(t.m
 # that carried no xattrs at all, which is the mutation the round before
 # this one was about.
 unpaired-absence	bakery/test_fold.py	expect("user.overlay.somethingelse" not in got,
+# Prose in a record, not an assertion in a test.
+unpaired-absence	HISTORY.md	not in tension, so the answer to "a review is owed and the work is
