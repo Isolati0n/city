@@ -8874,3 +8874,75 @@ forty-three; its provenance paragraph describes the two-file cksum the
 code replaced; and the STATUS note carries §78's false cause. Plus two
 LOWs: `leaf_name_ok.c` lacks the width parameterisation `leaf_path_ok.c`
 has, and the stub/leaf comment names properties the stubs do not assume.
+
+## 80. Yes: two changes to `nwcheck.c` that `make proof` and `make test` both accept (2026-09-13)
+
+Base `b27be9e`. `control`'s answer to the question nothing had asked.
+It is not a negative result.
+
+**First, the reassuring half.** Every mechanism removed from
+`nwcheck.c` turned a proof red, each naming its own assertion:
+`name_ok`'s non-empty, NUL-terminated, alphabet and NUL-padded
+post-conditions; `path_ok_len`'s absolute and no-`..`; bug 12's
+truncated-scan shape; `field_dup` compared over a prefix, inserting
+without returning, and — the one the layer offset exists for —
+dropping `+ off` on the stored side only; and `nw_check`'s bind bounds
+guard, which took six assertions with it. The harnesses are anchored.
+
+### M1 — an over-rejection the proofs cannot see by construction
+
+Narrow the name alphabet by one character: drop `c == '_'`. Every
+proof passes, every control fails, `make test` exits 0.
+
+`bakery/nw-cc.py` admits `_` in a unit name and in a layer id, so the
+baker and the checker now disagree and the failure lands at boot, where
+an invalid plan halts the city. Measured: the baker writes the blob,
+the mutant checker says `REJECT name (5)`, the real one says `OK`.
+
+The proofs are blind **by construction** — every assertion sits under
+`if (r == NW_OK)`, so a narrower alphabet accepts a strict subset and
+each `accepted ⇒ P` only gets easier. `proofs/README.md` says so; this
+is its worked instance. The suite is blind because no city it bakes
+uses `_` in a name or a layer id.
+
+### C2c — the sharper one: an assumption whose argument names the line being mutated
+
+Relax `if (len != need)` to `if (len < need)`. Every proof passes,
+every control fails, `make test` exits 0 — and a legal blob with
+sixteen bytes appended and the CRC repaired is now accepted.
+
+`caller_nw_check.c` pins `n_units`/`n_binds` and justifies that
+narrowing by quoting the very line: *"`nw_check` … returns `NW_E_SIZE`
+when `len != need`, BEFORE the unit loop … So every input excluded
+provably returns `NW_E_SIZE`."* Mutate that line and the argument is
+false while the proof — which encodes the assumption and not the
+argument — still passes.
+
+**An assumption whose soundness argument names a line of the code under
+test stops being sound exactly when that line is edited, and nothing in
+`proofs/` re-checks it.** `mkcomp.py` keeps the leaf *bodies* in step;
+nothing keeps an assumption's *premise* in step. That is the same shape
+as §79's harness-moved-call-site finding, one level up: there the
+argument's subject moved, here its premise was edited out from under it.
+
+The closest mechanical answer is the one the README already lists as
+unbuilt — a completeness direction that constructs a legal blob at some
+other `(n_units, n_binds)` and requires `NW_OK`.
+
+### Two smaller results worth keeping
+
+`field_dup`'s probe chain is confirmed unreachable at `PROOF_UNITS=2`:
+truncating the chain leaves all four configurations and both vacuity
+controls green. N=3 was not run, per the cost constraint, so "and fails
+at 3" remains the README's measurement rather than `control`'s.
+
+And the gcc signature gate misreports one class: a mutation leaving a
+parameter unused fails `-Werror=unused-parameter` in `nwcheck.c`, and
+the gate prints `proofs/leaf_path_ok.c does not type-check … a stub or
+a call site no longer matches`. Nothing about a stub was wrong; a
+reader goes hunting in `proofs/`.
+
+### Status
+
+Recorded, not fixed. M1 and C2c are both live gaps in the pair, and the
+completeness direction is the piece that would close C2c's class.
