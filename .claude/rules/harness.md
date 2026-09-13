@@ -27,6 +27,29 @@ alone is a result about the previous build. This produced a negative control
 that *passed* — which read as "the code works" and actually meant "the test
 never saw the change." Always `make stage`.
 
+**The bytecode-cache trap, and it is the staging trap wearing Python.**
+A control that mutates a `.py` file and re-runs it can execute the
+*previous* iteration's code. CPython keys `__pycache__` on
+`(mtime_seconds, size)`, so a mutation that replaces a line with text of
+the **same length** inside the **same second** — which is what a
+scripted mutation loop does — leaves the cache valid and the import
+silently reuses it. `control` reported five sites as deletable green,
+re-ran with the cache cleared, and three of the five went red: the
+finding was the harness, not the tree.
+
+Note the shape rather than the mechanism. A result about the previous
+build, reported as a result about this one, arriving through a cache
+nobody thought about instead of through a stage nobody refreshed. It
+reads as "the code works" and means "the test never saw the change",
+which is the staging trap's exact signature — and the tell is the same
+one: **a control that passes is not good news.**
+
+So any control loop over Python here does `rm -rf __pycache__` and sets
+`PYTHONDONTWRITEBYTECODE=1`, and a mutation runner that copies the tree
+should copy it with `__pycache__` excluded. Do not rely on changing the
+file's length to dodge it; that is a property of your edit, not of the
+mechanism.
+
 **The partial-gate trap.** `make test` is not one step. It stages, runs
 `install-agents.sh --check`, runs `nw-check`, runs `tests/run.py`, and
 runs `tools/coverage-tcb.sh`, in that order — and **the suite is what

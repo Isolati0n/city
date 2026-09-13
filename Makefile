@@ -183,8 +183,21 @@ test: stage
 # is not execution. This greps the run's own summary for a nonzero pass
 # count, so the evidence is something the suite printed rather than
 # something about the file. `control`, twice.
-	python3 bakery/test_fold.py 2>&1 | tee /dev/stderr 	  | grep -qE '^[0-9]+ checks: [1-9][0-9]* pass'
-	python3 bakery/test_fold.py >/dev/null 2>&1 || [ $$? = 2 ]
+#
+# ONE RUN, AND tee GOES TO A FILE. `tee /dev/stderr` stood here for a
+# round: /dev/stderr is /proc/self/fd/2, so when make's stderr is a
+# regular file tee opens it with O_TRUNC and DESTROYS everything the
+# earlier steps wrote -- the log restarts at this line. Measured with 40
+# lines of prior output: none survived. It also ran the suite twice, once
+# for the grep and once for the exit code. Grepping the summary for
+# `0 fail` subsumes the exit code, so one run does both.
+#
+# STILL NOT CLOSED, written down rather than left silent: this proves at
+# least one check ran, not that the SUITE ran. Delete all but one check
+# and the gate passes. Closing that needs a minimum count, which is the
+# hostage this project's own rules forbid.
+	python3 bakery/test_fold.py 2>&1 | tee $(STAGE)/fold-suite.log; \
+	  grep -qE '^[0-9]+ checks: [1-9][0-9]* pass, 0 fail' $(STAGE)/fold-suite.log
 	NW_STAGE=$(STAGE) sh tools/coverage-tcb.sh
 
 # The pre-report shape checker, over the diff you are about to report on.

@@ -789,13 +789,22 @@ def check_folding_an_empty_layer_reproduces_the_base_exactly():
                          "usr/bin/prog"],
                f"the identity base is not the tree this check describes: "
                f"{holds}")
-        expect(os.path.islink(src + "/bin")
-               and os.lstat(src + "/a").st_nlink == 2
-               and stat.S_IMODE(os.lstat(src + "/usr/bin/prog").st_mode) == 0o755
-               and stat.S_IMODE(os.lstat(src + "/d").st_mode) == 0o701
-               and os.listxattr(src + "/a") == ["user.k"],
-               "the identity base lost one of the properties it exists to "
-               "carry over")
+        # NAMED, not a conjunction. It was one, it was short by the
+        # security xattr, and deleting that fixture line left the suite
+        # green -- the identity's own security-namespace coverage able to
+        # vanish silently, in the check standing beside the oracle whose
+        # `built` block exists for exactly that. `control`.
+        carries = {
+            "symlink":       os.path.islink(src + "/bin"),
+            "hard link":     os.lstat(src + "/a").st_nlink == 2,
+            "file mode":     stat.S_IMODE(os.lstat(src + "/usr/bin/prog").st_mode) == 0o755,
+            "dir mode":      stat.S_IMODE(os.lstat(src + "/d").st_mode) == 0o701,
+            "user xattr":    os.listxattr(src + "/a") == ["user.k"],
+            "security xattr": os.listxattr(src + "/usr/bin/prog") == ["security.k"],
+        }
+        expect(all(carries.values()),
+               f"the identity base lost the properties it exists to carry "
+               f"over: {sorted(k for k, v in carries.items() if not v)}")
         r = fd.fold(img, t.layer, t.out, "identity")   # upper is empty
         expect(r.image_hash == base_hash,
                f"a fold of a house that wrote nothing is not its own base: "
@@ -960,23 +969,47 @@ def check_the_fold_never_writes_outside_the_merged_tree():
     The victim directory is outside `merged` on purpose. An assertion
     that the merged tree is right cannot see this; only an assertion
     about what did NOT move can. `control`."""
-    for shape in ("replaced-dir", "written-file", "new-dir"):
+    # THE LAST THREE ARE UNDER THE SYMLINK, not at it. Every guard tests
+    # the last path component, and lexists/isdir/islink all resolve
+    # through an ANCESTOR link -- so with only leaf shapes here the whole
+    # class reopened one directory level up, and did: a whiteout at
+    # x/victim and an opaque dir at x/sub both deleted host files against
+    # otherwise correct code. `control`.
+    for shape in ("replaced-dir", "written-file", "file-onto-host-file",
+                  "new-dir", "whiteout-under", "opaque-under"):
         t = Tree()
         try:
-            outside = os.path.join(t.root, "OUTSIDE"); os.makedirs(outside)
+            outside = os.path.join(t.root, "OUTSIDE")
+            os.makedirs(os.path.join(outside, "sub"))
             open(os.path.join(outside, "victim"), "wb").write(b"host")
+            open(os.path.join(outside, "sub", "deep"), "wb").write(b"host")
             os.symlink(outside, os.path.join(t.lower, "x"))
             t.file(t.lower, "keep", b"k")
             if shape == "replaced-dir":
-                d = t.opaque(t.upper, "x"); t.file(t.upper, "x/new", b"u")
+                t.opaque(t.upper, "x"); t.file(t.upper, "x/new", b"u")
             elif shape == "written-file":
                 t.file(t.upper, "x", b"u")
-            else:
+            elif shape == "file-onto-host-file":
+                # Aimed at the host FILE rather than the directory, so
+                # the "overwrote a file" assertion below can fire at all.
+                # It could not for any earlier shape, and never once did
+                # in six guard-removal controls. `control`.
+                os.remove(os.path.join(t.lower, "x"))
+                os.symlink(os.path.join(outside, "victim"),
+                           os.path.join(t.lower, "x"))
+                t.file(t.upper, "x", b"u")
+            elif shape == "new-dir":
                 t.dir(t.upper, "x"); t.file(t.upper, "x/new", b"u")
+            elif shape == "whiteout-under":
+                t.dir(t.upper, "x"); t.whiteout(t.upper, "x/victim")
+            else:
+                t.opaque(t.upper, "x/sub")
             merge(t)
-            expect(sorted(os.listdir(outside)) == ["victim"],
+            expect(sorted(os.listdir(outside)) == ["sub", "victim"]
+                   and os.listdir(os.path.join(outside, "sub")) == ["deep"],
                    f"{shape}: the fold wrote outside the merged tree; "
-                   f"OUTSIDE holds {sorted(os.listdir(outside))}")
+                   f"OUTSIDE holds {sorted(os.listdir(outside))} and "
+                   f"sub holds {sorted(os.listdir(os.path.join(outside, 'sub')))}")
             expect(open(os.path.join(outside, "victim"), "rb").read() == b"host",
                    f"{shape}: the fold overwrote a file on the host")
         finally: t.cleanup()
@@ -1019,6 +1052,67 @@ def check_the_fold_never_writes_outside_the_merged_tree():
         expect(sorted(os.listdir(outside)) == ["victim"],
                f"and it reached the host: OUTSIDE holds "
                f"{sorted(os.listdir(outside))}")
+    finally: t.cleanup()
+
+
+# --- a layer directory over a base FILE, without an opaque marker -------
+@check
+def check_a_layer_directory_replaces_a_base_file_without_a_marker():
+    """Step 4a's `not os.path.isdir(dst)` half was deletable green. The
+    oracle's `becomes-a-dir` is opaque, so it goes through step 3 and
+    never reaches this branch; the route that does is a base regular
+    file under a layer directory the kernel did NOT mark opaque, which
+    is what a rebase against a different base produces. `control`."""
+    t = Tree()
+    try:
+        t.file(t.lower, "f", b"base"); t.file(t.lower, "keep", b"k")
+        t.file(t.upper, "f/inner", b"u")      # f is a plain dir in upper
+        plan = fd.plan_merge(t.upper)
+        expect(plan.replaced == set(),
+               f"this input must NOT be opaque, or it tests step 3 "
+               f"instead: replaced={plan.replaced}")
+        fd.apply_merge(t.lower, plan, t.merged)
+        m = os.path.join(t.merged, "f")
+        expect(os.path.isdir(m) and ls(m) == ["inner"],
+               f"the base file was not replaced by the layer's directory: "
+               f"isdir={os.path.isdir(m)} holds={ls(m)}")
+        expect(ls(t.merged) == ["f", "keep"],
+               f"the rest of the base did not survive: {ls(t.merged)}")
+    finally: t.cleanup()
+
+
+# --- an overlay marker on the upper ROOT is refused too -----------------
+@check
+def check_unhandled_markers_on_the_upper_root_are_refused():
+    """`unhandled_markers` was called only inside `walk`, so the upper
+    ROOT was never checked and `user.overlay.opaque` on it was accepted
+    -- the fold resurrecting the base's children, exit 0. The same
+    marker on a child was refused, which is what made it look covered.
+    `control`."""
+    can, w = fd.can_trust_overlay_markers("/tmp")
+    if not can:
+        raise Skip(f"cannot set trusted.overlay.* ({w}); root markers go "
+                   f"untested")
+    for marker in ("user.overlay.opaque", "trusted.overlay.redirect",
+                   "trusted.overlay.metacopy"):
+        t = Tree()
+        try:
+            os.setxattr(t.upper, marker, b"y")
+            t.file(t.lower, "etc", b"base")
+            try:
+                fd.plan_merge(t.upper)
+                raise SelfTestFailure(
+                    f"plan_merge accepted {marker} on the upper ROOT; the "
+                    f"same marker on a child is refused")
+            except fd.MergeError as e:
+                expect(marker in str(e), f"refused, but not for {marker}: {e}")
+        finally: t.cleanup()
+    # PAIRED: a clean root must still be accepted.
+    t = Tree()
+    try:
+        t.file(t.upper, "f", b"u")
+        expect([r for _, r in fd.plan_merge(t.upper).copied] == ["f"],
+               "a clean upper root was refused too")
     finally: t.cleanup()
 
 
@@ -1100,7 +1194,12 @@ def main():
     declared = sorted(k for k, v in globals().items()
                       if k.startswith("check_") and callable(v))
     registered = sorted(f.__name__ for f in CHECKS)
-    if declared != registered or len(CHECKS) != len(set(registered)):
+    # The condition is `declared != registered` alone: a double
+    # registration makes `registered` longer than the sorted unique
+    # `declared`, so it is already caught. A `len(CHECKS) != len(set(...))`
+    # clause stood beside it and could never fire -- the MESSAGE below is
+    # what actually fixed the complaint it was added for. `control`.
+    if declared != registered:
         # BOTH DIRECTIONS AND THE LENGTH. It printed only the first, so
         # a check registered twice, or registered under a name that is
         # not check_*, went red with `declared but not registered: []`

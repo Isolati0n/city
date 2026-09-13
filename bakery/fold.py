@@ -285,6 +285,18 @@ def plan_merge(upper, opaque_check=True):
                 continue
             plan.copied.append((child_abs, child_rel))
 
+    # THE ROOT GETS THE SAME MARKER CHECK AS EVERY CHILD, and it did
+    # not: `unhandled_markers` was called only inside `walk`, so
+    # `user.overlay.opaque` on the upper root was accepted and the fold
+    # resurrected the base's children -- round three's own defect
+    # relocated to `/`, in the namespace that needs no privilege to
+    # plant. `control`.
+    if opaque_check:
+        bad_root = unhandled_markers(upper)
+        if bad_root:
+            raise MergeError(
+                f"the upper root carries {', '.join(bad_root)}, which this "
+                f"fold does not implement")
     opaque_root, err_root = is_opaque(upper)
     if err_root and opaque_check:
         raise MergeError(
@@ -422,12 +434,53 @@ def _apply_root(upper, merged, modes):
     _copy_xattrs(upper, merged)
 
 
+def _reconcile_dirs(plan, merged, modes):
+    """Every path the layer holds as a directory becomes a real
+    directory in `merged`, replacing a base entry of any other type.
+
+    RUN BEFORE THE DESTRUCTIVE STEPS, AND THAT ORDERING IS THE WHOLE
+    POINT. The guard below tests the LAST path component, and
+    `lexists`, `isdir` and `islink` all resolve through an ANCESTOR
+    symlink -- so while this ran only after steps 2 and 3, a whiteout
+    at `x/victim` or an opaque directory at `x/sub`, where the base
+    holds `x` as a symlink, reached the link's target. Measured: both
+    deleted files on the fold host, outside `merged`, against otherwise
+    correct code. The leaf guards were right and the escape had simply
+    moved one directory level up, where nothing looked.
+
+    Reconciling first removes the class rather than guarding each site:
+    every ancestor of every plan entry is itself in `plan.dirs` (walk
+    records a directory before recursing into it), so after this pass no
+    path steps 2, 3 or 4b can build has a symlink anywhere inside
+    `merged`. `control`."""
+    for src, rel in plan.dirs:
+        dst = os.path.join(merged, rel)
+        # A base entry of the wrong TYPE at a path the layer says is a
+        # directory. On a regular file `os.makedirs(exist_ok=True)`
+        # raised FileExistsError out of main(); on a symlink-to-a-
+        # directory it SUCCEEDS THROUGH the link and the layer's files
+        # land wherever the link points. Both reachable whenever the
+        # upper's directory is not opaque, which the kernel only
+        # guarantees for a layer matched to its own base -- and nothing
+        # binds --base to --layer, so an ordinary rebase reaches it.
+        if os.path.lexists(dst) and (not os.path.isdir(dst)
+                                     or os.path.islink(dst)):
+            _remove(dst)
+        os.makedirs(dst, exist_ok=True)
+        modes[dst] = stat.S_IMODE(os.lstat(src).st_mode)
+        _copy_xattrs(src, dst)
+
+
 def apply_merge(lower, plan, merged, upper_root=None):
     # Modes are applied last, together: see _copy_entry.
     modes = {}
 
     # 1. Copy lower.
     _copy_tree(lower, merged, modes)
+
+    # 1b. Ancestors, before anything destructive walks a path through
+    #     them. See _reconcile_dirs.
+    _reconcile_dirs(plan, merged, modes)
 
     # 2. Deletes. A whiteout under a directory step 3 will replace is
     #    applied here and discarded. Replace is total, so that is a
@@ -472,27 +525,10 @@ def apply_merge(lower, plan, merged, upper_root=None):
         for name in sorted(os.listdir(p)):
             _remove(os.path.join(p, name))
 
-    # 4a. Directories the house has, created after the replaces so a
-    #     replaced parent does not sweep its own children away.
-    for src, rel in plan.dirs:
-        dst = os.path.join(merged, rel)
-        # THE SAME GUARD AS STEP 3, and it was missing here. Step 3 got
-        # it when a FileExistsError escaped main(); step 4a has the
-        # identical makedirs on a path step 1 may hold as a regular file
-        # or a SYMLINK, and it is reachable whenever the upper's
-        # directory is not opaque -- which the kernel only guarantees for
-        # a layer matched to its own base. Nothing binds --base to
-        # --layer, so an ordinary rebase reaches it: the crash on a
-        # regular file, and worse, on a symlink-to-a-directory
-        # makedirs(exist_ok=True) SUCCEEDS THROUGH the link and the
-        # layer's file lands outside where the house put it, exit 0,
-        # valid image. `control`.
-        if os.path.lexists(dst) and (not os.path.isdir(dst)
-                                     or os.path.islink(dst)):
-            _remove(dst)
-        os.makedirs(dst, exist_ok=True)
-        modes[dst] = stat.S_IMODE(os.lstat(src).st_mode)
-        _copy_xattrs(src, dst)
+    # 4a. Directories the house has. Runs a SECOND time here because
+    #     step 3 clears a replaced directory's contents, including any
+    #     child directory the first pass created.
+    _reconcile_dirs(plan, merged, modes)
 
     # 4b. Files.
     links = {}
@@ -501,11 +537,14 @@ def apply_merge(lower, plan, merged, upper_root=None):
         dst = os.path.join(merged, rel)
         parent = os.path.dirname(dst)
         if parent:
-            # Same as step 4a: a parent that is a symlink to a directory
-            # would swallow this file into the link's target.
-            if os.path.lexists(parent) and (not os.path.isdir(parent)
-                                            or os.path.islink(parent)):
-                _remove(parent)
+            # NO GUARD HERE, DELIBERATELY. One stood here for a round,
+            # and it could never fire: every ancestor of a copied file
+            # is in `plan.dirs`, and _reconcile_dirs has already made it
+            # a real directory. Measured -- replacing its body with a
+            # raise left the suite green. Worse, the escape check's
+            # docstring described the redundancy BACKWARDS, saying this
+            # guard removed the symlink and step 4a's removal was the
+            # redundant one. `control`.
             os.makedirs(parent, exist_ok=True)
         _remove(dst)
         _copy_entry(src, dst, "the layer", links=links, modes=modes)

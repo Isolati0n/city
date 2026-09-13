@@ -7115,3 +7115,82 @@ the consequence is written where it belongs: **the stager should create
 nothing is broken now; the fix, when the day comes, is in the stager and
 not in the fold, because in the fold it would mean disagreeing with what
 the house saw.
+
+### The fourth round: the escape had moved one directory level up
+
+Round three's guards test the LAST path component, and `lexists`,
+`isdir` and `islink` all resolve through an **ancestor** symlink. Steps
+2 and 3 ran before the pass that reconciles ancestors, so the class
+round three opened was not closed — it had moved up one level, where
+nothing looked. Measured against otherwise correct code, with the base
+holding `x` as a symlink to a directory on the fold host:
+
+    step2: whiteout at x/victim   -> OUTSIDE lost 'victim'
+    step3: opaque dir at x/sub    -> OUTSIDE lost 'sub/deep'
+
+The fix is an ordering rather than another guard: every ancestor of
+every plan entry is itself in `plan.dirs`, because `walk` records a
+directory before recursing into it, so reconciling `plan.dirs` *before*
+the destructive steps means no path they can build has a symlink
+anywhere inside `merged`. It runs a second time after step 3, which
+clears a replaced directory's children. Removing the pre-pass turns the
+escape check red on the whiteout shape.
+
+**`unhandled_markers` was never called on the upper root.** It was
+called inside `walk`, which visits children only, so
+`user.overlay.opaque` on the root was accepted and the fold resurrected
+the base's children — round three's own defect relocated to `/`, in the
+namespace that needs no privilege to plant. The same marker on a child
+was refused, which is what made it look covered.
+
+**Some of my own checks could not fail for the reason they named**, and they are named below rather than counted. Step
+4a's `not os.path.isdir` half was deletable green, because the oracle's
+one file-becomes-directory input is opaque and goes through step 3
+instead. The escape check's second assertion — "the fold overwrote a
+file on the host" — could not fire for any shape it built, since all
+three symlinks pointed at a directory; it never once fired in six
+guard-removal controls. And the identity's property check was a
+conjunction short by the security xattr, so deleting that fixture line
+left the suite green: the `built`-style enumeration the oracle got for
+exactly this reason, missing from the check standing beside it.
+
+**Two guards that read as the fix and were not.** Step 4b's parent guard
+could never fire — every ancestor is in `plan.dirs` and the
+reconciliation runs first — and the escape check's docstring described
+that redundancy *backwards*, crediting the dead guard and calling the
+live one redundant. `main()`'s `len(CHECKS) != len(set(...))` clause
+likewise cannot fire, because a double registration already makes
+`declared != registered`; what fixed the complaint it was added for was
+the improved message beside it.
+
+**And `tee /dev/stderr` was destroying the build log.** `/dev/stderr` is
+`/proc/self/fd/2`, so when make's stderr is a regular file `tee` opens
+it with `O_TRUNC`: measured with forty lines of prior output, none
+survived, and the log restarted at the fold suite. The gate bought
+printed evidence and deleted the evidence of every step before it. One
+run to a file in the stage now, and grepping the summary for `0 fail`
+subsumes the exit code the second run was there to check. What is still
+open is written beside it: the grep proves at least one check ran, not
+that the suite ran, and closing that needs a minimum count.
+
+    reconcile-dirs-last-only  -> whiteout-under: the fold wrote outside
+    no-root-marker-check      -> plan_merge accepted user.overlay.opaque on the ROOT
+    step4a-no-notisdir        -> FileExistsError on becomes-a-dir and on f
+
+### The round's most useful finding was about controls, not about the fold
+
+`control`'s first pass reported five `_copy_xattrs` sites as deletable
+green. Three were wrong. CPython keys `__pycache__` on
+`(mtime_seconds, size)`, and a scripted mutation that replaces a line
+with text of the same length inside the same second leaves the cache
+valid — so iterations after the first ran the first one's code.
+
+**That is the staging trap wearing Python**, and it produced the same
+reading: "the code works", meaning "the test never saw the change". It
+is recorded in `.claude/rules/harness.md` rather than only here, because
+the next agent to write a mutation loop needs it before they write one,
+and the tell is the one this project already knows — a control that
+passes is not good news. `control` caught it by noticing that a result
+did not match what the mutation implied, which is the diagnostic
+`CLAUDE.md`'s blinded-assertion bullet prescribes, arriving in the
+tooling instead of in a test.
