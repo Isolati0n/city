@@ -32,7 +32,8 @@ sig House {
   lids: set Lid,
   brick: lone Brick,
   layer: lone Layer,
-  binds: set Path
+  binds: set Path,
+  capacity: lone Capacity
 }
 
 /* A brick is the house's own root: its own libraries and toolchain, at the
@@ -58,6 +59,26 @@ sig Brick {}
 sig Layer {}
 sig Path {}
 
+/* A declared capacity for the writable layer, opaque like Brick and Layer
+   and for the narrower reason: the only thing the plan format asserts
+   about the number is that declaring one requires a layer to bound
+   (NW_E_CAPNOLAYER), and that is a question about PRESENCE, not about the
+   value. Of the rest of struct nw_res, three fields are range checks
+   against the kernel's own bounds -- arithmetic against constants this
+   file does not carry and cannot check -- two have an ordering rule and
+   no range, and three are unchecked because every 64-bit value of a
+   mask, a byte count or a rate is a legal declaration. All of it is
+   pinned by test_checker_rejects_crafted_resources, in both directions.
+   (This said "the other eight fields are range checks" and named
+   test_checker_rejects_crafted_fields, which crafts nothing in the
+   block. `claims`.)
+
+   So `capacity` is the resource block's ONE structural rule and the rest
+   of the block is deliberately unmodelled. Written down because a sig
+   named for a block while modelling one of its fields reads, later, as
+   the block being covered. */
+sig Capacity {}
+
 /* Explicit in the plan: no default, no inference. */
 abstract sig Kind {}
 one sig Oneshot, Longrun extends Kind {}
@@ -81,7 +102,7 @@ fact bindsNeedBrick { all h: House | some h.binds => some h.brick }
 /* A brick and a layer come together or not at all: the brick is what a
    house can see, the layer is what it can keep, and one without the other
    is a house whose writes vanish or an area nothing mounts. nwcheck.c
-   returns NW_E_LAYERPAIR for either direction. Like the three facts
+   returns NW_E_LAYERPAIR for either direction. Like the facts
    above this SHAPES instances rather than being checked -- see the note
    below -- and its enforcement is nwcheck.c plus
    test_checker_rejects_crafted_fields. */
@@ -91,9 +112,15 @@ fact layerPairsWithBrick { all h: House | some h.layer <=> some h.brick }
    that root is a brick (NW_E_LLBRICK). */
 fact landlockNeedsBrick { all h: House | Landlock in h.lids => some h.brick }
 
+/* A capacity bounds the writable layer, so declaring one without a layer
+   names nothing. nwcheck.c returns NW_E_CAPNOLAYER. Like the facts
+   above this SHAPES instances rather than being checked -- see the note
+   below. */
+fact capacityNeedsLayer { all h: House | some h.capacity => some h.layer }
+
 fact namesAreHouses { #House >= 1 }
 
-/* THE THREE FACTS ABOVE ARE NOT CHECKED, and nothing here could check
+/* THE FACTS ABOVE ARE NOT CHECKED, and nothing here could check
    them: a fact constrains which instances exist, so asserting one back
    is a tautology. `control` INVERTED brickNeedsNewNS into the plan
    nwcheck.c rejects -- `some h.brick => NewNS not in h.lids` -- and
@@ -101,7 +128,9 @@ fact namesAreHouses { #House >= 1 }
    because no check mentions bricks.
 
    They are enforced in nwcheck.c (NW_E_BRICKNS, NW_E_BINDIDX,
-   NW_E_LLBRICK) and pinned by test_checker_rejects_crafted_fields,
+   NW_E_LLBRICK) and pinned by test_checker_rejects_crafted_fields --
+   plus NW_E_CAPNOLAYER, whose pin is
+   test_checker_rejects_crafted_resources,
    which crafts a blob the baker would never emit and asserts the
    reason string. What they do here is shape the instances the two
    checks below run against, which is worth having and is not the same

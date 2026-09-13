@@ -7978,3 +7978,416 @@ not the other, which is this project's most common defect, inside the
 record of a round that says so. The refusal names the file and the line and says
 "Re-bake the plan", so it is self-diagnosing rather than silent. Found
 by `claims` reading the guard, not by hitting it.
+
+## 75. The resource block, and the error code that could never be returned (2026-09-13)
+
+Base `33cf074`. The operator settled the design and handed it over:
+*"Per house, in the plan: CPU affinity and share, a memory throttle, a
+memory backstop, disk bandwidth, disk capacity, and scheduling
+priority. All cgroup v2 and scheduler policy. Write it as a block
+rather than loose fields, flat rather than nestable, in a shape where
+nesting later is adding a level rather than reshaping the plan."*
+
+`struct nw_res` is that block: six `uint64_t`, a `uint16_t` and two
+single bytes, appended to `struct nw_unit`. `NW_MAGIC` moves
+`NWPLAN08` → `NWPLAN09`, and the four places invariant 3 names change
+together — `blob.h`, `bakery/nw-cc.py`, `plan.als` and `Plan.tla`.
+
+**Unset is zero and zero is never a limit.** No defaults, because *"a
+default is a number nobody chose and it fails silently in the direction
+hardest to diagnose"*. The absence is made visible the other way: the
+baker prints `no resource block: <names>` for every house that declares
+nothing, named rather than counted.
+
+### The error code that could not be returned
+
+`NW_E_RESZERO` was written, given a string in `errs[]`, and never
+returned by anything — because it cannot be. `cpu-weight=0` and an
+omitted `cpu-weight` are the same byte, so `nwcheck.c` has no subject
+to reject. It sat in the enum reading exactly like the four codes
+beside it that do work.
+
+That is the characteristic failure wearing an enum: a code, a message
+and a comment describing a refusal nothing performs. Removed, and the
+argument put where the code was, so the next reader finds the reasoning
+rather than the gap. The refusal is the baker's and it is bake-time
+only, for the same structural reason `lids=` is — the blob cannot
+distinguish an omission from a declaration, and making it able to is a
+layout change and a magic bump.
+
+Found by grepping for the code's own name after writing the checker,
+which is the cheap version of what `claims` would have done.
+
+### What the specs could and could not take
+
+`capacity` is the block's one structural rule that a spec can hold —
+`plan.als` gains a `Capacity` sig and a `capacityNeedsLayer` fact,
+`Plan.tla` a `CapacityNeedsLayer` predicate. The other eight fields are
+range checks against the kernel's own bounds, which is arithmetic
+against constants neither file carries; adding them means a second copy
+of each bound, which is invariant 3's drift class for the sake of a
+conjunct nothing exercises.
+
+**An `Init` ranging over `capacity` and `layer` was written first and is
+wrong**, and it is worth recording because it is the move that looks
+like rigour. `plan.md` says `BindNeed` is evaluated only at 0 because
+`Init` gives every house an empty bind set, so the obvious fix is to
+make `Init` range. Do that here and the honest run FAILS: the illegal
+combination is exactly what ranging produces. Constrain `Init` to legal
+plans instead and the invariant is circular — it asserts that plans
+built to satisfy it satisfy it, and a must-fail probe against it breaks
+`Init` rather than the predicate, certifying the predicate's name.
+That is the defect `control` found in `LargestCityFits`' old probe,
+arriving from the model side.
+
+So `CapacityNeedsLayer` joins the acceptance rules that are NOT
+state-checked, with the reason written beside it. The enforcement is
+`nwcheck.c` and the crafted-blob tests, which is where it already was.
+
+### The blind spot the trailing-edge fix reopened one level down
+
+`LAYOUT_DECL` hashes `#define NW_UNIT_SIZE` because `nw_unit`'s size
+assert reads a macro rather than a literal — `drift` measured that gap:
+a field appended after `_pad`, the baker packing it, magic untouched,
+and `ok magic-moves-with-layout`. `NW_UNIT_SIZE` now names
+`NW_RES_SIZE`, so the same trailing edge exists one level down and is
+hashed now.
+
+**The mutation is appending a field to `struct nw_res` and updating
+`NW_RES_SIZE` to match**, which is what a person adding a resource field
+does. Redefining the macro *alone* — which this paragraph claimed for one
+round — is three static-assert failures and compiles nothing, so it was
+never the blind spot. `claims` ran it. Measured on the real mutation:
+under the pre-fix pattern the signature is byte-identical across it;
+under the fix it moves.
+
+### The new tests, and the direction each is in
+
+`test_checker_rejects_crafted_resources` crafts a blob per rule on the
+last unit of three and asserts the reason string — and then asserts the
+other direction, because a checker whose ranges are narrower than the
+plan language rejects legal plans and no rejection case can see it.
+That is the missing-direction shape `HISTORY.md` §53 records, applied
+before the fact rather than after.
+
+`test_baker_refuses_bad_resources` covers the faults that never become
+bytes at all: `cpus=3-1`, `mem-high=2X`, `sched=fifo`, and the five
+zero-is-not-unlimited keys. Nothing else can — `nwcheck.c` has no
+subject for any of them.
+
+`test_baker_writes_the_declared_layout` gains a house with every
+resource field set to a distinct value, read back at its declared
+offset **and its declared width**. The mutation it exists for: swapping
+`io_rbps` and `io_wbps` in `pack_res` alone is legal in every direction
+— both `uint64_t`, both unconstrained, no cross-field rule touches
+either — so a plan capping reads gets its writes capped instead, bakes
+clean, validates clean, and only a byte position can see it. The memory
+pair is the one the checker would also catch; the other five `uint64_t`s
+have no such backstop.
+
+### blob_const, because parsing C constants is a second copy of C
+
+`blob_h()` returns the third whitespace field, which is right for a bare
+number and wrong for everything the resource block needed:
+`NW_SCHED_OTHER` is `1u`, `NW_NICE_MIN` is `(-20)`, and `NW_SCHED_MAX`
+is `NW_SCHED_IDLE` — an alias whose value is nowhere on its own line.
+Stripping suffixes and parentheses in Python would be a hand-written
+copy of C's constant syntax, wrong in the direction that reads as
+working. `blob_const()` compiles one throwaway against the staged header
+and prints them.
+
+Its first version matched on the character after the macro name and took
+the include guard — `#define NW_BLOB_H`, empty — into `(long long)()`.
+It failed as a compile error naming its own line, which is the argument
+for compiling rather than parsing, made by the tool the argument is
+about.
+
+### What is not here
+
+`nw-sup` does not apply any of it. That is deliberate and it is the
+brick phases' shape: the format lands with the baker refusing and the
+checker validating, before any runtime reads it.
+
+**This machine cannot execute the runtime half, and the measurement is
+not the one an earlier draft of this paragraph gave.** It claimed a
+`noquota` root and a missing `QFMT_V2`, neither of which this machine
+shows. What it does show, run:
+
+```
+$ grep cgroup2 /proc/mounts
+cgroup2 /sys/fs/cgroup/unified cgroup2 rw,relatime 0 0
+$ cat /sys/fs/cgroup/unified/cgroup.controllers
+hugetlb
+$ python3 -c '...quotactl(QCMD(Q_GETINFO, PRJQUOTA), b"/dev/vda", 0, buf)'
+quotactl(Q_GETINFO, PRJQUOTA, /dev/vda) -> -1 errno 3 No such process
+```
+
+cgroup v2 is mounted, and the only controller on it is `hugetlb`:
+`cpu`, `memory` and `io` are all bound to v1 hierarchies here, so not
+one of the three the block needs is reachable through v2. And project
+quota is off on the root device — `ESRCH` is what `quotactl` answers
+for a filesystem with quota disabled.
+
+So the runtime half goes to the operator with a fixture rather than
+being reasoned about here, per `.claude/rules/harness.md`. The
+correction is recorded rather than quietly applied because the wrong
+version was an environment claim stated as fact, which is the shape
+that rule exists to catch.
+
+### The review round, and the four it found in the TCB half
+
+Dispatched before the first push, per the rule that moved `prereport`
+earlier for the same reason. `tcb-review` and `claims` each came back
+non-empty, and two of their findings were the rule-and-its-violation
+shape inside one diff.
+
+**The scheduler policies were hand-written in the baker, directly
+under the comment forbidding it.** `SCHED_UNSET, SCHED_OTHER,
+SCHED_BATCH, SCHED_IDLE = 0, 1, 2, 3`, directly beneath *"READ FROM
+blob.h, not spelled. These bounds are quoted by the checker too, so a
+literal here is the second copy of a limit that invariant 3 is about."*
+`tcb-review` swapped `NW_SCHED_BATCH` and `NW_SCHED_IDLE` in `blob.h`
+alone: `make test` green, `EXIT=0`, and a plan declaring `sched=batch`
+baked to the byte the TCB calls IDLE with `nw-check` saying OK. Bug
+4/9/13's silently-wrong-routing shape, moved from a descriptor to a
+policy byte.
+
+The reason it was written that way is the useful part and it is
+checkable: `_bound()` calls `int(...)` on the raw `#define` text, and
+`NW_SCHED_OTHER` is `1u` while `NW_SCHED_MAX` is an alias. Both raise.
+The same diff had already solved that problem on the test side, in
+`blob_const()`, whose docstring names those two cases — and did not
+carry the solution across. So the baker gets `_const()`, which resolves
+a suffix, a parenthesised negative and an alias chain and **refuses
+anything else rather than guessing**, and the policies are read rather
+than spelled.
+
+`_const()` is still a hand-written corner of C's constant syntax, which
+is the thing `blob_const()`'s own docstring argues against, and the
+baker cannot compile because it has to run where no toolchain does.
+What closes that is `test_baker_constants_match_the_header`: every
+constant the baker resolves, against the compiler's answer for the same
+name. Widen the reader and the test says so.
+
+**One code for three fields, under a comment promising one per field.**
+`blob.h` said, in as many words, that "resource block" as a single code
+would make a refusal name the block and not the field and leave an
+operator guessing which of nine numbers was wrong — and `NW_E_RESRANGE`
+was returned for `cpu_weight`, `sched_policy` and `nice` alike, under a
+string naming none of them. A rationale sitting next to code doing its
+opposite. Split into `NW_E_RESWEIGHT`, `NW_E_RESSCHED` and
+`NW_E_RESNICE`.
+
+**`nice` under an undeclared policy was exempt, and the diff contained
+both halves of what made that unsafe.** `blob.h` defined
+`NW_SCHED_UNSET` as *"the policy nw-sup was started with, not
+SCHED_OTHER chosen on the house's behalf"* — explicitly declining to
+say which policy that is — while `tests/run.py` asserted the opposite
+as fact to justify four acceptance cases: *"the house keeps the one it
+inherited, which is SCHED_OTHER."* So `NW_E_NICEPOL` was enforced
+against an assumption the header refuses to make, and switched off for
+exactly the case where nobody can tell whether the kernel keeps the
+number. `nice` now requires a **declared** `sched=other`, in both
+places; the wrong state is unrepresentable and the exemption is gone.
+
+**`NW_CPU_WEIGHT_MIN` has no reader in the TCB**, under a comment
+saying four bounds were quoted by the checker. Three are. It is
+harmless at today's values — 0 is unset and the floor is 1, so
+`> MAX` already accepts exactly `{0} ∪ [MIN, MAX]` — and a floor test
+would be a branch nothing can enter, which is what `NW_E_RESZERO` was
+removed for. The comment is corrected rather than the code, and
+`blob.h` records when it becomes the checker's: the day the floor moves
+off 1.
+
+### And four in the prose, three of them pointing somewhere real
+
+`claims` found the specs naming `test_checker_rejects_crafted_fields`
+as the pin for the resource rules — it crafts nothing in the block, and
+the sentence was correct for the four older rules and was extended to a
+fifth without re-checking. The survived-by-being-moved shape, in the
+file the hook hands the next agent to edit a spec.
+
+It also found *"the other eight fields are range checks against the
+kernel's own bounds"*, which is true of three of them: `mem_high` and
+`mem_max` have an ordering rule and no range, and `cpu_mask`,
+`io_rbps` and `io_wbps` are unchecked entirely, correctly, because
+every 64-bit value of a mask, a byte count or a rate is a legal
+declaration. The justification given for leaving them out of the specs
+was therefore true of three and false of five.
+
+*"A mask naming a CPU the machine does not have is unsatisfiable, and
+unsatisfiable is a refusal, not a silent widening"* — nothing refuses
+it. `cpus=63` on a four-CPU machine bakes clean and validates clean,
+and `blob.h`'s "(see below)" had no referent. What is true: the plan
+language bounds a CPU index by `cpu_mask`'s width and by nothing else,
+and the choice belongs with the code that applies the block.
+
+And *"every resource field set, all distinct"* was not: `cpus=0` bakes
+to mask `1` and `sched=other` bakes to `1`. The pair happened to be
+separated by field width, which is a different argument from the one
+the comment made — and the comment is what a later reader relies on
+when adding a field. The values are distinct now and the test
+**asserts** they are, because that is the mistake the next person
+repeats.
+
+### `make proof` has been red since 2026-09-12 and nothing ran it
+
+Not this change's, and reported here because the four new checks land
+in a file whose CBMC oracle is dead:
+
+```
+$ make proof
+proofs: 5.95.1 (cbmc-5.95.1)
+mkcomp: expected exactly one definition of name_dup, found 0.
+make: *** [Makefile:242: proof] Error 1
+```
+
+This is a FAIL and not the documented SKIP, and the evidence is the
+script's own branch rather than a tool being on the PATH: `run.sh`
+prints `proofs: cbmc is not installed -- this is a SKIP, not a pass.`
+and exits 3 when it is absent. It printed the version instead and
+`make` reported `Error 1`. `proofs/mkcomp.py`'s `LEAVES` still names
+`name_dup`, which `0a42f63` renamed to `field_dup` when the layer-id
+duplicate pass landed — and
+the harness still calls the old three-argument form, so it is not a
+one-word fix. It fails loudly, which is the good half; nobody ran it
+for a day, which is the other. Left for its own change rather than
+folded into this one: a CBMC harness rewritten and not re-run is worse
+than one that refuses to start.
+
+### And two from `drift`, one of them a regression this round introduced
+
+**Un-anchoring `LAYOUT_DECL` killed the ledger's other direction, and
+nothing said so.** The signature function changed, so `NWPLAN07` and
+`NWPLAN08`'s recorded hashes were in the old function's units and the
+current signature could no longer match any historical row. The test's
+*second* claim — a magic that is a pure rename of a layout already in
+the file is refused — went quiet: `drift` renamed `NWPLAN08` to
+`NWPLAN10` with the layout untouched, appended the row the failure
+message tells you to append, and got `ok`. At `33cf074` the same rename
+says `NWPLAN10 IS A NEW NAME FOR THE NWPLAN08 LAYOUT.`
+
+A guard that stops guarding when you fix a different hole in it, and it
+reports nothing — the silence failure, produced by the fix for a
+silence failure.
+
+`plan-formats.txt` already carried the procedure from the last time the
+function changed, on 2026-09-12, including the distinction that matters:
+*"Editing a row to match a CHANGED layout is the defect; recomputing
+every row when the hash function itself changes is maintenance, and it
+is mechanical and repeatable from the commits."* Done, from the tree
+that defined each magic — `NWPLAN07` from `678f1bd`, `NWPLAN08` from
+`33cf074` — and the reason written into the file, as that note asks.
+Control: the rename now says `NWPLAN10 IS A NEW NAME FOR THE NWPLAN09
+LAYOUT.`
+
+`drift` and this session computed `NWPLAN08`'s new hash independently
+and agree: `81327e61`.
+
+**The constants test did not list the fd pair.** `FD_RESERVED` and
+`MAX_FDS` are hand-written in the baker, and the first version of
+`test_baker_constants_match_the_header` covered seventeen names without
+them — so `NW_FD_RESERVED = 16` in the header with the baker still at 8
+passed with `EXIT=0`, which is `CLAUDE.md` invariant 3's own worked
+example of what survives, arriving from the baker's side into the test
+written to stop exactly this. Listed now, in `pairs` and in the `must`
+pairing that stops the list going stale; the mutation is red. Invariant
+3's paragraph is corrected: the claim about the six annotations still
+holds, and the claim that nothing catches the value drift no longer
+does.
+
+The general shape is worth more than either: **a test's coverage is the
+list it enumerates, and a list is the thing that goes stale.** Both
+findings are a mechanism that reads as working because the part of it
+that stopped working is a set of names nobody re-reads.
+
+### The fix for the ledger hole opened a second one, in the same round
+
+`fd-auditor` reproduced the un-anchored pattern reading **prose**: add
+the one line `/* e.g. NW_TYPE(nw_unit, kind, uint8_t); pins the kind
+byte's type. */` to `blob.h`, change nothing else, and the signature
+moves — and the failure instructs the reader to bump `NW_MAGIC` and
+append a row, which for a comment edit produces precisely the
+version-bump-that-means-nothing the ledger's other half exists to
+refuse. It also contradicted `_layout_signature`'s own docstring, which
+says comments and prose do not move it.
+
+The word-versus-symbol trap, arriving in the fix for a silence failure,
+inside the round that wrote both. `CLAUDE.md`'s weakest-rule pattern
+does not need restating; what is worth keeping is that **neither half
+of this was reachable by reading** — the hole was found by hashing the
+declarations and counting, and the new hole by adding a comment and
+re-running.
+
+Answered structurally rather than by a check that prose did not
+contribute: `strip_c_comments` blanks comments and string literals
+before matching, preserving line structure so the two `^`-anchored
+alternatives still work. Blanking the literals also means editing a
+`_Static_assert`'s **message** no longer demands a magic bump, which is
+the same argument one step further. All three ledger rows were derived
+under the final function.
+
+Both controls, run:
+
+- `io_rbps` retyped `uint64_t` → `int64_t`, in the struct and its own
+  `NW_TYPE` → `THE LAYOUT MOVED AND NWPLAN09 DID NOT`
+- a comment naming `NW_TYPE(nw_unit, kind, uint8_t)` added and nothing
+  else → `ok magic-moves-with-layout`
+
+### `tools/mkboot.sh` copied a baker it had just made unimportable
+
+The baker imports `mkbrick` at module scope now, to read the block's
+bounds out of `blob.h`. `mkboot.sh`'s copy list names `bakery/nw-cc.py`
+and not `bakery/mkbrick.py`, so the copy raises `ModuleNotFoundError`
+before parsing an argument. Latent — `mkboot.sh` bakes the ESP plan
+with the baker in `$ROOT`, and the copy is only reached by a
+`make stage` inside the build directory — and one word to fix. The
+class is `.claude/rules/plan.md`'s sidecar bullet again: adding a
+dependency to a file that several programs copy.
+
+### The controls, run in this session because the dispatched `control` never returned
+
+Each mutation is a scratch copy of the tree with `__pycache__` removed
+and `PYTHONDONTWRITEBYTECODE=1`, staged to its own directory —
+`.claude/rules/harness.md`'s bytecode-cache trap and the shared-stage
+hazard, both avoided rather than hoped about.
+
+Every new `return` in `nwcheck.c`, deleted one at a time:
+
+```
+NW_E_RESWEIGHT   FAIL: nw-check accepted cpu-weight=10001, above cgroup v2's own maximum
+NW_E_RESSCHED    FAIL: nw-check accepted sched policy 4, outside the closed set
+NW_E_RESNICE     FAIL: nw-check accepted nice=-21, outside the kernel's own range
+NW_E_MEMORDER    FAIL: nw-check accepted a throttle exactly at the backstop
+NW_E_NICEPOL     FAIL: nw-check accepted nice under policy 2, which does not honour it
+NW_E_CAPNOLAYER  FAIL: nw-check accepted a layer capacity on a house with no writable layer
+```
+
+The baker:
+
+```
+swap io_rbps/io_wbps in pack_res  FAIL: the baker did not write lay3's resource block where blob.h declares it.
+swap mem_high/mem_max in pack_res FAIL: the baker did not write lay3's resource block where blob.h declares it.
+drop the `no resource block:` line FAIL: the baker did not report which houses have no resource block.
+drop parse_bytes's zero refusal    FAIL: baker accepted mem-high=0
+```
+
+The `io_rbps`/`io_wbps` swap is the one that matters: both are
+`uint64_t`, both unconstrained, no cross-field rule touches either, so
+it is legal in every direction and the byte positions are the only
+instrument that sees it.
+
+**The trailer-swap control went red for the wrong reason, which is
+worth saying.**
+Swapping the `<QQQQQQHbB` trailer to `<QQQQQQHBb` — `nice` and
+`sched_policy` exchanging places — turned the suite red at
+`FAIL: dawn boot rc=80`, an earlier test, not at the byte-position
+assertion it was written for. The fixture's `nice=8` becomes a
+`sched_policy` of 8, which is outside the closed set, so the checker
+refuses before the layout test runs. The mutation IS caught; what is
+not demonstrated is that the positions caught it. Recorded rather than
+reported as a clean pass, because "the suite went red" and "the
+assertion I wrote went red" are different claims and only the second is
+the one a control is run to establish.
+
+The layout and ledger controls are quoted in their own sections above.

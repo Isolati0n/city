@@ -169,6 +169,91 @@ def blob_h(name):
 # fd-auditor and tcb-review, independently.
 PROBE_CFLAGS = ["-std=gnu11", "-Wall", "-Wextra", "-Werror"]
 
+
+_CONSTS = {}
+
+
+def blob_const(name):
+    """A blob.h #define as an int, with the COMPILER doing the resolving.
+
+    blob_h() returns the third whitespace field, which is the right
+    answer for a bare number and the wrong one for everything else the
+    header actually writes: `1u` has a suffix, `NW_NICE_MIN` is `(-20)`
+    with parentheses, and `NW_SCHED_MAX` is `NW_SCHED_IDLE` -- a
+    reference, whose value is nowhere on its own line. A test that
+    stripped the suffix and the parens itself would be a second,
+    hand-written copy of C's constant syntax, and it would be wrong in
+    the direction that reads as working: `int("1u".rstrip("u"))` is fine
+    until someone writes `0x04u` or an alias, and then the crafted case
+    is built against a number that is not the one the TCB compiled.
+
+    So compile it. Every constant this suite wants comes out of one
+    throwaway, from the STAGED header, for the reason blob_h() gives.
+
+    Cached because the compile is per-process, not per-call; the cache
+    is keyed by nothing but the name because STAGE cannot change inside
+    one run."""
+    if name in _CONSTS:
+        return _CONSTS[name]
+    src = os.path.join(STAGE, "src", "blob.h")
+    # Name plus the whole replacement text, then keep the ones that can
+    # be an integer: non-empty (the include guard is not), no string
+    # literal (NW_MAGIC and the paths are not), no parentheses that are
+    # not a leading sign (the function-like NW_AT family is not). The
+    # first version matched on the character after the name and took
+    # `#define NW_BLOB_H` -- an empty macro -- straight into
+    # `(long long)()`. It failed loudly, which is the point of compiling
+    # rather than parsing, but the filter is written on the replacement
+    # text now rather than on one character of it.
+    names = []
+    for m in re.finditer(r"^\s*#\s*define\s+(NW_\w+)(?!\()\s*(.*)$",
+                         open(src).read(), re.M):
+        rest = m.group(2).split("/*")[0].strip()
+        if not rest or '"' in rest:
+            continue
+        # Arithmetic is fine -- NW_BRICK_HEX is `(NW_BRICK_HASH * 2)`
+        # and NW_UNIT_SIZE is a sum -- because the COMPILER evaluates
+        # it. The filter exists only to drop strings and function-like
+        # macros; anything else that is not an integer constant
+        # expression becomes a compile error naming its own line, which
+        # is the designed diagnostic and the whole reason this compiles
+        # rather than parses.
+        if not re.fullmatch(r"[-+*/()\s\w]+", rest):
+            continue
+        names.append(m.group(1))
+    names = sorted(set(names))
+    d = tempfile.mkdtemp(prefix="nwconst-", dir=WORK)
+    body = "\n".join(
+        f'    printf("%s %lld\\n", "{n}", (long long)({n}));' for n in names)
+    open(f"{d}/c.c", "w").write(
+        f'#include <stdio.h>\n#include "{src}"\nint main(void)'
+        f'{{\n{body}\n    return 0;\n}}\n')
+    # NOT -Werror here: blob.h's string macros (NW_MAGIC and the paths)
+    # are excluded by the patterns above, but a future numeric-looking
+    # define that is neither is a compile error naming itself, which is
+    # the diagnostic worth having.
+    c = run(["gcc", "-std=gnu11", "-o", f"{d}/c", f"{d}/c.c"])
+    expect(c.returncode == 0,
+           f"the blob.h constant probe did not compile -- a #define this "
+           f"suite reads is not an integer constant expression\n"
+           f"{c.out}{c.err}")
+    r = run([f"{d}/c"])
+    expect(r.returncode == 0, f"the constant probe did not run\n{r.err}")
+    for line in r.out.split("\n"):
+        f = line.split()
+        if len(f) == 2:
+            _CONSTS[f[0]] = int(f[1])
+    expect(name in _CONSTS,
+           f"blob.h has no integer #define {name} THAT THIS PROBE ADMITS "
+           f"-- the filter drops strings, function-like macros and "
+           f"anything with a character outside `-+*/() \\w`, so "
+           f"NW_BLOB_MAX (a comma) is excluded and is nonetheless an "
+           f"integer. The probe resolved {len(_CONSTS)} names, so it "
+           f"works; widen the filter if you need this one. (The message "
+           f"said `has no integer #define`, flat, which is false for "
+           f"exactly that case. `fd-auditor`.)")
+    return _CONSTS[name]
+
 def sha256_of(path):
     import hashlib
     h = hashlib.sha256()
@@ -2803,6 +2888,283 @@ def test_baker_refuses_bad_layers():
           "distinct layers still accepted)")
 
 
+def test_baker_constants_match_the_header():
+    """Every constant the baker resolves out of blob.h, against the
+    COMPILER's answer for the same name.
+
+    The baker cannot compile -- it has to run where no toolchain does --
+    so `_const()` is a hand-written reader for a corner of C's constant
+    syntax: an integer, a `u`/`l` suffix, a parenthesised negative, and
+    one level of alias. That is exactly the second copy of C that
+    `blob_const()`'s docstring argues against, and it is unavoidable on
+    that side. What is avoidable is nobody checking it.
+
+    WHY IT MATTERS, measured rather than supposed. The four scheduler
+    policies were hand-written in the baker for one round, four lines
+    under the comment forbidding a second copy of a limit. `tcb-review`
+    swapped NW_SCHED_BATCH and NW_SCHED_IDLE in blob.h alone and got
+    `make test` green with `EXIT=0`, while a plan declaring
+    `sched=batch` baked to the byte the TCB calls IDLE and `nw-check`
+    said OK -- bug 4/9/13's silent-wrong-routing shape, moved from a
+    descriptor to a policy byte. Reading them from the header removes
+    the table; this test is what keeps the READER honest.
+
+    Paired, and the pairing is not decorative: asserting agreement over
+    an empty set of names passes. The names come from the baker's own
+    module, and the test requires the ones the plan language depends on
+    to be among them."""
+    import importlib.util as _il
+    sp = _il.spec_from_file_location("nwcc", CC)
+    cc = _il.module_from_spec(sp)
+    sp.loader.exec_module(cc)
+    pairs = {
+        "NW_CPU_WEIGHT_MIN": cc.CPU_WEIGHT_MIN,
+        "NW_CPU_WEIGHT_MAX": cc.CPU_WEIGHT_MAX,
+        "NW_NICE_MIN": cc.NICE_MIN,
+        "NW_NICE_MAX": cc.NICE_MAX,
+        "NW_SCHED_UNSET": cc.SCHED_UNSET,
+        "NW_SCHED_OTHER": cc.SCHED_OTHER,
+        "NW_SCHED_BATCH": cc.SCHED_BATCH,
+        "NW_SCHED_IDLE": cc.SCHED_IDLE,
+        "NW_LID_SECCOMP": cc.LID_SECCOMP,
+        "NW_LID_LANDLOCK": cc.LID_LANDLOCK,
+        "NW_LID_NEWNS": cc.LID_NEWNS,
+        "NW_LID_NEWNET": cc.LID_NEWNET,
+        "NW_MAX_UNITS": cc.MAX_UNITS,
+        "NW_MAX_BINDS": cc.MAX_BINDS,
+        "NW_NAME_LEN": cc.NAME_LEN,
+        "NW_PATH_LEN": cc.PATH_LEN,
+        "NW_BRICK_HASH": cc.BRICK_HASH,
+        "NW_BRICK_HEX": cc.BRICK_HEX,
+        "NW_KIND_ONESHOT": cc.KIND_ONESHOT,
+        "NW_KIND_LONGRUN": cc.KIND_LONGRUN,
+        # THE FD PAIR, which CLAUDE.md invariant 3 carries as the
+        # sharpest surviving case: "set NW_FD_RESERVED to 16 in blob.h
+        # while the baker keeps FD_RESERVED = 8, and all six
+        # annotations still pass -- the expressions are untouched and
+        # only what they evaluate to has diverged." That is about the
+        # checkbrief annotations and it stays true; what changes is
+        # that the SUITE now catches it. `drift` ran the mutation
+        # against the first version of this test, which did not list
+        # NW_FD_RESERVED and NW_MAX_FDS, and the run exited zero with this
+        # test printing ok.
+        #
+        # It is the VALUES this covers, never the arithmetic. The
+        # four-place `FD_RESERVED + len(houses) * 2` change invariant 3
+        # is really about is not touched by anything here.
+        "NW_FD_RESERVED": cc.FD_RESERVED,
+        "NW_MAX_FDS": cc.MAX_FDS,
+    }
+    for name, got in sorted(pairs.items()):
+        want = blob_const(name)
+        expect(got == want,
+               f"the baker holds {name} = {got} and the compiler says "
+               f"{want}. What that costs depends on the name and none "
+               f"of it is loud: a policy, lid or kind value bakes to a "
+               f"byte the TCB reads as a different thing while nw-check "
+               f"says OK, which is bug 4/9/13's shape one level up from "
+               f"a descriptor; a bound or a budget means the baker and "
+               f"the checker disagree about what is legal, in whichever "
+               f"direction the values differ.")
+    # The pairing. Without it an empty `pairs` satisfies the loop, and
+    # a constant DROPPED from the baker is a constant this test stops
+    # covering while still printing ok.
+    for must in ("NW_SCHED_BATCH", "NW_SCHED_IDLE", "NW_NICE_MIN",
+                 "NW_CPU_WEIGHT_MAX", "NW_LID_NEWNS", "NW_MAX_UNITS",
+                 "NW_FD_RESERVED", "NW_MAX_FDS", "NW_KIND_LONGRUN"):
+        expect(must in pairs,
+               f"{must} is no longer compared against the header here. "
+               f"Either the baker stopped reading it -- in which case it "
+               f"is spelled somewhere, which is the drift this exists to "
+               f"stop -- or this list went stale.")
+    # And the reader must REFUSE what it cannot resolve rather than
+    # guessing. Without this, widening _const() silently is free.
+    try:
+        cc._const("NW_MAGIC")
+        raise AssertionError("no refusal")
+    except SystemExit as e:
+        expect("cannot resolve" in str(e),
+               f"nw-cc._const accepted a non-integer #define, or refused "
+               f"it for another reason: {e}")
+    except AssertionError:
+        expect(False,
+               "nw-cc._const resolved NW_MAGIC, which is a string. A "
+               "reader that guesses at what it cannot parse is how the "
+               "value and the header come to disagree quietly.")
+    print(f"ok baker-constants-match-header ({len(pairs)} names, each "
+          f"the baker's own parse against the compiler's answer for the "
+          f"same #define; a non-integer define refused)")
+
+
+def test_baker_refuses_bad_resources():
+    """Every resource refusal the baker makes, with the reason asserted.
+
+    THE BAKER IS WHERE THE PLAIN-LANGUAGE FAULTS LAND, and most of them
+    cannot be crafted into a blob at all: `cpu-weight=0` and an omitted
+    cpu-weight are the same byte, `cpus=3-1` and `mem-high=2X` never
+    become bytes. nwcheck.c has no subject for any of those, which is
+    why they are bake-time only and why this test is the only thing
+    covering them -- blob.h says so where the error code for a declared
+    zero would have gone.
+
+    THE ZERO CASES ARE THE ONES TO NOTICE. `layer-bytes=0` reads as
+    "unlimited" to anybody who has met a ulimit, and it is the byte an
+    unset field already holds -- so accepting it would make a plan
+    saying "bounded" and a plan saying nothing identical on disk. The
+    refusal names the alternative rather than just complaining.
+
+    Paired from the accepting side, because every refusal here is
+    satisfied by a baker that refuses any plan with a resource key in
+    it."""
+    brick = "cd" * int(blob_h("NW_BRICK_HASH"))
+    W_MIN, W_MAX = (blob_const(x) for x in
+                    ("NW_CPU_WEIGHT_MIN", "NW_CPU_WEIGHT_MAX"))
+    N_MIN, N_MAX = (blob_const(x) for x in ("NW_NICE_MIN", "NW_NICE_MAX"))
+    city = f"{WORK}/badres.city"
+    bare = "house a /bin/true kind=oneshot lids=none"
+    bricked = (f"house a /bin/brick kind=oneshot lids=newns "
+               f"brick={brick} layer=l-res")
+
+    cases = [
+        # Ranges, both ends, from the bounds blob.h declares rather than
+        # from numbers typed here -- the checker quotes the same two.
+        (f"{bare} cpu-weight={W_MAX + 1}", "cgroup v2's own range",
+         "a cpu weight above the maximum"),
+        (f"{bare} cpu-weight={W_MIN - 1}", "cgroup v2's own range",
+         "a cpu weight of zero, which is the unset byte"),
+        (f"{bare} cpu-weight=-1", "cgroup v2's own range",
+         "a negative cpu weight"),
+        (f"{bare} cpu-weight=lots", "cgroup v2's own range",
+         "a cpu weight that is not a number"),
+        (f"{bare} nice={N_MAX + 1} sched=other", f"must be {N_MIN}..{N_MAX}",
+         "a nice above the kernel's range"),
+        (f"{bare} nice={N_MIN - 1} sched=other", f"must be {N_MIN}..{N_MAX}",
+         "a nice below the kernel's range"),
+        (f"{bare} nice=gentle sched=other", f"must be {N_MIN}..{N_MAX}",
+         "a nice that is not a number"),
+        (f"{bare} sched=fifo", "must be one of",
+         "a scheduler policy outside the closed set"),
+        # THE ZEROES. One per key that takes a size, because the refusal
+        # is per-key and a single case pins one of them: `control` can
+        # delete the guard from any other and the suite stays green if
+        # only mem-high is probed.
+        (f"{bare} mem-high=0", "Omit mem-high=", "mem-high=0"),
+        (f"{bare} mem-max=0", "Omit mem-max=", "mem-max=0"),
+        (f"{bare} io-rbps=0", "Omit io-rbps=", "io-rbps=0"),
+        (f"{bare} io-wbps=0", "Omit io-wbps=", "io-wbps=0"),
+        (f"{bricked} layer-bytes=0", "Omit layer-bytes=", "layer-bytes=0"),
+        # Sizes that are not sizes.
+        (f"{bare} mem-high=2X", "suffixed K, M, G or T",
+         "a size with an unknown suffix"),
+        (f"{bare} mem-high=", "suffixed K, M, G or T", "an empty size"),
+        (f"{bare} mem-high=-1M", "suffixed K, M, G or T",
+         "a negative size"),
+        # cpus= is a list of indices, and the bound is the mask's width.
+        (f"{bare} cpus=64", "outside 0..63", "a CPU index past the mask"),
+        (f"{bare} cpus=0-64", "outside 0..63",
+         "a CPU range whose top is past the mask"),
+        (f"{bare} cpus=3-1", "runs backwards", "a backwards CPU range"),
+        (f"{bare} cpus=x", "indices and ranges", "a CPU list of nonsense"),
+        # The cross-field pairs, which nwcheck.c also enforces -- stated
+        # in both places, per plan.md, and this is the bake-time half.
+        (f"{bare} mem-high=2M mem-max=2M", "is not below",
+         "a throttle exactly at the backstop"),
+        (f"{bare} mem-high=4M mem-max=2M", "is not below",
+         "a throttle above the backstop"),
+        (f"{bare} nice=5 sched=batch", "declare sched=other beside it",
+         "nice under a policy that discards it"),
+        (f"{bare} nice=5 sched=idle", "declare sched=other beside it",
+         "nice under the idle policy"),
+        # AND WITH NO POLICY DECLARED, which was exempt for one round.
+        # Nothing at bake time knows what an undeclared policy resolves
+        # to, so the exemption enforced the rule against an assumption
+        # blob.h explicitly refuses to make. `tcb-review`.
+        (f"{bare} nice=5", "declare sched=other beside it",
+         "nice with no sched= at all"),
+        (f"{bare} layer-bytes=1G", "without layer=",
+         "a layer capacity on a house with no layer"),
+    ]
+    for line, reason, what in cases:
+        open(city, "w").write(line + "\n")
+        p = run(["python3", CC, "--city", city, "--out", f"{WORK}/br.blob"])
+        expect(p.returncode != 0, f"baker accepted {what}\n{p.out}{p.err}")
+        expect(reason in (p.out + p.err),
+               f"wrong reason for {what}: expected {reason!r}\n"
+               f"{p.out}{p.err}")
+
+    # THE ACCEPTING SIDE. Legal values at both ends of every range, the
+    # ordered memory pair, nice under the policy that honours it and
+    # under no declared policy, and a capacity on a house that has a
+    # layer. Without these the refusals above are satisfied by a baker
+    # that refuses every resource key -- the over-rejection direction,
+    # which no refusal case can see.
+    ok = [
+        f"{bare} cpu-weight={W_MIN}",
+        f"{bare} cpu-weight={W_MAX}",
+        f"{bare} nice={N_MIN} sched=other",
+        f"{bare} nice={N_MAX} sched=other",
+        f"{bare} nice=0 sched=idle",     # nice=0 is unset, so legal here
+        f"{bare} nice=-5 sched=other",
+        f"{bare} sched=other",
+        f"{bare} sched=batch",
+        f"{bare} sched=idle",
+        f"{bare} mem-high=2M mem-max=4M",
+        f"{bare} mem-high=1",            # one byte, no suffix
+        f"{bare} mem-high=1K mem-max=1M",
+        f"{bare} io-rbps=4M io-wbps=8M",
+        f"{bare} cpus=0",
+        f"{bare} cpus=0,2-3",
+        f"{bare} cpus=63",
+        f"{bricked} layer-bytes=1G",
+        f"{bricked} cpus=0-63 cpu-weight=500 mem-high=1G mem-max=2G "
+        f"io-rbps=1M io-wbps=1M layer-bytes=4G sched=other nice=-1",
+    ]
+    for line in ok:
+        open(city, "w").write(line + "\n")
+        p = run(["python3", CC, "--city", city, "--out", f"{WORK}/br.blob"])
+        expect(p.returncode == 0,
+               f"the baker refused a legal resource declaration:\n"
+               f"  {line}\n{p.out}{p.err}")
+
+    # AND THE ABSENCE IS REPORTED BY NAME. "No defaults" is only
+    # honest if a house with no block is visible without one; the
+    # baker prints the names rather than a count. Paired: a house WITH
+    # a block must not be listed, or the line is satisfied by printing
+    # every house.
+    open(city, "w").write(
+        f"house bare0 /bin/true kind=oneshot lids=none\n"
+        f"house bare1 /bin/true kind=oneshot lids=none\n"
+        f"house bound /bin/true kind=oneshot lids=none cpu-weight=100\n")
+    p = run(["python3", CC, "--city", city, "--out", f"{WORK}/br.blob"])
+    expect(p.returncode == 0, f"bake\n{p.out}{p.err}")
+    line = [l for l in (p.out + p.err).splitlines()
+            if "no resource block" in l]
+    expect(len(line) == 1,
+           f"the baker did not report which houses have no resource "
+           f"block. The absence of a limit has to be visible without "
+           f"inventing a number to make it visible.\n{p.out}{p.err}")
+    named = line[0].split(":", 1)[1].split()
+    expect(named == ["bare0", "bare1"],
+           f"the baker named {named} as unbounded, expected the two "
+           f"houses that declare nothing and not the one that does.")
+    # And no line at all when every house is bounded, rather than an
+    # empty list -- which reads as a report that ran and found none.
+    open(city, "w").write(
+        f"house bound /bin/true kind=oneshot lids=none cpu-weight=100\n")
+    p = run(["python3", CC, "--city", city, "--out", f"{WORK}/br.blob"])
+    expect(p.returncode == 0, f"bake\n{p.out}{p.err}")
+    expect("no resource block" not in (p.out + p.err),
+           f"the baker reported unbounded houses in a city that has "
+           f"none\n{p.out}{p.err}")
+
+    print(f"ok baker-refuses-bad-resources ({len(cases)} refusals each by "
+          f"its own reason -- ranges at both ends, the zero-is-not-"
+          f"unlimited keys, malformed sizes and cpu lists, and the "
+          f"memory-ordering, nice-without-sched=other and capacity-"
+          f"without-layer pairs; {len(ok)} legal declarations accepted; the "
+          f"unbounded houses named and the bounded one not)")
+
+
 def test_brick_needs_newns():
     """A brick is a root, and pivoting into one without a private mount
     namespace would repoint the machine's. The baker refuses rather than
@@ -3794,8 +4156,236 @@ def test_checker_rejects_crafted_binds():
           "the legal plan with a bind still accepted)")
 
 
+def test_checker_rejects_crafted_resources():
+    """Every rule the resource block adds to nw_check, crafted, both ways.
+
+    THE BAKER REFUSES ALL OF THEM AT BAKE TIME, which is exactly the
+    arrangement plan.md forbids relying on: a blob can arrive from
+    anywhere, and nw-sup writes these numbers into cgroup files without
+    re-deriving them. So every rule is stated twice, and this is the half
+    that shows the checker's copy works.
+
+    BOTH DIRECTIONS, because neither covers the other and plan.md records
+    why at length. A rejection case is satisfied by a rejection for ANY
+    reason, so each asserts its own string; and a checker whose ranges are
+    narrower than the plan language rejects legal plans, which no
+    rejection case can see -- that is the over-rejection direction the
+    bind loop's one-in-256 defect hid in. The acceptance cases are the
+    only instrument for it.
+
+    ON THE LAST UNIT OF THREE, for the reason the field cases give: a
+    rule read out of `u[0]` instead of `u[i]` passes every one-unit test.
+
+    NO CASE FOR A DECLARED ZERO. `cpu-weight=0` and an omitted cpu-weight
+    are the same byte, so there is nothing to craft and nothing here can
+    tell them apart -- the refusal is the baker's and it is bake-time
+    only, like `lids=`. blob.h says so where the code for it would have
+    gone."""
+    HDR = 20
+    USZ = unit_layout()["_size"]
+    NUNITS, VICTIM = 3, 2
+    ul, rl = unit_layout(), res_layout()
+    NAMEW = int(blob_h("NW_NAME_LEN"))
+    BRICKW = int(blob_h("NW_BRICK_HASH"))
+    RES = HDR + VICTIM * USZ + ul["res"]
+    LAYER = HDR + VICTIM * USZ + ul["layer"]
+    BRICK = HDR + VICTIM * USZ + ul["brick"]
+    # blob_const, not blob_h: NW_SCHED_* carry a `u` suffix, NW_NICE_MIN
+    # is parenthesised and negative, and NW_SCHED_MAX is an ALIAS whose
+    # value is not on its own line. The compiler resolves all three.
+    W_MIN, W_MAX = (blob_const(x) for x in
+                    ("NW_CPU_WEIGHT_MIN", "NW_CPU_WEIGHT_MAX"))
+    N_MIN, N_MAX = (blob_const(x) for x in ("NW_NICE_MIN", "NW_NICE_MAX"))
+    S_OTHER, S_BATCH, S_IDLE, S_MAX = (
+        blob_const(x) for x in
+        ("NW_SCHED_OTHER", "NW_SCHED_BATCH", "NW_SCHED_IDLE", "NW_SCHED_MAX"))
+    # The closed set is pinned by its own members, not by a literal 3:
+    # if a policy is added to blob.h without a case here, this fails
+    # rather than leaving the new value unprobed in either direction.
+    expect({S_OTHER, S_BATCH, S_IDLE} == set(range(1, S_MAX + 1)),
+           f"blob.h's scheduler policies are no longer "
+           f"{{1..NW_SCHED_MAX}}: OTHER={S_OTHER} BATCH={S_BATCH} "
+           f"IDLE={S_IDLE} MAX={S_MAX}. A policy added to the header "
+           f"and not to this test is one neither direction covers.")
+
+    def fld(name, val):
+        """Edits writing `val` little-endian across the field's own width.
+
+        The width comes from struct.calcsize on the declared type, not
+        from a number typed here: mem_high is eight bytes and cpu_weight
+        two, and a crafted case that wrote one byte of a u64 would set a
+        value the checker still accepts while reading as a crafted
+        rejection that failed."""
+        fmt = {"cpu_mask": "<Q", "mem_high": "<Q", "mem_max": "<Q",
+               "io_rbps": "<Q", "io_wbps": "<Q", "layer_bytes": "<Q",
+               "cpu_weight": "<H", "nice": "<b", "sched_policy": "<B"}[name]
+        raw = struct.pack(fmt, val)
+        return [(RES + rl[name] + k, b) for k, b in enumerate(raw)]
+
+    city = f"{WORK}/cres.city"
+    good = f"{WORK}/cres-ok.blob"
+    brick = "de" * BRICKW
+    open(city, "w").write("".join(
+        f"house r{i:02d} /bin/true kind=oneshot lids=newns,seccomp "
+        f"brick={brick} layer=l-r{i:02d}\n" for i in range(NUNITS)))
+    p = run(["python3", CC, "--city", city, "--out", good])
+    expect(p.returncode == 0, f"bake\n{p.out}{p.err}")
+    base = bytearray(open(good, "rb").read())
+    expect(len(base) == HDR + NUNITS * USZ,
+           f"layout: {len(base)} bytes for {NUNITS} units of {USZ}")
+    # THE BLOCK IS ALL-ZERO BEFORE ANY EDIT. Without this every case
+    # below is crafted on top of whatever the baker happened to emit, and
+    # a baker that quietly defaulted a field would make the acceptance
+    # cases pass for the wrong reason -- "no defaults" asserted rather
+    # than assumed.
+    RESW = base[RES:RES + (USZ - ul["res"])]
+    expect(set(RESW) == {0},
+           f"the baker emitted a nonzero resource block for a house that "
+           f"declares no resource keys: {RESW.hex()}. Unset must be zero "
+           f"in the bytes, not only in the prose.")
+
+    def craft(why, edits):
+        d = bytearray(base)
+        for off, val in edits:
+            d[off] = val
+        d[16:20] = b"\x00\x00\x00\x00"
+        d[16:20] = struct.pack("<I", zlib.crc32(bytes(d)) & 0xFFFFFFFF)
+        path = f"{WORK}/cres-{why}.blob"
+        open(path, "wb").write(bytes(d))
+        return path
+
+    cases = [
+        # EVERY value above the range, not one representative -- the
+        # lesson the kind and lid cases already paid for. cpu.weight is
+        # cgroup v2's own 1..10000 and the byte above it is the one a
+        # `>=` instead of a `>` would take.
+        (f"weight{v}", fld("cpu_weight", v), "cpu-weight out of range",
+         f"cpu-weight={v}, above cgroup v2's own maximum")
+        for v in (W_MAX + 1, W_MAX + 2, 0xFFFF)
+    ] + [
+        (f"sched{v}", fld("sched_policy", v), "sched policy out of range",
+         f"sched policy {v}, outside the closed set")
+        for v in (S_MAX + 1, S_MAX + 2, 0x7F, 0xFF)
+    ] + [
+        # nice is SIGNED and the range is asymmetric, so both ends need
+        # their own case: a checker testing only the magnitude accepts
+        # -21 and rejects nothing at 20.
+        (f"nice{v}", fld("nice", v) + fld("sched_policy", S_OTHER),
+         "nice out of range",
+         f"nice={v}, outside the kernel's own range")
+        for v in (N_MIN - 1, N_MAX + 1, -128, 127)
+    ] + [
+        # THE THROTTLE AT OR ABOVE THE BACKSTOP. Equal is the case a `>`
+        # instead of `>=` lets through, and it is the one that matters:
+        # memory.high == memory.max never throttles, so the plan declares
+        # a warning pass the house does not get and is OOM-killed with no
+        # slow phase. Almost always the two numbers written the wrong way
+        # round.
+        ("mem-equal", fld("mem_high", 1 << 20) + fld("mem_max", 1 << 20),
+         "mem-high must be below mem-max",
+         "a throttle exactly at the backstop"),
+        ("mem-inverted", fld("mem_high", 1 << 21) + fld("mem_max", 1 << 20),
+         "mem-high must be below mem-max",
+         "a throttle above the backstop"),
+    ] + [
+        (f"nicepol{v}", fld("nice", 5) + fld("sched_policy", v),
+         "nice without a declared sched=other",
+         f"nice under policy {v}, which does not honour it")
+        for v in (S_BATCH, S_IDLE, 0)
+    ] + [
+        # A CAPACITY WITH NO LAYER TO BOUND. Brick and layer are cleared
+        # TOGETHER: clearing the layer alone trips NW_E_LAYERPAIR first,
+        # so the case would pass for a reason that says nothing about
+        # capacity, which is what the reason assertion catches.
+        ("cap-no-layer",
+         [(LAYER + k, 0) for k in range(NAMEW)]
+         + [(BRICK + k, 0) for k in range(BRICKW)]
+         + [(RES + rl["sched_policy"], 0)]   # keep the rest unset
+         + fld("layer_bytes", 1 << 30),
+         "layer capacity without a layer",
+         "a layer capacity on a house with no writable layer"),
+    ]
+    for why, edits, reason, what in cases:
+        path = craft(why, edits)
+        r = run([f"{BIN}/nw-check", path])
+        expect(r.returncode != 0,
+               f"nw-check accepted {what}\n{r.out}{r.err}")
+        expect(reason in (r.out + r.err),
+               f"{why}: wrong reason for {what} -- a rejection for another "
+               f"reason satisfies the exit code and pins nothing"
+               f"\n{r.out}{r.err}")
+
+    # THE OTHER DIRECTION. Every legal value must be ACCEPTED, and this
+    # is the only instrument that can see an over-rejection: a checker
+    # whose range is narrower than the plan language rejects plans the
+    # baker emits, and no rejection case above can tell. plan.md records
+    # the bind loop refusing one legal plan in 256 with every rejection
+    # test sound.
+    ok_cases = [("unmodified", [])]
+    ok_cases += [(f"weight={v}", fld("cpu_weight", v))
+                 for v in (W_MIN, 2, W_MAX)]
+    ok_cases += [(f"sched={v}", fld("sched_policy", v))
+                 for v in (S_OTHER, S_BATCH, S_IDLE)]
+    # Both ends of nice, under the policy that honours it. There is NO
+    # nice-under-an-undeclared-policy case: that is refused now, and the
+    # sentence justifying it here -- "the house keeps the one it
+    # inherited, which is SCHED_OTHER" -- was a claim about a machine,
+    # asserted in a file that carries only properties of the plan, for a
+    # runtime that does not exist. `tcb-review` and `claims` both.
+    ok_cases += [(f"nice={v}@other", fld("nice", v) + fld("sched_policy", S_OTHER))
+                 for v in (N_MIN, -1, 1, N_MAX)]
+    # nice=0 is UNSET, so it is legal under a policy that discards nice.
+    ok_cases += [(f"nice=0@{v}", fld("nice", 0) + fld("sched_policy", v))
+                 for v in (S_BATCH, S_IDLE)]
+    ok_cases += [("mem-ordered", fld("mem_high", 1 << 20) + fld("mem_max", 1 << 21))]
+    ok_cases += [("mem-high-alone", fld("mem_high", 1 << 20))]
+    ok_cases += [("mem-max-alone", fld("mem_max", 1 << 20))]
+    ok_cases += [("cap-with-layer", fld("layer_bytes", 1 << 30))]
+    ok_cases += [("io-both", fld("io_rbps", 1 << 20) + fld("io_wbps", 1 << 20))]
+    ok_cases += [("cpu-mask-full", fld("cpu_mask", (1 << 64) - 1))]
+    for why, edits in ok_cases:
+        # `-` KEPT, and `=`/`@` mapped rather than dropped: a bare
+        # \W-strip sends `nice=-1@other` and `nice=1@other` to one
+        # filename, so two distinct cases share one artifact. Harmless
+        # while they run in sequence and fatal to anyone reading the
+        # blobs afterwards. `fd-auditor`.
+        path = (craft("ok-" + re.sub(r"[^\w-]", "_", why), edits)
+                if edits else good)
+        r = run([f"{BIN}/nw-check", path])
+        expect(r.returncode == 0,
+               f"nw-check rejected a legal resource block ({why}): the "
+               f"checker's range is narrower than the plan language, "
+               f"which no rejection case above can see"
+               f"\n{r.out}{r.err}")
+    print(f"ok checker-rejects-crafted-resources ({len(cases)} refused "
+          f"naming their own reason on unit {VICTIM} of {NUNITS}, "
+          f"{len(ok_cases)} legal blocks accepted)")
+
+
 LAYOUT_DECL = re.compile(
-    r"^\s*(?:NW_AT|NW_EXTENT|NW_TYPE|NW_ARR_TYPE)\s*\([^)]*\)\s*;"
+    # NOT ^-ANCHORED for the macro calls, and that is the whole of this
+    # line's history. blob.h writes two declarations per line --
+    # `NW_AT(nw_unit, kind, 224);  NW_TYPE(nw_unit, kind, uint8_t);` --
+    # and with `^\s*` the SECOND one on every such line was never
+    # hashed. Measured on the tree that found it: 35 declarations
+    # hashed, 53 present, and the 24 missed were every NW_TYPE in the
+    # file plus every same-line NW_EXTENT.
+    #
+    # NW_TYPE is precisely the declaration that carries a same-bytes
+    # RETYPE, which is what this test says in its own docstring it
+    # exists to catch. Control, run against the tree that shipped the
+    # resource block: retype `io_rbps` from uint64_t to int64_t in the
+    # struct AND in its NW_TYPE -- a TCB field's declared meaning
+    # changed, size, offset and every hashed line identical -- and the
+    # suite printed `ok magic-moves-with-layout`. A rate that cannot be
+    # negative becoming one that can, with the ledger agreeing.
+    #
+    # `nice` is the near miss that makes the rest look covered: the
+    # same retype there is caught, but by -Wtype-limits in nwcheck.c's
+    # own range comparison, not by anything here. So the fields the
+    # checker range-checks are guarded by accident and the ones it does
+    # not are guarded by nothing.
+    r"(?:NW_AT|NW_EXTENT|NW_TYPE|NW_ARR_TYPE)\s*\([^)]*\)\s*;"
     r"|^\s*_Static_assert\s*\(\s*sizeof\s*\(\s*struct\s+nw_\w+\s*\)[^;]*;"
     # AND THE SIZE MACRO ITSELF. nw_bind's size assert carries a literal
     # (== 130) so its size is hashed; nw_unit's reads == NW_UNIT_SIZE, a
@@ -3804,11 +4394,42 @@ LAYOUT_DECL = re.compile(
     # a field appended after _pad, the baker packing it, magic untouched,
     # and the ledger said `ok magic-moves-with-layout`. The blind spot was
     # exactly the trailing edge of the struct.
-    r"|^\s*#\s*define\s+NW_UNIT_SIZE\b.*$",
+    # AND NW_RES_SIZE, for the same reason one level down: the trailing
+    # edge again, reachable through a macro the trailing-edge fix itself
+    # introduced. The mutation is APPENDING A FIELD to struct nw_res and
+    # updating NW_RES_SIZE to match -- what a person adding a resource
+    # field does -- which moved the wire format while every other hashed
+    # line stayed byte-identical. Redefining the macro ALONE, which this
+    # comment claimed for one round, is three static-assert failures and
+    # compiles nothing. `claims` ran it.
+    r"|^\s*#\s*define\s+NW_(?:UNIT|RES)_SIZE\b.*$",
     re.M)
 
 
 UNIT_AT = re.compile(r"^\s*NW_AT\(nw_unit,\s*(\w+),\s*(\d+)\)\s*;", re.M)
+RES_AT = re.compile(r"^\s*NW_AT\(nw_res,\s*(\w+),\s*(\d+)\)\s*;", re.M)
+
+
+def res_layout():
+    """struct nw_res's member offsets, from blob.h's own NW_AT lines.
+
+    Separate from unit_layout() because UNIT_AT anchors on `nw_unit` and
+    a second struct's declarations are a second parse, not a wider
+    pattern: a regex matching both would key the two structs' members
+    into one dict, where `nw_res.cpu_mask` at 0 and `nw_unit.name` at 0
+    collide silently.
+
+    FROM THE STAGE, for the reason unit_layout() states at length."""
+    at = {m.group(1): int(m.group(2))
+          for m in RES_AT.finditer(
+              open(os.path.join(STAGE, "src", "blob.h")).read())}
+    for want in ("cpu_mask", "mem_high", "mem_max", "io_rbps", "io_wbps",
+                 "layer_bytes", "cpu_weight", "nice", "sched_policy"):
+        expect(want in at,
+               f"blob.h declares no NW_AT(nw_res, {want}, ...) -- the "
+               f"resource layout parse has stopped matching and the "
+               f"crafted cases below would be writing the wrong bytes")
+    return at
 
 
 def unit_layout():
@@ -3822,8 +4443,12 @@ def unit_layout():
     NEWNS" rather than as an offset error. Derived from the declarations
     the C compiler already checks, so the next field cannot be missed.
 
-    The size is offset(_pad) + 1 because _pad is the last member by
-    construction and blob.h asserts the struct is exactly NW_UNIT_SIZE."""
+    The size comes from NW_UNIT_SIZE; see the comment at the derivation
+    for why not from _pad. (This said "offset(_pad) + 1 because _pad is
+    the last member by construction" while the code ten lines below it
+    said that assumption is unpinned and had stopped using it --
+    corrected in one place and not the other, in the helper written to
+    retire a defect of that class.)"""
     # FROM THE STAGE, NOT THE SOURCE TREE -- the same rule blob_h() states
     # and for the same reason. The binaries under test were built from
     # {STAGE}/src/blob.h; reading ROOT/blob.h after a bare `make` gives
@@ -3855,6 +4480,18 @@ def unit_layout():
                           "matching")
     consts = {k: int(blob_h(k)) for k in
               ("NW_NAME_LEN", "NW_PATH_LEN", "NW_BRICK_HASH")}
+    # NW_UNIT_SIZE names NW_RES_SIZE, which is an EXPRESSION rather than
+    # a literal -- deliberately, because a literal there would be the
+    # hand-written second copy of the block's width. So it is resolved
+    # the same way NW_UNIT_SIZE is, one level down, rather than by
+    # blob_h() (which takes the third whitespace field and would return
+    # "(6").
+    rm = re.search(r"^\s*#\s*define\s+NW_RES_SIZE\s+\((.*)\)\s*$",
+                   src, re.M)
+    expect(rm is not None,
+           "blob.h has no NW_RES_SIZE as a parenthesised expression; "
+           "NW_UNIT_SIZE names it, so the size derivation cannot resolve")
+    consts["NW_RES_SIZE"] = eval(rm.group(1), {"__builtins__": {}}, {})
     at["_size"] = eval(m.group(1), {"__builtins__": {}}, consts)
     return at
 
@@ -3862,9 +4499,29 @@ def unit_layout():
 def _layout_signature():
     """A hash over blob.h's declared layout: every NW_AT / NW_EXTENT /
     NW_TYPE / NW_ARR_TYPE and every struct-size assert, whitespace
-    normalised and sorted. Comments and prose do not move it; an offset, a
-    width, a member type or a struct size does."""
-    src = open(os.path.join(ROOT, "blob.h")).read()
+    normalised and sorted. Comments and prose do not move it -- see the
+    blanking below, which is what makes that true; an offset, a width, a
+    member type or a struct size does."""
+    # COMMENTS AND STRING LITERALS BLANKED FIRST, and that is what makes
+    # the sentence above true rather than aspirational. LAYOUT_DECL's
+    # macro alternative is deliberately not ^-anchored -- blob.h writes
+    # two declarations per line and anchoring hid the second one on
+    # every such line -- and an unanchored pattern reads prose. Measured
+    # by `fd-auditor` on the tree that un-anchored it: adding the single
+    # comment line `/* e.g. NW_TYPE(nw_unit, kind, uint8_t); pins the
+    # kind byte's type. */` and changing nothing else moved the
+    # signature, and the failure told the reader to bump NW_MAGIC --
+    # producing exactly the version-bump-that-means-nothing the other
+    # half of this test exists to refuse.
+    #
+    # Blanking is structural rather than a check that prose did not
+    # contribute: the word-versus-symbol trap, answered the way
+    # CLAUDE.md says to answer it. strip_c_comments preserves line
+    # structure on every branch, so the two ^-anchored alternatives
+    # still match. It blanks string literals too, which means an edit to
+    # a _Static_assert's MESSAGE no longer demands a magic bump -- also
+    # prose, and also not a layout change.
+    src = strip_c_comments(open(os.path.join(ROOT, "blob.h")).read())
     decls = sorted(" ".join(m.group(0).split())
                    for m in LAYOUT_DECL.finditer(src))
     expect(len(decls) > 8,
@@ -5223,11 +5880,39 @@ def test_baker_writes_the_declared_layout():
     L = unit_layout()
     USZ = L["_size"]
     city = f"{WORK}/layout.city"
+    # THE RESOURCE BLOCK IS A SECOND, INDEPENDENT struct.pack, so it is
+    # the same exposure one level down and nothing else looks at it: the
+    # C asserts pin nw_res's members for the READER, and `pack_res` is
+    # what lands on disk. Swapping `io_rbps` and `io_wbps` there is legal
+    # in every direction -- both are u64, both unconstrained, no
+    # cross-field rule involves either -- so a plan capping reads at one
+    # rate and writes at another gets them the wrong way round, bakes
+    # clean, validates clean, and nothing but a byte position can see it.
+    # (mem_high/mem_max is the pair the checker would also catch, because
+    # one must be below the other. cpu_mask, io_rbps, io_wbps,
+    # layer_bytes, cpu_weight, nice and sched_policy have no such
+    # backstop: any permutation among same-width fields validates.)
+    #
+    # A DISTINCT VALUE FOR EVERY FIELD, so every permutation is
+    # separated rather than one representative swap. The first version wrote
+    # `cpus=0 mem-high=2 ... nice=8` and was NOT distinct: `cpus=0` bakes
+    # to mask 1 and `sched=other` bakes to 1, so that one pair was
+    # separated only by field width, which is a different argument from
+    # the one this comment makes. `claims` baked it and looked. The
+    # values are asserted distinct below rather than eyeballed, because
+    # that is the mistake a reader adding a field repeats.
     open(city, "w").write(
         # distinct trailer: kind=1 budget=2 lids=4
         f"house lay /bin/true kind=longrun budget=2 lids=newns\n"
         # swap-legal trailer: kind=1 budget=0 lids=1
-        f"house lay2 /bin/true kind=longrun budget=0 lids=seccomp\n")
+        f"house lay2 /bin/true kind=longrun budget=0 lids=seccomp\n"
+        # every resource field set, all distinct. layer-bytes= needs a
+        # layer, a layer needs a brick, and a brick needs newns -- so
+        # this house carries all three.
+        f"house lay3 /bin/true kind=oneshot lids=newns "
+        f"brick={'ab' * BRICK} layer=l-lay3 "
+        f"cpus=0,4 mem-high=1K mem-max=2K io-rbps=3K io-wbps=4K "
+        f"layer-bytes=5K cpu-weight=7 sched=other nice=8\n")
     blob = f"{WORK}/layout.blob"
     b = run(["python3", CC, "--city", city, "--out", blob])
     expect(b.returncode == 0, f"bake\n{b.out}{b.err}")
@@ -5265,6 +5950,45 @@ def test_baker_writes_the_declared_layout():
                f"{nm}: layer is not at offset {L['layer']}, or a blank "
                f"layer is not zero to the field width")
 
+    # THE RESOURCE BLOCK, field by field, at the offsets blob.h declares
+    # for struct nw_res -- and unpacked at each field's own declared
+    # WIDTH. Reading a u64 as a byte would agree with a baker that packed
+    # it as a byte, which is the drift this is here to catch.
+    R = HDR + 2 * USZ + L["res"]
+    rl = res_layout()
+    fmt = {"cpu_mask": "<Q", "mem_high": "<Q", "mem_max": "<Q",
+           "io_rbps": "<Q", "io_wbps": "<Q", "layer_bytes": "<Q",
+           "cpu_weight": "<H", "nice": "<b", "sched_policy": "<B"}
+    want_res = {"cpu_mask": 0b10001, "mem_high": 1024, "mem_max": 2048,
+                "io_rbps": 3072, "io_wbps": 4096, "layer_bytes": 5120,
+                "cpu_weight": 7, "nice": 8, "sched_policy": 1}
+    expect(len(set(want_res.values())) == len(want_res),
+           f"two fields in this fixture carry the same value "
+           f"({want_res}), so a swap between them is invisible here and "
+           f"the comment above is false. Pick distinct values.")
+    expect(set(want_res) == set(rl),
+           f"struct nw_res declares {sorted(rl)} and this test reads "
+           f"{sorted(want_res)}. A field added to the header and not here "
+           f"is a field the baker could put anywhere.")
+    got_res = {k: struct.unpack_from(fmt[k], d, R + rl[k])[0] for k in rl}
+    expect(got_res == want_res,
+           f"the baker did not write lay3's resource block where blob.h "
+           f"declares it.\n  blob.h says: {want_res}\n"
+           f"  baker wrote:  {got_res}\n"
+           f"This is a POSITION mismatch, not a validation failure: a plan "
+           f"capping read bandwidth and a house whose WRITES are capped "
+           f"instead bakes clean and validates clean, because no "
+           f"cross-field rule separates the two.")
+    # And the block must be ZERO for a house that declares nothing --
+    # asserted, not assumed, because "unset means unlimited, no defaults"
+    # is a claim about these bytes. Without it every assertion above is
+    # satisfied by a baker that also writes a default into lay and lay2.
+    for i, nm in ((0, "lay"), (1, "lay2")):
+        z = d[HDR + i * USZ + L["res"]:HDR + (i + 1) * USZ]
+        expect(set(z) == {0},
+               f"{nm} declares no resource key and the baker wrote "
+               f"{z.hex()}. A default is a limit nobody chose.")
+
     # Last, so a reorder is reported as a reorder rather than as whatever
     # the shuffled values happen to violate.
     r = run([f"{BIN}/nw-check", blob])
@@ -5273,8 +5997,9 @@ def test_baker_writes_the_declared_layout():
            f"they should be\n{r.out}{r.err}")
 
     print(f"ok baker-writes-declared-layout (name/exec_path/brick plus a "
-          f"distinct 1/2/4 trailer and a swap-legal 1/0/1 one, each byte "
-          f"read back at the offset blob.h declares)")
+          f"distinct 1/2/4 trailer and a swap-legal 1/0/1 one, and every "
+          f"field of struct nw_res at its own declared offset and width; "
+          f"the block zero for lay and lay2, which declare none)")
 
 
 def test_blob_size_ceiling():
@@ -6264,6 +6989,8 @@ def main():
         test_layer_survives_a_restart,
         test_many_brick_houses_all_start, test_brick_needs_newns,
         test_baker_refuses_bad_layers,
+        test_baker_refuses_bad_resources,
+        test_baker_constants_match_the_header,
         test_leading_zero_hash_is_a_brick,
         test_brick_hash_revalidated_at_the_supervisor,
         test_path_traversal_refused, test_dupname_refused,
@@ -6271,6 +6998,7 @@ def main():
         test_checker_rejects_crafted_fields,
         test_leading_zero_hash_reaches_the_supervisor,
         test_checker_rejects_crafted_binds,
+        test_checker_rejects_crafted_resources,
         test_magic_moves_with_the_layout,
         test_old_magic_is_refused_as_magic,
         test_candidate_stager_never_touches_the_live_slot,

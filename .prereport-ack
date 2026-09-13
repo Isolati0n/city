@@ -348,3 +348,27 @@ unpaired-absence	tests/run.py	expect(not os.path.exists(probe_no),
 # always answered 0 would satisfy them all -- the instrument has to be
 # shown seeing a difference before its zeroes mean anything.
 unpaired-absence	tests/run.py	expect(not bad,
+
+# --- 2026-09-13, the resource block. Each looked at; none is a fix. ---
+# a dated record of a closed episode: three fields is the number that WAS wrong, and the fix names all three
+prose-count	HISTORY.md	**One code for three fields, under a comment promising one per field.**
+# names the control's exact input on the next line; a measured one-line mutation, not a count of instances
+prose-count	HISTORY.md	the one line `/* e.g. NW_TYPE(nw_unit, kind, uint8_t); pins the kind
+# not a count: a requirement that the define stay on one line, enforced by unit_layout()'s single-line regex, which goes red if it does not
+prose-count	blob.h	/* ONE LINE, deliberately: tests/run.py derives the unit size by matching
+# not a count: a rule about how the codes are allocated. Being wrong here is visible in the enum three lines down
+prose-count	nwcheck.c	* ONE CODE PER FIELD, because a refusal naming "the resource
+# a property of blob.h's declaration style, checkable by looking at any NW_AT line, and the reason the pattern is un-anchored
+prose-count	plan-formats.txt	# `^\s*`, and blob.h writes two declarations per line -- `NW_AT(nw_unit,
+# describes a control that was run: one comment line added, nothing else changed. The input, not a tally
+prose-count	plan-formats.txt	# so one added comment line moved the signature and the failure told the
+# names both cases in the sentence before it (nice=-1@other and nice=1@other), which is the form CLAUDE.md permits
+prose-count	tests/run.py	# filename, so two distinct cases share one artifact. Harmless
+# same property of blob.h's style as the plan-formats.txt ack above
+prose-count	tests/run.py	# line's history. blob.h writes two declarations per line --
+# same property of blob.h's style as the plan-formats.txt ack above
+prose-count	tests/run.py	# two declarations per line and anchoring hid the second one on
+# a membership test inside a refusal, not an absence assertion: the branch it guards raises, and test_baker_refuses_bad_resources asserts the reason string for sched=fifo
+unpaired-absence	bakery/nw-cc.py	if v not in SCHED_NAMES:
+# paired in the same test, immediately above: the line is first asserted PRESENT and to name exactly ["bare0", "bare1"], so the mechanism is shown running before it is shown silent
+unpaired-absence	tests/run.py	expect("no resource block" not in (p.out + p.err),

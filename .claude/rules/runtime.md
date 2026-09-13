@@ -368,6 +368,47 @@ blocking drain in `shutdown_city` turns the second half red at 3.01s.
 **Reaping across restarts is no longer untested** — that entry was here
 as a gap, and the fixture it lacked is `houses/orphan.c`.
 
+## The resource block is in the plan and nothing applies it
+
+**Kind 3: a real rule with no subject in this territory yet.** As of
+2026-09-13 `struct nw_res` is a field of every unit — CPU affinity and
+share, a memory throttle and a memory backstop, read and write
+bandwidth, a layer capacity, scheduler policy and nice. The baker
+refuses a malformed block, `nwcheck.c` validates one independently, and
+`nw-sup` does not read the field at all: `grep -n "res\." nwsup.c`
+returns nothing.
+
+So a plan can declare a limit that no process enforces. That is a gap,
+not a lie, only because nothing in this tree says otherwise — and the
+moment `nwsup.c` grows the first write, the rule below becomes live and
+belongs in Hard rules rather than here.
+
+**The rule, proposed and not yet ratified: a resource limit is not
+advisory.** If a declared limit cannot be applied, the house does not
+start — `die()`, not a log line and a return, the same shape every lid
+path already has. A house running unbounded while the plan says it is
+bounded is invariant 6's "the plan lying", and it fails worse than a lid
+does: an uncapped house takes the machine down rather than itself. The
+cost is that a city which boots on one machine refuses to boot on a
+kernel without the controller, which is the intended reading and is the
+opposite of what a container runtime usually does.
+
+**THIS MACHINE CANNOT EXERCISE ANY OF IT**, so do not write a test here
+that reads green. cgroup v2 is mounted with `hugetlb` as its only
+controller — `cpu`, `memory` and `io` are on v1 hierarchies — and
+project quota is off on the root device (`quotactl` answers `ESRCH`).
+A test on such a machine takes the unavailable branch, which is
+`lid-landlock`'s entire life. `skip()` with a named reason, and put the
+guard in the helper the way `make_brick()` does, not at each call site.
+
+`tools/HANDOFF-resources.md` carries the fixture — the city, the file
+or syscall each field decides, and the probe that decides it — for
+whoever has the machine. The two memory numbers need different probes
+and that is the load-bearing part: `mem_high` must be shown NOT killing
+and `mem_max` must be shown killing, because a test that reads both
+files back is satisfied by a supervisor that writes them to a kernel
+that ignores them.
+
 ## Known open in this territory
 
 - **`closed … orphans=N` reports orphans REAPED, not orphans that

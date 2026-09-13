@@ -9,7 +9,9 @@
  "kernel": "6.18.44-fc-v24",
  "passed": [
   "bad-crc",
+  "baker-constants-match-the-header",
   "baker-refuses-bad-layers",
+  "baker-refuses-bad-resources",
   "baker-rejects",
   "baker-writes-the-declared-layout",
   "blob-size-ceiling",
@@ -23,6 +25,7 @@
   "candidate-stager-never-touches-the-live-slot",
   "checker-rejects-crafted-binds",
   "checker-rejects-crafted-fields",
+  "checker-rejects-crafted-resources",
   "coverage-accounting",
   "crash-does-not-halt",
   "dawn-real-boot",

@@ -21,9 +21,13 @@ from __future__ import annotations
 import argparse
 import hashlib
 import os
+import re
 import struct
 import sys
 import zlib
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import mkbrick                                             # noqa: E402
 
 NAME_LEN, PATH_LEN, BRICK_HASH = 32, 128, 32
 # Derived, the way blob.h derives NW_BRICK_HEX: the hex spelling is the same
@@ -40,6 +44,137 @@ LID_NAMES = {
     "none": 0, "seccomp": LID_SECCOMP, "landlock": LID_LANDLOCK,
     "newns": LID_NEWNS, "newnet": LID_NEWNET,
 }
+
+# The resource block. Every field UNSET by default: 0 means "no limit
+# declared", never a limit of zero. See struct nw_res in blob.h for why
+# there is no default and why nothing here is a machine property.
+# READ FROM blob.h, not spelled. Every one of these is quoted by the
+# checker or defines a byte the checker compares against, so a literal
+# here is the second copy of a limit that invariant 3 is about --
+# `drift` and `claims` have each caught a fresh one of those in this
+# tree already. `mkbrick._define` is the reader that exists; a fifth
+# copy of "parse a #define" would be the same defect one level down,
+# which is the argument its own docstring makes.
+#
+# THE SCHEDULER POLICIES WERE HAND-WRITTEN HERE for one round --
+# `SCHED_UNSET, SCHED_OTHER, SCHED_BATCH, SCHED_IDLE = 0, 1, 2, 3`,
+# directly under this comment. `tcb-review` swapped BATCH and IDLE in
+# blob.h alone and `make test` stayed green while a plan saying
+# `sched=batch` baked to the byte the TCB calls IDLE: bug 4/9/13's
+# silent-wrong-routing shape moved from a descriptor to a policy byte.
+# So they are read too, and there is no second table left to check.
+
+
+def _const(name):
+    """An INTEGER #define out of blob.h, resolving what C writes and
+    _define does not: a `u`/`U`/`l`/`L` suffix, a parenthesised negative,
+    and one level of alias (`NW_SCHED_MAX` is `NW_SCHED_IDLE`).
+
+    This is a hand-written reader for a corner of C's constant syntax and
+    that is a real cost -- tests/run.py solves the same problem by
+    COMPILING, which cannot be wrong, and the baker cannot because it
+    must run where no compiler does. What closes the gap is
+    test_baker_constants_match_the_header, which compares every value
+    this function returns against the compiler's answer. Widen this and
+    the test says so."""
+    raw = mkbrick._define(name)
+    seen = set()
+    while not re.fullmatch(r"\(?-?\d+\)?[uUlL]*", raw):
+        if raw in seen or not re.fullmatch(r"NW_\w+", raw):
+            raise SystemExit(
+                f"nw-cc: blob.h's {name} is {raw!r}, which this reader "
+                f"cannot resolve. It handles an integer, an optional "
+                f"suffix, a parenthesised negative and an alias chain, "
+                f"and nothing else -- deliberately, because guessing at "
+                f"more of C here is how the value and the header come "
+                f"to disagree quietly.")
+        seen.add(raw)
+        raw = mkbrick._define(raw)
+    return int(raw.rstrip("uUlL").strip("()"))
+
+
+def _bound(name):
+    return _const(name)
+
+
+CPU_WEIGHT_MIN = _const("NW_CPU_WEIGHT_MIN")
+CPU_WEIGHT_MAX = _const("NW_CPU_WEIGHT_MAX")
+NICE_MIN = _const("NW_NICE_MIN")
+NICE_MAX = _const("NW_NICE_MAX")
+SCHED_UNSET = _const("NW_SCHED_UNSET")
+SCHED_OTHER = _const("NW_SCHED_OTHER")
+SCHED_BATCH = _const("NW_SCHED_BATCH")
+SCHED_IDLE = _const("NW_SCHED_IDLE")
+SCHED_NAMES = {"other": SCHED_OTHER, "batch": SCHED_BATCH, "idle": SCHED_IDLE}
+# cpu_mask is a uint64, so a CPU index is bounded by its width rather than
+# by a number anybody picked. The baker names the bound when it refuses.
+CPU_INDEX_MAX = 63
+RES_FIELDS = ("cpu_mask", "mem_high", "mem_max", "io_rbps", "io_wbps",
+              "layer_bytes", "cpu_weight", "nice", "sched_policy")
+
+
+def empty_res():
+    return dict.fromkeys(RES_FIELDS, 0)
+
+
+def pack_res(r):
+    """Must match struct nw_res in blob.h: six u64, one u16, i8, u8."""
+    return struct.pack("<QQQQQQHbB",
+                       r["cpu_mask"], r["mem_high"], r["mem_max"],
+                       r["io_rbps"], r["io_wbps"], r["layer_bytes"],
+                       r["cpu_weight"], r["nice"], r["sched_policy"])
+
+
+def parse_bytes(v, what):
+    """A size with an optional K/M/G/T suffix, binary rather than decimal.
+
+    Spelled out because a resource limit written as 2000000000 and meant
+    as 2G is the kind of number nobody re-reads."""
+    mult, digits = 1, v
+    if v and v[-1].upper() in "KMGT":
+        mult = {"K": 1 << 10, "M": 1 << 20,
+                "G": 1 << 30, "T": 1 << 40}[v[-1].upper()]
+        digits = v[:-1]
+    if not digits.isdigit():
+        raise SystemExit(
+            f"{what}={v}: a size in bytes, optionally suffixed K, M, G or "
+            f"T (binary). 0 is not 'unlimited' -- omit the key for that.")
+    n = int(digits) * mult
+    if n == 0:
+        raise SystemExit(
+            f"{what}=0: zero is not how a limit is removed, because 0 is "
+            f"the byte an unset field already holds and the two would be "
+            f"indistinguishable in the blob. Omit {what}= instead.")
+    return n
+
+
+def parse_cpus(v):
+    """`0,2-3` -> a mask. Indices, bounded by the mask's width."""
+    mask = 0
+    for part in v.split(","):
+        part = part.strip()
+        lo, _, hi = part.partition("-")
+        try:
+            lo_i = int(lo)
+            hi_i = int(hi) if hi else lo_i
+        except ValueError:
+            raise SystemExit(
+                f"cpus={v}: a comma-separated list of indices and ranges, "
+                f"like 0,2-3")
+        if lo_i > hi_i:
+            raise SystemExit(f"cpus={v}: range {part} runs backwards")
+        for i in range(lo_i, hi_i + 1):
+            if not 0 <= i <= CPU_INDEX_MAX:
+                raise SystemExit(
+                    f"cpus={v}: CPU {i} is outside 0..{CPU_INDEX_MAX}. The "
+                    f"bound is the width of cpu_mask in struct nw_res, not "
+                    f"a number chosen here.")
+            mask |= 1 << i
+    if mask == 0:
+        raise SystemExit(
+            f"cpus={v}: names no CPU, and an empty mask is the value an "
+            f"unset field already holds. Omit cpus= for all CPUs.")
+    return mask
 
 
 def pad(s: str, n: int) -> bytes:
@@ -161,6 +296,47 @@ def check(houses, binds):
                 f"sharing one means both append to the same files, and the "
                 f"kernel calls a shared overlay workdir undefined behaviour.")
         seen[h["layer"]] = h["name"]
+    # THE RESOURCE BLOCK'S CROSS-FIELD RULES. Each is a pair that means
+    # something different together than either does alone, which is the
+    # same argument as brick=/layer= and is why they are structural
+    # rather than left to whoever reads the plan.
+    for h in houses:
+        r = h["res"]
+        # A throttle above its backstop is a throttle that can never
+        # fire: memory.high slows a house down so an operator does not
+        # lose work, memory.max kills it. Declaring high >= max asks for
+        # the kill without the warning, which is almost certainly the
+        # two numbers the wrong way round.
+        if r["mem_high"] and r["mem_max"] and r["mem_high"] >= r["mem_max"]:
+            raise SystemExit(
+                f"house {h['name']}: mem-high={r['mem_high']} is not below "
+                f"mem-max={r['mem_max']}. The throttle exists to fire "
+                f"BEFORE the backstop; at or above it the house is killed "
+                f"with no warning pass, which is what omitting mem-high "
+                f"would have given you anyway.")
+        # nice only means anything under SCHED_OTHER, so it requires a
+        # DECLARED one. Not merely "not batch and not idle": with no
+        # policy declared the house keeps whatever it inherits, and
+        # nothing at bake time knows what that is -- so a nice under an
+        # undeclared policy is a number that may or may not be
+        # discarded, which is the plan lying with a coin toss in it.
+        if r["nice"] and r["sched_policy"] != SCHED_OTHER:
+            name = ([k for k, v in SCHED_NAMES.items()
+                     if v == r["sched_policy"]] or ["(none declared)"])[0]
+            raise SystemExit(
+                f"house {h['name']}: nice={r['nice']} with sched={name}. "
+                f"nice means nothing outside SCHED_OTHER, so declare "
+                f"sched=other beside it or drop the nice. With no sched= "
+                f"the house keeps the policy it inherits and nothing "
+                f"here knows which that is.")
+        # A layer capacity with no layer bounds nothing.
+        if r["layer_bytes"] and not h["layer"]:
+            raise SystemExit(
+                f"house {h['name']}: layer-bytes= without layer=. There is "
+                f"no writable area to bound -- a house with no layer keeps "
+                f"nothing across a restart, so a capacity for it names "
+                f"nothing.")
+
     for unit, path in binds:
         if not path_clean(path):
             raise SystemExit(
@@ -182,12 +358,13 @@ def bake(path, houses):
         # kind (the byte that was "critical" until 2026-09-10), then _pad,
         # which must stay zero -- nwcheck.c rejects a nonzero spare.
         unit += struct.pack("<BBBB", h["kind"], h["budget"], h["lids"], 0)
+        unit += pack_res(h["res"])
     table = b""
     for u, p in binds:
         table += struct.pack("<H", u) + pad(p, PATH_LEN)
     # Must equal NW_MAGIC in blob.h. tests/run.py asserts that agreement;
     # the version moves when the layout moves -- see the comment there.
-    prefix = b"NWPLAN08" + struct.pack("<II", len(houses), len(binds))
+    prefix = b"NWPLAN09" + struct.pack("<II", len(houses), len(binds))
     crc = zlib.crc32(prefix + struct.pack("<I", 0) + unit + table) & 0xFFFFFFFF
     blob = prefix + struct.pack("<I", crc) + unit + table
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
@@ -218,6 +395,14 @@ def bake(path, houses):
                 for h in houses if h["layer"]))
     print(f"wrote {path} units={len(houses)} binds={len(binds)} "
           f"crc=0x{crc:08x} bytes={len(blob)} sha256={digest}")
+    # WHICH HOUSES HAVE NO BLOCK, NAMED. The absence has to be visible
+    # without inventing a number to make it visible -- a default would
+    # be a limit nobody chose, failing in the direction hardest to
+    # diagnose. Named rather than counted: a count here would be a claim
+    # about how hard the baker looked.
+    unbounded = [h["name"] for h in houses if h["res"] == empty_res()]
+    if unbounded:
+        print(f"  no resource block: {' '.join(unbounded)}")
 
 
 def _is_layer_id(v):
@@ -249,9 +434,11 @@ def _is_hex64(v):
             and all(c in "0123456789abcdef" for c in v))
 
 
-def house(name, exe, kind, budget, lids, brick="", binds=(), layer=""):
+def house(name, exe, kind, budget, lids, brick="", binds=(), layer="",
+          res=None):
     return {"name": name, "exec": exe, "kind": kind, "budget": budget,
             "lids": lids, "brick": brick, "layer": layer,
+            "res": res if res is not None else empty_res(),
             "binds": list(binds)}
 
 
@@ -288,6 +475,7 @@ def load_city(path: str):
             lids = None
             kind = None
             brick, layer, binds = "", "", []
+            res = empty_res()
             for kv in parts[3:]:
                 k, _, v = kv.partition("=")
                 if k == "critical":
@@ -315,6 +503,46 @@ def load_city(path: str):
                     layer = v
                 elif k == "bind":
                     binds.append(v)
+                elif k == "cpus":
+                    res["cpu_mask"] = parse_cpus(v)
+                elif k == "cpu-weight":
+                    n = int(v) if v.isdigit() else -1
+                    if not CPU_WEIGHT_MIN <= n <= CPU_WEIGHT_MAX:
+                        raise SystemExit(
+                            f"house {name}: cpu-weight={v} must be "
+                            f"{CPU_WEIGHT_MIN}..{CPU_WEIGHT_MAX}, which is "
+                            f"cgroup v2's own range for cpu.weight. Omit the "
+                            f"key for the default share.")
+                    res["cpu_weight"] = n
+                elif k == "mem-high":
+                    res["mem_high"] = parse_bytes(v, "mem-high")
+                elif k == "mem-max":
+                    res["mem_max"] = parse_bytes(v, "mem-max")
+                elif k == "io-rbps":
+                    res["io_rbps"] = parse_bytes(v, "io-rbps")
+                elif k == "io-wbps":
+                    res["io_wbps"] = parse_bytes(v, "io-wbps")
+                elif k == "layer-bytes":
+                    res["layer_bytes"] = parse_bytes(v, "layer-bytes")
+                elif k == "sched":
+                    if v not in SCHED_NAMES:
+                        raise SystemExit(
+                            f"house {name}: sched={v} must be one of "
+                            f"{', '.join(sorted(SCHED_NAMES))}. Omit the key "
+                            f"to inherit nw-sup's policy -- which is not the "
+                            f"same as choosing `other` on the house's "
+                            f"behalf.")
+                    res["sched_policy"] = SCHED_NAMES[v]
+                elif k == "nice":
+                    try:
+                        n = int(v)
+                    except ValueError:
+                        n = NICE_MIN - 1
+                    if not NICE_MIN <= n <= NICE_MAX:
+                        raise SystemExit(
+                            f"house {name}: nice={v} must be "
+                            f"{NICE_MIN}..{NICE_MAX}")
+                    res["nice"] = n
                 elif k == "kind":
                     if v not in KINDS:
                         raise SystemExit(
@@ -379,7 +607,7 @@ def load_city(path: str):
                     f"house {name}: exec path must be absolute inside the "
                     "brick")
             houses.append(house(name, exe, kind, budget, lids,
-                                brick, binds, layer))
+                                brick, binds, layer, res))
         else:
             raise SystemExit(f"bad city line: {line}")
     return houses

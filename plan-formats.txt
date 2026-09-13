@@ -8,8 +8,9 @@
 # person is already editing and the obvious fix is to make it agree.
 # A row that is already written down cannot be satisfied that way.
 #
-# Rows before 
-
+# (A dangling "Rows before " fragment stood here, saying nothing. A
+# sentence that is wrong gets deleted rather than reworded; one that
+# never finished says even less.)
 # THE SIGNATURE FUNCTION CHANGED ON 2026-09-12 AND BOTH ROWS WERE
 # RE-DERIVED. It hashed the NW_AT / NW_EXTENT / NW_TYPE / NW_ARR_TYPE
 # lines and the struct-size asserts -- and nw_unit's size assert reads
@@ -26,6 +27,41 @@
 # hash function itself changes is maintenance, and it is mechanical and
 # repeatable from the commits. If you change the function again, do the
 # same thing and say so here.
+#
+# IT CHANGED AGAIN ON 2026-09-13 AND ALL ROWS WERE RE-DERIVED, for the
+# same class of reason one level along. The pattern was anchored with
+# `^\s*`, and blob.h writes two declarations per line -- `NW_AT(nw_unit,
+# kind, 224);  NW_TYPE(nw_unit, kind, uint8_t);` -- so the SECOND on
+# every such line was never hashed. Measured: 35 hashed, 53 present, and
+# the 24 missed were every NW_TYPE in the file. NW_TYPE is precisely the
+# declaration carrying a same-bytes RETYPE, which is what this ledger's
+# test says it exists to catch: `io_rbps` from uint64_t to int64_t, in
+# the struct and in its own NW_TYPE, left every hashed line identical
+# and the suite printed ok. Un-anchored now.
+#
+# AND THE UN-ANCHORING READ PROSE, which is the second half of the same
+# change. An unanchored pattern matches `NW_TYPE(...)` inside a comment,
+# so one added comment line moved the signature and the failure told the
+# reader to bump NW_MAGIC -- the version-bump-that-means-nothing this
+# file's own test refuses, produced by the fix for a different hole in
+# it. `fd-auditor`. Comments and string literals are blanked before
+# matching now, so prose is structurally unable to contribute rather
+# than checked for; blanking the literals also means editing a
+# _Static_assert's MESSAGE no longer demands a bump.
+#
+# Re-derived, as before, from the tree that DEFINED each magic:
+# NWPLAN07 from `git show 678f1bd:blob.h`, NWPLAN08 from `git show
+# 33cf074:blob.h`, NWPLAN09 from the current one.
+#
+# WHY ALL OF THEM AND NOT JUST THE NEW ONE. The old rows are hashes
+# under the old function; leaving them makes the test's SECOND
+# direction -- a magic that is a pure rename of a layout already in
+# this file -- silently dead, because the current signature can no
+# longer match any historical row. `drift` demonstrated it: rename
+# NWPLAN08 to NWPLAN10 with the layout untouched, append the row the
+# failure message tells you to, and the suite says ok. At 33cf074 the
+# same rename says "NWPLAN10 IS A NEW NAME FOR THE NWPLAN08 LAYOUT."
 
-NWPLAN07 38cc48d25bec1fb98d3f053d7fdb61d07ca0176292e285f047bc74939c4e142c
-NWPLAN08 cd53343f62ec118f3d0f3202f3204851b76c1c2dbcfae77f1669a424b720abca
+NWPLAN07 8d57e0c2b815883966187acd732579e2be2d5fa435824124cb384f728d75c741
+NWPLAN08 f85db3dd6c8aec3e53007b9980af33525ca55ae6cc5806e4fce6e4e852aaa89d
+NWPLAN09 dca20164a04adbc87f36184ee5cb23e4d04ce8cbfb005089766146b422ddd728

@@ -181,6 +181,105 @@ The boundary that does matter here is not between files, it is **trust**:
   above is — self-diagnosing, but only if you know to read past the
   wrapper. `claims`.
 
+- **The resource block: unset is zero, and zero is never a limit.** Every
+  field of `struct nw_res` is 0 when the plan declares nothing, and 0
+  means *no limit declared* rather than a limit of zero. A default would
+  be a number nobody chose, failing in the direction hardest to
+  diagnose, so there are none — and the absence is made visible instead:
+  the baker prints `no resource block: <names>` for every house that
+  declares nothing, **named rather than counted**.
+
+  **The consequence is that a declared zero cannot be represented, so it
+  is refused — at BAKE TIME ONLY, and there is deliberately no error
+  code for it.** `cpu-weight=0` and an omitted `cpu-weight` are the same
+  byte, so `nwcheck.c` has no subject: a code for it would be
+  unreachable, which is the characteristic failure wearing an enum. The
+  same structural argument as `lids=` two bullets up, and `blob.h` says
+  so where the code would have gone. `test_baker_refuses_bad_resources`
+  is the only thing covering that class, along with every fault that
+  never becomes bytes at all — `cpus=3-1`, `mem-high=2X`, `sched=fifo`.
+
+- **Every number in the block is a property of the PLAN, and that is
+  structural rather than labelled.** A blob has carried no
+  machine-derived number since it existed — no `getrlimit`, no device
+  number, no CPU count — so there is nothing to label and no labelling
+  path that could diverge from the measuring path. **A field saying
+  "plan" beside a value computed from a machine is worse than no field,
+  because it reads as verification.**
+
+  Two consequences, both visible in what the block does NOT carry:
+  `io.max` is keyed by device major:minor in cgroup v2 and a device
+  number is a machine property, so the block carries the *rate* and
+  resolving the device belongs to whatever applies it, on the machine it
+  applies it to; and `cpu_mask` names indices that mean different things
+  on different machines, but it is declared policy rather than a number
+  obtained from one.
+
+  **What happens to a mask naming a CPU the machine lacks is undecided,
+  and nothing refuses it today** — `cpus=63` on a four-CPU machine bakes
+  clean and validates clean, because the plan language bounds a CPU
+  index by `cpu_mask`'s width and by nothing else. This bullet asserted
+  a refusal for one round; `claims` ran it. The choice belongs with the
+  code that applies the block, and `tools/HANDOFF-resources.md` puts it
+  there.
+
+  **Test the rule when the next field lands**: ask how the value was
+  OBTAINED, not what it is called. That is the whole of it.
+
+- **The cross-field rules are in both places, like every other pair.**
+  `mem_high` below `mem_max` (`NW_E_MEMORDER`), `nice` only under
+  `NW_SCHED_OTHER` or no declared policy (`NW_E_NICEPOL`), a layer
+  capacity only with a layer (`NW_E_CAPNOLAYER`) — each refused by the
+  baker and independently by `nwcheck.c`, because every one of these
+  numbers is destined for a cgroup file or a scheduler call, whatever
+  ends up writing it will not re-derive it, and a blob can arrive from
+  anywhere. **Nothing writes them yet** — `grep -n "res\." nwsup.c`
+  returns nothing, and `.claude/rules/runtime.md` carries that as kind
+  3. The rule is about where a check belongs, not about a reader that
+  exists; stating it the other way round was a kind-3 sentence written
+  as kind 1, in three files at once. `claims`.
+
+  **`mem_high == mem_max` is the case to keep.** A throttle at its
+  backstop can never fire, so the plan declares a warning pass the house
+  does not get — which is exactly what omitting `mem-high` would have
+  given. It is the one a `>` instead of a `>=` lets through, and it is
+  almost always the two numbers written the wrong way round.
+
+  **A capacity depends on a lid, transitively, and nothing states it
+  directly.** `layer-bytes=` requires `layer=`, which requires `brick=`,
+  which requires `lids=...,newns`. Three rules in a chain, each pinned
+  on its own; the chain is not. Stated here rather than added as a
+  fourth check, because a direct rule would be a second statement of
+  something already enforced and would go stale the day one link moves.
+  It is not annotated either: `make checkbrief` reads `CLAUDE.md` and
+  only its numbered invariants, so an annotation here would be a
+  mechanism that never fires — which reads as working, and is the thing
+  this project pays for most often.
+
+- **The block is FLAT and it is a BLOCK, and both halves are for the
+  same future.** Loose fields on `struct nw_unit` would make a group
+  level a layout migration; a nested block would make it a reshape. As
+  one flat block, a group level is a table of groups plus a group id
+  *in this block* — units do not move and the plan is not reshaped.
+  Adding a level later must be adding a level, not rewriting the plan.
+
+- **`bakery/nw-cc.py` reads the block's bounds out of `blob.h`** through
+  `mkbrick._define`, rather than spelling `10000` and `-20` a second
+  time. That is the drift class of invariant 3 one level down, and it is
+  removed rather than checked — `nwcheck.c` and the baker quote one
+  source. Do not add a literal beside them.
+
+  The *offsets* are a different story and still a genuine second copy:
+  `pack_res`'s `struct.pack` format decides what lands on disk and
+  `blob.h`'s `NW_AT(nw_res, ...)` lines only pin the reader.
+  `test_baker_writes_the_declared_layout` reads every field back at its
+  declared offset **and its declared width** on a house whose values are
+  all distinct. The mutation that needs it: swapping `io_rbps` and
+  `io_wbps` in the baker alone is legal in every direction — both u64,
+  both unconstrained, no cross-field rule touches either — so a plan
+  capping reads gets its writes capped instead, bakes clean, validates
+  clean, and nothing but a byte position can see it.
+
 - **Check the struct sizes, do not eyeball them.** The Python
   `struct.pack` format and the C struct must agree. Take the format from
   `bake()` in the baker, run `struct.calcsize` on it, and compare against

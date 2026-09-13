@@ -21,7 +21,7 @@ ASSUME /\ MaxUnits \in Nat \ {0}
        /\ Reserved \in Nat
        /\ MaxBinds \in Nat
 
-VARIABLES n, kind, lids, brick, layer, binds
+VARIABLES n, kind, lids, brick, layer, binds, capacity
 N == n
 
 (* `Houses == 1..N` stood above the declaration of N until 2026-09-11.
@@ -107,6 +107,43 @@ LandlockNeedsBrick ==
 BindsNeedBrick ==
   \A i \in 1..n : binds[i] # {} => brick[i] # ""
 
+(* A declared capacity bounds the writable layer, so one without a layer
+   names nothing. nwcheck.c returns NW_E_CAPNOLAYER.
+
+   THE ONLY FIELD OF struct nw_res MODELLED HERE, and the rest of the
+   block is deliberately absent rather than accidentally missing. Of the
+   fields not modelled, cpu_weight, sched_policy and nice are range
+   checks against the kernel's own bounds -- arithmetic against
+   constants this file does not carry, so adding them means a second
+   copy of each bound, which is invariant 3's drift class for the sake
+   of a conjunct nothing exercises. mem_high and mem_max have an
+   ORDERING rule and no range; cpu_mask, io_rbps and io_wbps are
+   unchecked entirely, because every 64-bit value of a mask, a byte
+   count or a rate is a legal declaration and there is no bound to
+   quote. (This said "the other eight fields are range checks", which
+   is true of three of them. `claims`.) All of it is pinned in both
+   directions by test_checker_rejects_crafted_resources -- NOT by
+   test_checker_rejects_crafted_fields, which this comment named for a
+   round and which crafts nothing in the block.
+
+   NOT STATE-CHECKED, like the acceptance rules above it, and for
+   the reason stated there rather than a different one: Init would have
+   to generate the illegal combination for the predicate to have anything
+   to say, and an Init that generates only legal plans makes the
+   invariant circular -- it would assert that plans built to satisfy it
+   satisfy it. A must-fail probe against such an invariant breaks Init,
+   not the predicate, so it certifies the predicate's NAME. That is the
+   defect `control` found in LargestCityFits' old probe, arriving from
+   the model side.
+
+   An Init RANGING over capacity and layer was written first and is not
+   the answer either: it makes the honest run fail, because the illegal
+   combination is exactly what ranging produces. Recorded because it is
+   the obvious move and it is wrong in the direction that looks like
+   rigour. *)
+CapacityNeedsLayer ==
+  \A i \in 1..n : capacity[i] # 0 => layer[i] # ""
+
 (* ---------------------------------------------------------------------
    WHAT TLC ACTUALLY CHECKS, added 2026-09-11 when the jar landed.
 
@@ -135,11 +172,16 @@ BindsNeedBrick ==
    budget must cover the largest legal city. It is the predicate that
    fails if someone raises NW_MAX_UNITS without raising NW_MAX_FDS.
 
-   The other definitions above (BrickNeedsNewNS, LandlockNeedsBrick,
-   BindsNeedBrick) are NOT state-checked: they are acceptance rules that
-   a generated plan would satisfy by construction, so checking them here
-   would be circular. They are enforced in nwcheck.c and pinned by
-   test_checker_rejects_crafted_fields. Stated so nobody reads this
+   The other definitions above (BrickNeedsNewNS, LayerPairsWithBrick,
+   LandlockNeedsBrick, BindsNeedBrick, CapacityNeedsLayer) are NOT
+   state-checked: they are acceptance rules that a generated plan would
+   satisfy by construction, so checking them here would be circular. They
+   are enforced in nwcheck.c and pinned by
+   test_checker_rejects_crafted_fields -- except CapacityNeedsLayer,
+   whose pin is test_checker_rejects_crafted_resources. That sentence
+   was correct for the four older rules and was extended to a fifth
+   without re-checking which test covers it, which is the
+   survived-by-being-moved shape. `claims`. Stated so nobody reads this
    model as covering more than it does. *)
 
 Init ==
@@ -149,8 +191,9 @@ Init ==
   /\ brick = [i \in 1..n |-> ""]
   /\ layer = [i \in 1..n |-> ""]
   /\ binds = [i \in 1..n |-> {}]
+  /\ capacity = [i \in 1..n |-> 0]
 
-Next == UNCHANGED <<n, kind, lids, brick, layer, binds>>
+Next == UNCHANGED <<n, kind, lids, brick, layer, binds, capacity>>
 
 FdBudgetCovers == FdNeed <= MaxFds
 

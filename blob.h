@@ -17,7 +17,7 @@
  * a rule for whoever changes the layout, not something the code enforces.
  * The asserts below say so in every message they print, because that is
  * the one moment a reader is guaranteed to be looking. */
-#define NW_MAGIC        "NWPLAN08"
+#define NW_MAGIC        "NWPLAN09"
 #define NW_NAME_LEN     32
 #define NW_PATH_LEN     128
 /* PHASE 3: THE PLAN CARRIES A HASH, NOT A PATH. `brick` is 32 raw bytes of
@@ -166,6 +166,92 @@ _Static_assert((NW_DUP_SLOTS & (NW_DUP_SLOTS - 1)) == 0,
 #define NW_LID_NEWNS     0x04u
 #define NW_LID_NEWNET    0x08u
 
+/* Scheduler policy for a house. 0 is UNSET, and it means NO POLICY IS
+ * DECLARED -- the house keeps whatever it inherits. That is deliberately
+ * not a promise about which policy that is: nothing here knows what
+ * nw-sup was started under, and a comment saying "SCHED_OTHER" would be
+ * a claim about a machine written into a file that carries only
+ * properties of the plan.
+ *
+ * The consequence is NW_E_NICEPOL's shape. `nice` is meaningful only
+ * under SCHED_OTHER, so it requires a DECLARED sched=other rather than
+ * merely not-BATCH-and-not-IDLE: under an undeclared policy nobody here
+ * can say whether the kernel would keep the number or discard it, and a
+ * rule enforced against an assumption the header refuses to make is not
+ * a rule. `tcb-review` found the exemption and the contradiction that
+ * made it unsafe, in the same diff. */
+#define NW_SCHED_UNSET   0u
+#define NW_SCHED_OTHER   1u
+#define NW_SCHED_BATCH   2u
+#define NW_SCHED_IDLE    3u
+#define NW_SCHED_MAX     NW_SCHED_IDLE
+
+/* cgroup v2's own range for cpu.weight and the kernel's for nice. Named
+ * here so the checker and the baker are quoting the same bound rather
+ * than each spelling a literal -- the drift class invariant 3 is about,
+ * one level down from a limit.
+ *
+ * NW_CPU_WEIGHT_MIN'S ONLY READER IS THE BAKER, and that is not an
+ * oversight. 0 is unset, so the checker's `> MAX` already accepts
+ * exactly {0} union [MIN, MAX] while MIN is 1; a floor test there
+ * would be a branch nothing can enter, which is the unreachable-code
+ * shape NW_E_RESZERO was removed for. It becomes the checker's the day
+ * the floor moves off 1, and not before. `tcb-review` found the
+ * comment claiming all four bounds were quoted by the checker. */
+#define NW_CPU_WEIGHT_MIN 1
+#define NW_CPU_WEIGHT_MAX 10000
+#define NW_NICE_MIN      (-20)
+#define NW_NICE_MAX      19
+
+/* THE RESOURCE BLOCK. One per house, flat, and every field UNSET by
+ * default -- 0 means "no limit declared", never a limit of zero. A
+ * default here would be a number nobody chose, failing in the direction
+ * hardest to diagnose; the baker reports which houses have no block
+ * instead, so the absence is visible without inventing a value.
+ *
+ * A BLOCK RATHER THAN LOOSE FIELDS, and flat rather than nestable. When
+ * a group level lands it is a table of groups plus a group id in this
+ * block: units do not move and the plan is not reshaped. Loose fields in
+ * nw_unit would have made that a layout migration instead.
+ *
+ * EVERY NUMBER HERE IS A PROPERTY OF THE PLAN, never of a machine, and
+ * that is structural rather than labelled. A blob has carried no
+ * machine-derived number since it existed -- no getrlimit, no device
+ * number, no CPU count -- so there is nothing to label and no labelling
+ * path that can diverge from the measuring path. A field saying "plan"
+ * beside a value computed from the machine is worse than no field,
+ * because it reads as verification.
+ *
+ * Two consequences of that rule, both visible in what is NOT here:
+ *
+ *   - io.max is keyed by device major:minor in cgroup v2, and a device
+ *     number is a machine property. The block carries the RATE only.
+ *     Resolving the device is a job for whatever applies the block,
+ *     on the machine it applies it to; nothing does yet.
+ *   - `cpu_mask` names CPU indices, which mean different things on
+ *     different machines -- but it is DECLARED policy rather than a
+ *     number obtained from a machine, which is the distinction the rule
+ *     draws.
+ *
+ * WHAT HAPPENS TO A MASK NAMING A CPU THE MACHINE LACKS IS UNDECIDED,
+ * and this comment asserted a refusal for one round. Nothing refuses
+ * it: `cpus=63` on a four-CPU machine bakes clean and validates clean,
+ * because the bound is the mask's own width and there is no runtime to
+ * ask. `claims` ran it. The choice -- refuse, or narrow to what exists
+ * -- belongs with the code that applies the block, and
+ * tools/HANDOFF-resources.md is where it is put. */
+struct nw_res {
+    uint64_t cpu_mask;     /* bit i = CPU i; 0 = unset, meaning all */
+    uint64_t mem_high;     /* memory.high, bytes: throttle; 0 = unset */
+    uint64_t mem_max;      /* memory.max,  bytes: backstop; 0 = unset */
+    uint64_t io_rbps;      /* read  bytes/sec; 0 = unset */
+    uint64_t io_wbps;      /* write bytes/sec; 0 = unset */
+    uint64_t layer_bytes;  /* capacity of the writable layer; 0 = unset */
+    uint16_t cpu_weight;   /* cgroup v2 cpu.weight, 1..10000; 0 = unset */
+    int8_t   nice;         /* -20..19, and only under NW_SCHED_OTHER */
+    uint8_t  sched_policy; /* NW_SCHED_*; NW_SCHED_UNSET = unset */
+} __attribute__((packed));
+
 struct nw_unit {
     char     name[NW_NAME_LEN];
     char     exec_path[NW_PATH_LEN];   /* resolved inside the brick, if any */
@@ -175,6 +261,7 @@ struct nw_unit {
     uint8_t  budget;     /* deaths for the life of nw-sup; 0 = no restart */
     uint8_t  lids;
     uint8_t  _pad;       /* must stay zero; nwcheck rejects a dirty spare */
+    struct nw_res res;   /* every field unset = unlimited; see nw_res */
 } __attribute__((packed));
 
 /* A path made visible inside a house's brick before it pivots. Bind mounts of
@@ -276,7 +363,20 @@ struct nw_hdr {
     _Static_assert(_Generic(&((struct s *)0)->m, t (*)[n]: 1, default: 0), \
                    #s "." #m " retyped: same bytes, different meaning, " \
                    "bump NW_MAGIC")
-#define NW_UNIT_SIZE (NW_NAME_LEN + NW_PATH_LEN + NW_BRICK_HASH + NW_NAME_LEN + 4)
+/* Hand-written from the field widths, NOT sizeof(struct nw_res) -- that
+ * would fold the proof into an identity, which is the shape HISTORY 53
+ * records a fix doing to a CBMC harness. Six 64-bit fields, one 16-bit
+ * and two 8-bit. */
+#define NW_RES_SIZE  (6 * 8 + 2 + 1 + 1)
+_Static_assert(sizeof(struct nw_res) == NW_RES_SIZE,
+               "resource block size drifted: a field was added, removed "
+               "or resized, bump NW_MAGIC");
+/* ONE LINE, deliberately: tests/run.py derives the unit size by matching
+ * this define as a parenthesised expression and evaluating it, which a
+ * backslash continuation defeats -- and it degraded as "blob.h has no
+ * NW_UNIT_SIZE as a parenthesised expression", which is at least the
+ * error naming its own cause. */
+#define NW_UNIT_SIZE (NW_NAME_LEN + NW_PATH_LEN + NW_BRICK_HASH + NW_NAME_LEN + 4 + NW_RES_SIZE)
 _Static_assert(sizeof(struct nw_unit) == NW_UNIT_SIZE,
                "unit size drifted: a field was added, removed or resized");
 NW_AT(nw_unit, name,      0);    NW_EXTENT(nw_unit, name,      NW_NAME_LEN);
@@ -287,6 +387,24 @@ NW_AT(nw_unit, kind,      224);  NW_TYPE(nw_unit, kind,   uint8_t);
 NW_AT(nw_unit, budget,    225);  NW_TYPE(nw_unit, budget, uint8_t);
 NW_AT(nw_unit, lids,      226);  NW_TYPE(nw_unit, lids,   uint8_t);
 NW_AT(nw_unit, _pad,      227);  NW_TYPE(nw_unit, _pad,   uint8_t);
+NW_AT(nw_unit, res,       228);  NW_EXTENT(nw_unit, res,  NW_RES_SIZE);
+
+/* The block's own members, for the same reason the unit's are here: an
+ * offset pins where a member STARTS and what the struct TOTALS, and a
+ * retype inside a fixed-size block moves neither. Swapping mem_high and
+ * mem_max is the mutation this catches and the size assert does not --
+ * a plan declaring a throttle would get a backstop and vice versa, which
+ * is the difference between a house being slowed and a house being
+ * killed. */
+NW_AT(nw_res, cpu_mask,     0);  NW_TYPE(nw_res, cpu_mask,     uint64_t);
+NW_AT(nw_res, mem_high,     8);  NW_TYPE(nw_res, mem_high,     uint64_t);
+NW_AT(nw_res, mem_max,     16);  NW_TYPE(nw_res, mem_max,      uint64_t);
+NW_AT(nw_res, io_rbps,     24);  NW_TYPE(nw_res, io_rbps,      uint64_t);
+NW_AT(nw_res, io_wbps,     32);  NW_TYPE(nw_res, io_wbps,      uint64_t);
+NW_AT(nw_res, layer_bytes, 40);  NW_TYPE(nw_res, layer_bytes,  uint64_t);
+NW_AT(nw_res, cpu_weight,  48);  NW_TYPE(nw_res, cpu_weight,   uint16_t);
+NW_AT(nw_res, nice,        50);  NW_TYPE(nw_res, nice,         int8_t);
+NW_AT(nw_res, sched_policy, 51); NW_TYPE(nw_res, sched_policy, uint8_t);
 /* name and exec_path are char: nwcheck.c hands them to path_ok_len and
  * name_ok as char *. `brick` is uint8_t BECAUSE IT IS NO LONGER TEXT -- 32
  * raw bytes, never printed, never parsed, never passed to a string
@@ -364,6 +482,26 @@ enum {
     NW_E_LAYER = 16,
     NW_E_LAYERPAIR = 17,
     NW_E_LAYERDUP = 18,
+    /* The resource block. Range faults and the cross-field pairs, each
+     * with its own code: "resource block" as one code would make the
+     * refusal name the block and not the field, and an operator reading
+     * it would have to guess which of nine numbers was wrong.
+     *
+     * THAT SENTENCE HAD ONE CODE UNDER IT FOR THE THREE RANGE FAULTS
+     * for a round -- a rationale next to code doing its opposite, which
+     * is what this project is named after. `tcb-review`. */
+    NW_E_RESWEIGHT = 19,  /* cpu-weight outside cgroup v2's range */
+    NW_E_RESSCHED = 20,   /* sched policy outside the closed set */
+    NW_E_RESNICE = 21,    /* nice outside the kernel's range */
+    NW_E_MEMORDER = 22,   /* throttle at or above the backstop */
+    NW_E_NICEPOL = 23,    /* nice without a declared sched=other */
+    NW_E_CAPNOLAYER = 24, /* layer capacity with no layer to bound */
+    /* THERE IS NO CODE FOR A DECLARED ZERO. `cpu-weight=0` and an
+     * omitted cpu-weight are the same byte, so this checker cannot tell
+     * them apart and a code for it would be unreachable -- the shape
+     * CLAUDE.md's characteristic failure is about, in an enum. The baker
+     * refuses it, at bake time only, for the same structural reason
+     * `lids=` is bake-time only. .claude/rules/plan.md records both. */
     /* Terminator, not a code. nw_errstr's bound and the length of errs[] in
      * nwcheck.c are both derived from it, so the three things that must
      * agree -- last code, array length, bound -- become one number.

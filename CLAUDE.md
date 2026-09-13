@@ -98,22 +98,37 @@ sections after this one and are deliberately not numbered here.
    - delete the `plan.als` site → `contradicted`, naming that annotation
    - `* 2` → `* 3` in `blob.h` → `contradicted`, exit 1
 
-   What genuinely survives is a disagreement that leaves every named
-   string intact, and the sharpest case is a **value**: set
+   What genuinely survives *here* is a disagreement that leaves every
+   named string intact, and the sharpest case is a **value**: set
    `NW_FD_RESERVED` to 16 in `blob.h` while the baker keeps
    `FD_RESERVED = 8`, and all six annotations still pass — the
    *expressions* are untouched and only what they evaluate to has
    diverged. Verified: `1 verified, 0 contradicted`.
 
-   So the honest scope is **text, not arithmetic**. What pins the
+   **That remains true of the annotations and is no longer true of the
+   suite.** `test_baker_constants_match_the_header` compares every
+   constant the baker holds against the **compiler's** answer for the
+   same `#define`, so exactly that mutation is red now — measured, the
+   run says `the baker holds NW_FD_RESERVED = 8 and the compiler says
+   16`. It arrived from a different direction: the baker had
+   hand-written the scheduler policies, `tcb-review` swapped two of them
+   in `blob.h` alone and got a green suite with a plan saying
+   `sched=batch` baking to the byte the TCB calls IDLE, and the test
+   written to close that closes this too. `drift` ran the fd case
+   against it. `HISTORY.md` §75.
+
+   So the honest scope of the ANNOTATION is **text, not arithmetic**,
+   and it always was. What pins the
    arithmetic is `FdArithmetic` and `FdNeedAgrees`, each against a second
    hand-written copy in its own file, and what pins the values is
    `tools/gen-spec-limits.py`, which generates them out of `blob.h` so
-   the specs cannot hold a stale one. The annotation covers the third
+   the specs cannot hold a stale one, plus the constants test for the
+   baker's copies. The annotation covers the third
    thing neither of those does: a site quietly ceasing to exist.
 
-   The *values* are now a two-place change: `blob.h` and
-   `bakery/nw-cc.py`. Both specs read theirs from `specs/limits.als` and
+   The *values* are still written in two places — `blob.h` and
+   `bakery/nw-cc.py` — and the second is now checked against the first
+   rather than merely believed. Both specs read theirs from `specs/limits.als` and
    `specs/Plan.cfg`, generated out of `blob.h` by
    `tools/gen-spec-limits.py`, so those two cells cannot disagree with
    the header — the drift class is removed there rather than checked.

@@ -22,7 +22,13 @@ static const char *errs[] = {
     "landlock without brick",
     "layer id",
     "layer and brick must come together",
-    "duplicate layer id"
+    "duplicate layer id",
+    "cpu-weight out of range",
+    "sched policy out of range",
+    "nice out of range",
+    "mem-high must be below mem-max",
+    "nice without a declared sched=other",
+    "layer capacity without a layer"
 };
 
 _Static_assert(sizeof errs / sizeof errs[0] == NW_E__COUNT,
@@ -302,6 +308,47 @@ int nw_check(const void *blob, uint32_t len)
                 if (u[i].layer[k] != 0) return NW_E_LAYER;
         }
         if (has_layer != has_brick) return NW_E_LAYERPAIR;
+
+        /* THE RESOURCE BLOCK. Range-checked here and not only in the
+         * baker, because these are rules a runtime will act on -- each
+         * value is destined for a cgroup file or a scheduler call --
+         * and a blob can arrive from anywhere. plan.md's split: prefer
+         * refusing at bake time, but anything the runtime relies on
+         * lives here too. (Nothing applies the block yet; the rule is
+         * about where the check belongs, not about a reader that
+         * exists. .claude/rules/runtime.md carries that as kind 3.)
+         *
+         * ONE CODE PER FIELD, because a refusal naming "the resource
+         * block" would leave an operator guessing which of nine numbers
+         * was wrong. cpu_mask, mem_high, mem_max, io_rbps, io_wbps and
+         * layer_bytes have no range check here and that is correct:
+         * every 64-bit value of a mask, a byte count or a rate is a
+         * legal declaration, so there is no bound to quote. What
+         * relations exist between them are checked below. */
+        const struct nw_res *r = &u[i].res;
+        /* No floor test: 0 is unset and NW_CPU_WEIGHT_MIN is 1, so this
+         * accepts exactly {0} union [MIN, MAX] already -- see blob.h. */
+        if (r->cpu_weight > NW_CPU_WEIGHT_MAX) return NW_E_RESWEIGHT;
+        if (r->sched_policy > NW_SCHED_MAX) return NW_E_RESSCHED;
+        if (r->nice < NW_NICE_MIN || r->nice > NW_NICE_MAX)
+            return NW_E_RESNICE;
+        /* mem_high below mem_max, when both are declared. A throttle at
+         * or above its backstop can never fire, so the house is killed
+         * with no warning pass -- which is what omitting the throttle
+         * would have given, meaning the plan declares a mechanism it
+         * does not get. Almost always the two numbers reversed. */
+        if (r->mem_high && r->mem_max && r->mem_high >= r->mem_max)
+            return NW_E_MEMORDER;
+        /* nice means something only under SCHED_OTHER, so it requires a
+         * DECLARED one. The undeclared case was exempted for a round,
+         * which enforced the rule against an assumption blob.h
+         * explicitly refuses to make: nothing here knows what policy
+         * nw-sup was started under, so nothing here can say whether an
+         * inherited policy would keep the number or discard it. */
+        if (r->nice && r->sched_policy != NW_SCHED_OTHER)
+            return NW_E_NICEPOL;
+        /* A capacity for a writable area the house does not have. */
+        if (r->layer_bytes && !has_layer) return NW_E_CAPNOLAYER;
         /* NO PATH CHECK, AND NW_E_BRICK IS GONE WITH IT. Phase 3 made this
          * field raw sha256 bytes, and there is no value of them this
          * checker could call invalid: every value that names anything
