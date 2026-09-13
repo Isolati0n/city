@@ -2954,6 +2954,15 @@ def test_baker_constants_match_the_header():
         # is really about is not touched by anything here.
         "NW_FD_RESERVED": cc.FD_RESERVED,
         "NW_MAX_FDS": cc.MAX_FDS,
+        # NW_SCHED_MAX IS AN ALIAS (`#define NW_SCHED_MAX NW_SCHED_IDLE`)
+        # and it is here to exercise the one thing _const() does that
+        # nothing else asks of it. `control` replaced the alias-chasing
+        # loop body with a raise and got EXIT=0: every other name in this
+        # table is a plain integer, so the loop never iterated, and
+        # _const's docstring advertised a capability no run reached.
+        # Asked for through the baker's own reader, not through
+        # blob_const, so the comparison is still parse-against-compiler.
+        "NW_SCHED_MAX": cc._const("NW_SCHED_MAX"),
     }
     for name, got in sorted(pairs.items()):
         want = blob_const(name)
@@ -2971,7 +2980,8 @@ def test_baker_constants_match_the_header():
     # covering while still printing ok.
     for must in ("NW_SCHED_BATCH", "NW_SCHED_IDLE", "NW_NICE_MIN",
                  "NW_CPU_WEIGHT_MAX", "NW_LID_NEWNS", "NW_MAX_UNITS",
-                 "NW_FD_RESERVED", "NW_MAX_FDS", "NW_KIND_LONGRUN"):
+                 "NW_FD_RESERVED", "NW_MAX_FDS", "NW_KIND_LONGRUN",
+                 "NW_SCHED_MAX"):
         expect(must in pairs,
                f"{must} is no longer compared against the header here. "
                f"Either the baker stopped reading it -- in which case it "
@@ -3073,6 +3083,27 @@ def test_baker_refuses_bad_resources():
         (f"{bare} mem-high=", "suffixed K, M, G or T", "an empty size"),
         (f"{bare} mem-high=-1M", "suffixed K, M, G or T",
          "a negative size"),
+        # SUPERSCRIPT TWO. `str.isdigit()` says yes and `int()` says no,
+        # so this walked past the refusal into a traceback -- a refusal
+        # that exists and a reachable input that goes round it, which is
+        # this round's theme inverted. `control` found it; the guard
+        # reads isdecimal now. VULGAR ONE HALF is the paired positive:
+        # isdigit() is already False for it, so it always refused, and
+        # without it this case is satisfied by a parser that rejects
+        # every non-ASCII byte.
+        (f"{bare} mem-high=\u00b2", "suffixed K, M, G or T",
+         "a size that isdigit() accepts and int() does not"),
+        (f"{bare} io-rbps=\u00bd", "suffixed K, M, G or T",
+         "a size that isdigit() already rejected"),
+        (f"{bare} cpu-weight=\u00b2", "cgroup v2's own range",
+         "a cpu weight that isdigit() accepts and int() does not"),
+        # ABOVE THE FIELD. struct.pack raises rather than wrapping, so
+        # this was loud -- and still a traceback past a refusal that
+        # should have named the key.
+        (f"{bare} mem-high=18446744073709551616",
+         "does not fit the 64-bit field", "a size above uint64"),
+        (f"{bare} io-rbps=16777216T", "does not fit the 64-bit field",
+         "a suffixed size above uint64"),
         # cpus= is a list of indices, and the bound is the mask's width.
         (f"{bare} cpus=64", "outside 0..63", "a CPU index past the mask"),
         (f"{bare} cpus=0-64", "outside 0..63",
@@ -3095,6 +3126,16 @@ def test_baker_refuses_bad_resources():
         # blob.h explicitly refuses to make. `tcb-review`.
         (f"{bare} nice=5", "declare sched=other beside it",
          "nice with no sched= at all"),
+        # nice=0 IS the unset byte, so the baker refuses the spelling --
+        # the same argument as cpu-weight=0 and the five sizes, and it
+        # was the one declared zero that got through. Both policies,
+        # because `control` found it accepted under idle while nice=1
+        # under idle was refused: one value apart, opposite verdicts.
+        (f"{bare} nice=0", "Omit nice=", "nice=0 with no policy"),
+        (f"{bare} nice=0 sched=idle", "Omit nice=",
+         "nice=0 under a policy that discards nice"),
+        (f"{bare} nice=0 sched=other", "Omit nice=",
+         "nice=0 under the policy that honours it"),
         (f"{bare} layer-bytes=1G", "without layer=",
          "a layer capacity on a house with no layer"),
     ]
@@ -3151,7 +3192,6 @@ def test_baker_refuses_bad_resources():
         f"{bare} cpu-weight={W_MAX}",
         f"{bare} nice={N_MIN} sched=other",
         f"{bare} nice={N_MAX} sched=other",
-        f"{bare} nice=0 sched=idle",     # nice=0 is unset, so legal here
         f"{bare} nice=-5 sched=other",
         f"{bare} sched=other",
         f"{bare} sched=batch",
@@ -3182,9 +3222,18 @@ def test_baker_refuses_bad_resources():
         # appears when the plan is legal, which is what makes the
         # absence a claim about the refusal rather than about the
         # baker.
-        expect(os.path.exists(out),
+        # NOT os.path.exists ALONE. `control` made bake() write b"" and
+        # this passed, so the ok line said "18 legal declarations
+        # accepted AND written" about eighteen empty files. The whole
+        # target still caught it -- nw-check refuses `blob size` -- but
+        # the claim this test makes about itself was false. The magic is
+        # read rather than the size, so a truncated-but-nonempty write
+        # fails here too.
+        got = open(out, "rb").read(8) if os.path.exists(out) else b""
+        expect(got == blob_h("NW_MAGIC").strip('"').encode(),
                f"the baker accepted a legal resource declaration and "
-               f"wrote no blob:\n  {line}\n{p.out}{p.err}")
+               f"wrote no usable blob (first 8 bytes: {got!r}):\n"
+               f"  {line}\n{p.out}{p.err}")
 
     # AND THE ABSENCE IS REPORTED BY NAME. "No defaults" is only
     # honest if a house with no block is visible without one; the

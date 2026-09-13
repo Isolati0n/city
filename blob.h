@@ -248,7 +248,13 @@ struct nw_res {
     uint64_t io_wbps;      /* write bytes/sec; 0 = unset */
     uint64_t layer_bytes;  /* capacity of the writable layer; 0 = unset */
     uint16_t cpu_weight;   /* cgroup v2 cpu.weight, 1..10000; 0 = unset */
-    int8_t   nice;         /* -20..19, and only under NW_SCHED_OTHER */
+    int8_t   nice;         /* -20..19; 0 = unset, and only under
+                            * NW_SCHED_OTHER. This comment omitted the
+                            * `0 = unset` half while check(), nw_check()
+                            * and empty_res() all treated it that way,
+                            * which is how
+                            * `nice=0` came to be the one declared zero
+                            * the baker accepted. `control`. */
     uint8_t  sched_policy; /* NW_SCHED_*; NW_SCHED_UNSET = unset */
 } __attribute__((packed));
 

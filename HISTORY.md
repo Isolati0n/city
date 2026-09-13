@@ -8531,3 +8531,95 @@ that quotes it: *"the suite went red" and "the assertion I wrote went
 red" are different claims*. `claims`. The fix was the values and the
 rule is the one above; what is not established is which assertion
 catches it under the target.
+
+## 77. `nice=0`, and three refusals a reachable input walked past (2026-09-13)
+
+Base `73a7e90`. `control`'s second round, against `75fa94f`. It
+confirmed the `parse_cpus` deletion is safe — 461 inputs including
+`""`, `","`, `"-"`, `"0-0"`, `"1--1"`, `"+0"`, NUL, newline and the
+Unicode digits, plus the full cross-product of `0,- 19a` at lengths 0–3,
+with `ZERO_MASK=0` and no crash — and found four more things.
+
+### `nice=0` was the one declared zero the baker accepted
+
+Every other field refuses a declared zero because the blob cannot tell
+it from unset: `cpu-weight=0`, `mem-high=0`, `mem-max=0`, `io-rbps=0`,
+`io-wbps=0`, `layer-bytes=0`. `nice=0` is in the kernel's legal range,
+so it walked through — and `if r["nice"] and ...` is false at zero, so
+the cross-field guard could not fire at it either. Measured:
+
+```
+--- nice=0 sched=idle
+wrote .../n.blob ...  baked res: {... 'nice': 0, 'sched_policy': 3}
+--- nice=1 sched=idle
+house h: nice=1 with sched=idle. nice means nothing outside SCHED_OTHER ...
+```
+
+One value apart, opposite verdicts, nothing telling the author the zero
+was discarded. And `house h ... nice=0` printed under **`no resource
+block: h`** — the line `.claude/rules/plan.md` says names houses that
+declare nothing.
+
+Refused now, bake-time only, for the same reason as the others. The
+CHECKER still accepts `nice=0` under any policy, because at blob level
+it genuinely is unset and
+`test_checker_rejects_crafted_resources` pins that; only the city-file
+spelling is refused. The `lids=` pattern exactly.
+
+**Where a reader would have looked and not found it**: `blob.h`
+annotated `cpu_weight` and `sched_policy` with `0 = unset` and left
+`nice` without it, while `check()`, `nw_check()` and `empty_res()` all
+treated it as unset. Annotated now.
+
+### Three refusals that existed and could be walked past
+
+The inverse of §76's theme: not a refusal nothing can reach, but a
+reachable input that goes round one.
+
+`str.isdigit()` is weaker than "`int()` will parse this" — `'²'`
+is a digit to Python and not an integer — so `mem-high=²` and
+`cpu-weight=²` died in a traceback rather than printing the refusal
+written for exactly that class. `isdecimal()` now. `'½'` is the
+paired positive: `isdigit()` was already false for it, so it always
+refused correctly, and without that case this is satisfied by a parser
+that rejects every non-ASCII byte.
+
+And the six `uint64_t` fields had no upper bound in the baker, so
+`mem-high=18446744073709551616` and `io-rbps=16777216T` reached
+`struct.pack` and raised. Loud, and still a traceback past a refusal
+that should have named the key. Bounded now, with the message saying
+the bound is the field's width rather than a number chosen there.
+
+Neither could have been a test case before, because
+`test_baker_refuses_bad_resources` asserts a reason string and a
+traceback has none.
+
+### The acceptance half said "written" and checked only existence
+
+`control` made `bake()` write `b""`: the test passed and its `ok` line
+claimed eighteen legal declarations "accepted AND written" about
+eighteen empty files. The whole target still caught it — `nw-check`
+refuses `blob size` — so this was a hole in the test's claim about
+itself rather than in the suite. It reads the magic now, so a
+truncated-but-nonempty write fails here too.
+
+### A docstring advertising a capability no run reached
+
+`_const()` resolves an alias chain, and its docstring names
+`NW_SCHED_MAX` as the motivating case. Every one of its callers asked
+for a plain integer, so the loop never iterated: `control` replaced the
+loop body with a raise and got `EXIT=0`. `NW_SCHED_MAX` is in the
+constants table now, asked for through the baker's own reader so the
+comparison is still parse-against-compiler. `_bound()`, a pass-through
+with no caller anywhere, is deleted.
+
+### And one it found that is worth keeping unfixed
+
+Removing the `os.unlink(out)` before each bake leaves `make test` green,
+because `make stage` wipes the stage before every target run. The unlink
+is still right: under the documented iterate-for-speed workflow
+(`python3 tests/run.py` on a warm stage) its absence turns the test red
+**against correct code**, because the acceptance loop's blob is what the
+next run's refusal loop reads. That is `CLAUDE.md`'s corrupted mode of
+the evidence-destroying bullet, and the unlink makes it impossible
+rather than unlikely. Pinned by nothing; written down instead.

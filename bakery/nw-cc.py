@@ -93,10 +93,6 @@ def _const(name):
     return int(raw.rstrip("uUlL").strip("()"))
 
 
-def _bound(name):
-    return _const(name)
-
-
 CPU_WEIGHT_MIN = _const("NW_CPU_WEIGHT_MIN")
 CPU_WEIGHT_MAX = _const("NW_CPU_WEIGHT_MAX")
 NICE_MIN = _const("NW_NICE_MIN")
@@ -135,11 +131,23 @@ def parse_bytes(v, what):
         mult = {"K": 1 << 10, "M": 1 << 20,
                 "G": 1 << 30, "T": 1 << 40}[v[-1].upper()]
         digits = v[:-1]
-    if not digits.isdigit():
+    # isdecimal, NOT isdigit: '\u00b2'.isdigit() is True and int() rejects it,
+    # so the refusal below was walked past into a traceback for an input
+    # class it exists for. `control`. ('\u00bd'.isdigit() is False, which is
+    # the paired positive -- that one always refused correctly.)
+    if not digits.isdecimal():
         raise SystemExit(
             f"{what}={v}: a size in bytes, optionally suffixed K, M, G or "
             f"T (binary). 0 is not 'unlimited' -- omit the key for that.")
     n = int(digits) * mult
+    # The field is a uint64. Above that, struct.pack raises rather than
+    # wrapping -- loud, and still a traceback past a refusal that should
+    # have named the key. `control`.
+    if n > 0xFFFFFFFFFFFFFFFF:
+        raise SystemExit(
+            f"{what}={v}: {n} does not fit the 64-bit field. The bound is "
+            f"the width of the field in struct nw_res, not a number chosen "
+            f"here.")
     if n == 0:
         raise SystemExit(
             f"{what}=0: zero is not how a limit is removed, because 0 is "
@@ -528,7 +536,7 @@ def load_city(path: str):
                 elif k == "cpus":
                     res["cpu_mask"] = parse_cpus(v)
                 elif k == "cpu-weight":
-                    n = int(v) if v.isdigit() else -1
+                    n = int(v) if v.isdecimal() else -1
                     if not CPU_WEIGHT_MIN <= n <= CPU_WEIGHT_MAX:
                         raise SystemExit(
                             f"house {name}: cpu-weight={v} must be "
@@ -564,6 +572,29 @@ def load_city(path: str):
                         raise SystemExit(
                             f"house {name}: nice={v} must be "
                             f"{NICE_MIN}..{NICE_MAX}")
+                    # nice=0 IS THE UNSET BYTE, and it is legal in the
+                    # kernel's range, which is what made it the one
+                    # declared zero this baker accepted. `control` found
+                    # it: `nice=0 sched=idle` baked clean while
+                    # `nice=1 sched=idle` was refused by a message
+                    # asserting the general rule -- one value apart,
+                    # opposite verdicts, and nothing told the author the
+                    # 0 was discarded. Worse, the house was then listed
+                    # under `no resource block:`, which plan.md says is
+                    # printed for a house that declares nothing.
+                    #
+                    # Refused here for the same reason as cpu-weight=0
+                    # and the five sizes: bake time only, because the
+                    # blob genuinely cannot tell it from unset. The
+                    # CHECKER still accepts nice=0 under any policy --
+                    # at blob level it IS unset, and
+                    # test_checker_rejects_crafted_resources pins that.
+                    if n == 0:
+                        raise SystemExit(
+                            f"house {name}: nice=0 is the byte an unset "
+                            f"field already holds, so the blob cannot "
+                            f"tell it from no nice= at all -- and the "
+                            f"kernel's default IS 0. Omit nice= instead.")
                     res["nice"] = n
                 elif k == "kind":
                     if v not in KINDS:
