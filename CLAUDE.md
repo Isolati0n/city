@@ -414,9 +414,8 @@ rediscover them.
   calls itself the fold engine and disclaims the check, and it did so in
   the commit that landed it, so the qualifier was missing here rather
   than there. `claims`. (A first correction said this bullet was "the
-  only place" it was missing, which is a completeness claim written four
-  lines from the engine's name, and false: `docs/NW-EXPECTATIONS-
-  UNANCHORED.md` uses the phrase unqualified too.) "The house is not
+  only place" it was missing, which is a completeness claim, and false:
+  `docs/NW-EXPECTATIONS-UNANCHORED.md` uses the phrase unqualified too.) "The house is not
   running" is satisfied by a longrun house between restarts, which is
   about to write; the supervisor is the thing whose absence means the
   unit will not run again before the next boot, because it stops
@@ -823,6 +822,24 @@ Two habits follow from this:
 - **When something is removed, re-file the rule rather than deleting it.**
   Move it to kind 2 or kind 3 with the reasoning intact. A rule deleted is a
   rule someone re-derives badly later.
+
+- **But when a SENTENCE is wrong, delete it. Do not retract it in place.**
+  That is the opposite instruction to the one above and the distinction is
+  the point: a *rule* re-files, a *false statement* goes. A retraction is
+  new prose, and new prose carries new claims — a distance in lines, a
+  count of characters, an "only place" — so retracting in place trades one
+  wrong sentence for a smaller wrong sentence and grows the file. Four
+  review rounds on one passage here found their defects almost entirely in
+  the retractions rather than in what was retracted, and the fix that
+  finally worked was deleting rather than rewording.
+
+  Keep the correction only where a reader would otherwise re-make the
+  mistake — the retractions still in this file earn their place that way,
+  and each is the shortest form that does. When the reason is already in
+  `HISTORY.md`, the brief gets the corrected sentence and nothing else.
+
+  *This bullet's own change was four deletions and no rewording, which is
+  the check it prescribes run against the diff that introduces it.*
 
 ## The characteristic failure
 

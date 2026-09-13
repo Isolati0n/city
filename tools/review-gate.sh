@@ -3,7 +3,7 @@
 #
 # It refuses nothing. Nothing invokes it: .git/hooks holds only samples,
 # core.hooksPath is unset, and neither the Makefile nor .claude/ calls it.
-# `--check` prints and exits 1, and obeying that is a discipline. This line
+# Obeying it is a discipline. This line
 # said "refuse to push" and a HISTORY section repeated the claim as
 # mechanism -- the wrong reading was generated here, which is where an
 # agent reads it from. `claims`. HISTORY.md 72.

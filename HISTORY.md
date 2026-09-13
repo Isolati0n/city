@@ -7300,17 +7300,6 @@ unfalsifiable writing, written by an author thinking about that test.
 The rule at its weakest in the change that introduces it, again — and
 found the way all of them are found, by somebody running something.
 
-Then two further review rounds, and **every finding in them was in the
-narration rather than in the rule.** The test itself survived all three
-untouched; what kept failing was this account of what the previous round
-had got wrong — each retelling adding a positional reference, a
-character count or a completeness claim, each of which then needed its
-own retraction. The account was cut back rather than corrected again,
-which is why the bullets above no longer carry their own revision
-histories. `claims` recommended the cut and named the shape: a record
-that concedes it cannot be checked, and then makes checkable-and-wrong
-claims inside itself, pays the cost of both forms.
-
 **Nothing in the tree records what a reviewer reported**, only the
 packets they were sent — so this section's account of the findings is
 itself unanchored in the sense §70 and the document define. The
@@ -7338,12 +7327,7 @@ the review, then push.
 
 The loss half is not hypothetical. §66 records `git checkout -- .` run
 to tidy up after a control, in a tree holding uncommitted work, wiping
-the edits. *(A first telling attributed that to "the session that
-produced these sections". Nothing in the tree records session
-boundaries; what it records is that §66 landed in `686db4d` and these
-sections six commits later, so the identity was an assertion the tree
-cannot check — written into the section whose neighbour concedes
-exactly that limit.)* **What recovered
+the edits. **What recovered
 them was redoing them**; the commit being intact is what made redoing
 them cheap rather than what preserved them, and a first telling of this
 section blurred the two. §66's own wording is the accurate one: "the
