@@ -135,6 +135,18 @@ if want is None:
     sys.exit("run.sh: no loop matching %r for %s" % (needle, f))
 p = subprocess.run(["cbmc", "--show-loops", "-I" + out, "-I."] + extra + [f],
                    capture_output=True, text=True)
+# THE SAME SHAPE check_unwindset WAS FIXED FOR, three functions below,
+# on the same day and left here. capture_output discards cbmc's stderr,
+# so a cbmc that FAILED TO RUN produced no stdout, `hit` stayed None,
+# and the refusal below blamed the SOURCE -- "is at nwcheck.c:194 but no
+# loop reports that line" -- for a loop that is there. Reproduced by
+# `tcb-review` with a stand-in cbmc exiting 137 on `out of memory`.
+# Never discard a stream you are about to draw a conclusion from.
+if p.returncode != 0 or not p.stdout.strip():
+    sys.exit("run.sh: cbmc --show-loops did not produce a loop list "
+             "(exit %d). This is the TOOL failing, not a needle that is "
+             "absent. Its output:\n%s%s"
+             % (p.returncode, p.stderr, p.stdout))
 cur = hit = None
 for line in p.stdout.splitlines():
     m = re.match(r"^Loop (\S+?):", line)
@@ -212,7 +224,27 @@ CALLER_UNW=$(caller_unw "$CU" "$CB")
 # init moving into a function, named nothing, and the 128-iteration loop it
 # used to cover fell back to the global bound of 5. Found by tcb-review.
 # The unwinding assertion caught the consequence; nothing caught the cause.
-check_unwindset() {   # check_unwindset <file> <args...>
+# A SUBSHELL FUNCTION -- the parentheses are the fix, not decoration.
+# POSIX sh has no local scope, so this function's `f=` reached its
+# CALLER: run.sh's field loop is `for f in layer name`, expect() calls
+# this, and by the next line $f held "proofs/leaf_name_dup.c". The
+# vacuity run was then handed -DPROOF_FIELD_NAME=proofs/leaf_name_dup.c
+# and compiled `u[i].proofs/leaf_name_dup.c[0]`.
+#
+# Both field_dup vacuity controls therefore NEVER RAN, and neither did
+# either `name`-offset proof -- and at the default bound the caller
+# proofs never ran either, because the run dies after the 2595-second
+# layer PASS. HISTORY.md 78 recorded that stall as a cbmc failing under
+# memory pressure and the missing controls as a cost problem. It was
+# this, reproducible in 65 s at PROOF_UNITS=2 with no memory pressure,
+# introduced by the same diff that fixed the guard below. `tcb-review`.
+#
+# Subshell rather than renaming `f`: a rename fixes the instance and
+# leaves the class, and the next loop variable is the same bug. Here
+# every assignment is local by construction and a caller variable
+# cannot be reached. expect() cannot take this form -- its `exit 1`
+# has to abort the run -- so its locals are prefixed instead.
+check_unwindset() (   # check_unwindset <file> <args...>
     f=""; set_arg=""
     for a in "$@"; do
         case "$a" in *.c) f=$a ;; esac
@@ -262,19 +294,23 @@ check_unwindset() {   # check_unwindset <file> <args...>
             exit 1
         }
     done
-}
+)
 
 expect() {       # expect PASS|FAIL NAME cbmc-args...  -> $OUT/NAME.txt
-    want=$1; name=$2; shift 2
+    # PREFIXED, for the reason check_unwindset is a subshell: this
+    # function cannot be one, because its `exit 1` must abort the run
+    # rather than a subshell. So its locals are spelled so they cannot
+    # be a caller's loop variable.
+    _x_want=$1; _x_name=$2; shift 2
     check_unwindset "$@" || exit 1
-    printf '  %-26s ' "$name"
-    start=$(date +%s)
+    printf '  %-26s ' "$_x_name"
+    _x_start=$(date +%s)
     # STAMPED, so a result file says which tree and which TCB bytes it was
     # produced from. A .txt with no provenance is a proof kept where it
     # cannot be re-run, in miniature: it reads as a result about whatever
     # tree the reader happens to be in.
     {
-        echo "### proofs/run.sh: $name"
+        echo "### proofs/run.sh: $_x_name"
         echo "### tree:    $(cd "$ROOT" && pwd -P)"
         # EVERY FILE CBMC IS HANDED, not a hand-written two. It cksummed
         # nwcheck.c and blob.h only, so a mutated proofs/caller_nw_check.c
@@ -294,23 +330,40 @@ expect() {       # expect PASS|FAIL NAME cbmc-args...  -> $OUT/NAME.txt
                              && git diff HEAD --quiet 2>/dev/null \
                              || echo '+dirty')"
         echo "### when:    $(date -u +%Y-%m-%dT%H:%M:%SZ)"
-    } > "$OUT/$name.txt"
-    if cbmc "$@" $CHECKS -I"$ROOT" -I"$OUT" >> "$OUT/$name.txt" 2>&1
-    then got=PASS; else got=FAIL; fi
-    end=$(date +%s)
-    props=$(grep -oE '^\*\* [0-9]+ of [0-9]+ failed' "$OUT/$name.txt" | head -1)
-    echo "$got (want $want)  ${props:-NO RESULT LINE}  $((end - start))s"
-    if [ "$got" != "$want" ]; then
-        echo "proofs: $name gave $got, expected $want -- $OUT/$name.txt" >&2
-        grep -E ': FAILURE|VERIFICATION|^Killed' "$OUT/$name.txt" \
+    } > "$OUT/$_x_name.txt"
+    # ONE WRITE AND ONE READ, from the same bytes. This ran cbmc with
+    # `>> file` and then re-opened the file BY NAME to grep the result
+    # line it had just produced -- a second path to the same data, in a
+    # sandbox this script's own header records returning different
+    # directory listings for consecutive reads. `tcb-review` caught it
+    # flaking one run in six: a control that had finished correctly
+    # (`** 1 of 381 failed`, `VERIFICATION FAILED`) was reported as
+    # `NO RESULT LINE ... it did not finish`, which is the diagnosis
+    # reserved for a killed solve and the one people answer by
+    # budgeting more machine.
+    #
+    # `|| _x_rc=$?` rather than a bare assignment: under `set -e` a
+    # command substitution whose command fails aborts the script, and
+    # a FAILING cbmc is the expected outcome for every control here.
+    _x_rc=0
+    _x_out=$(cbmc "$@" $CHECKS -I"$ROOT" -I"$OUT" 2>&1) || _x_rc=$?
+    printf '%s\n' "$_x_out" >> "$OUT/$_x_name.txt"
+    if [ "$_x_rc" -eq 0 ]; then _x_got=PASS; else _x_got=FAIL; fi
+    _x_end=$(date +%s)
+    _x_props=$(printf '%s\n' "$_x_out" \
+               | grep -oE '^\*\* [0-9]+ of [0-9]+ failed' | head -1)
+    echo "$_x_got (want $_x_want)  ${_x_props:-NO RESULT LINE}  $((_x_end - _x_start))s"
+    if [ "$_x_got" != "$_x_want" ]; then
+        echo "proofs: $_x_name gave $_x_got, expected $_x_want -- $OUT/$_x_name.txt" >&2
+        grep -E ': FAILURE|VERIFICATION|^Killed' "$OUT/$_x_name.txt" \
             | head -20 >&2
         exit 1
     fi
     # A run that produced no "** n of m failed" line did not finish -- CBMC
     # killed for memory exits non-zero and would otherwise read as a control
     # that correctly failed.
-    if [ -z "$props" ]; then
-        echo "proofs: $name produced no result line: it did not finish" >&2
+    if [ -z "$_x_props" ]; then
+        echo "proofs: $_x_name produced no result line: it did not finish" >&2
         exit 1
     fi
 }

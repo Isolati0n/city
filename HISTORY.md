@@ -8705,10 +8705,13 @@ it, `leaf_path_ok_128`, `leaf_name_ok`, `caller_nw_check` and
 the duplicate property holds at the `layer` offset at N=3.
 
 Not: the `layer` vacuity control, and the `name` offset in either
-direction. **Recorded with the reason, not as a gap.** The next reader
-needs to know it costs forty-three minutes a run before deciding
-whether to start one, or "not completed" reads as "nobody got round to
-it" and they begin it expecting it to finish.
+direction.
+
+**THE REASON RECORDED HERE FOR THAT WAS FALSE, AND §79 IS THE
+CORRECTION.** This paragraph said the cause was cost. It was a
+one-word shell collision introduced by this same commit, reproducible
+in sixty seconds. All four runs pass; the whole set costs two and a
+half minutes.
 
 ### The shape, named, because it arrived twice on one day from opposite directions
 
@@ -8781,3 +8784,93 @@ harness now, and the dependence on unproven code is stated as such.
 *(Checking it also turned up a stale `name_dup` the rename had missed,
 in that same docstring's soundness sentence. Found by an edit failing to
 match, not by reading it.)*
+
+## 79. The commit about a guard blaming the wrong thing shipped a guard blaming the wrong thing (2026-09-13)
+
+Base `49b42fb`. First review `proofs/` has ever had. `tcb-review`'s
+HIGH 1, and it is against §78 directly.
+
+`check_unwindset()` opens `f=""`. POSIX `sh` has no local scope, and
+`run.sh`'s field loop is `for f in layer name`. So `expect PASS` called
+the helper, the helper overwrote the caller's `f` with
+`proofs/leaf_name_dup.c`, and the very next line handed cbmc
+`-DPROOF_FIELD_NAME=proofs/leaf_name_dup.c` — compiling
+`u[i].proofs/leaf_name_dup.c[0]`.
+
+**Both vacuity controls had therefore never run, and neither had either
+`name`-offset proof.** At the default bound the caller proofs never run
+either: the script dies after the 2595-second layer PASS, before
+reaching them.
+
+§78 recorded that stall as *"cbmc failed to run right after the
+2595-second 3.1 GB solve"* and filed the missing controls under cost —
+telling the next reader to budget forty-three minutes. Both wrong. The
+cause was a shell collision **in the same diff**, reproducible in sixty
+seconds at `PROOF_UNITS=2` with no memory pressure, and the vacuity
+controls cost ten seconds each.
+
+So a commit whose headline finding is *the guard printed a true-looking
+sentence about the wrong thing* shipped a guard printing a true-looking
+sentence about the wrong thing, and its author then wrote the wrong
+cause into the record and reported the remaining work as unaffordable.
+`CLAUDE.md`'s weakest-rule pattern, at the strongest form it has
+reached here: not a rule decaying, and not merely violated by the diff
+that introduced it — **the diff's own diagnosis applied to itself and
+got the answer wrong.**
+
+### The same shape, three functions up, unfixed by the fix
+
+`loop_id()` runs `cbmc --show-loops` with `capture_output=True` and
+checks neither the exit status nor stderr. A cbmc that fails to start
+leaves `hit` as `None` and the refusal blames the **source**:
+`'for (int p = 0; ...)' is at nwcheck.c:194 but no loop reports that
+line` — for a loop that is there. Reproduced by `tcb-review` with a
+stand-in cbmc exiting 137 on `out of memory`. Verbatim the bullet
+`bea8055` added to `CLAUDE.md` — *never discard a stream you are about
+to draw a conclusion from* — in the same file, three functions above
+the fix, added the same day.
+
+### Fixed structurally, because a rename fixes the instance
+
+`check_unwindset` is a **subshell function** now: every assignment is
+local by construction and no caller variable can be reached. `expect()`
+cannot take that form — its `exit 1` has to abort the run rather than a
+subshell — so its locals are prefixed instead. `loop_id` is called only
+inside `$( )`, which is already a subshell, so it was never a collision
+source; its defect was the discarded stream, fixed.
+
+`expect()` also stopped re-reading its own result by reopening the file
+by name. `tcb-review` caught that flaking one run in six: a control
+that had finished correctly reported as `NO RESULT LINE … it did not
+finish`, which is the diagnosis reserved for a killed solve and the one
+people answer by budgeting more machine. One write, one read, from the
+same bytes.
+
+### What the run says now
+
+```
+  leaf_field_dup_layer       PASS (want PASS)  ** 0 of 411 failed  60s
+  leaf_field_dup_layer_vacuity FAIL (want FAIL)  ** 1 of 411 failed  10s
+  leaf_field_dup_name        PASS (want PASS)  ** 0 of 411 failed  74s
+  leaf_field_dup_name_vacuity FAIL (want FAIL)  ** 1 of 411 failed  11s
+proofs: every proof verified and every control failed.
+```
+
+`PROOF_UNITS=2`, 2m35s for the set — **which does not reach the probe
+chain**, per the README, so this is not a replacement for the N=3 run.
+What it establishes is that the harness is not vacuous at either
+offset, which nothing had ever established, and that the four
+configurations run at all.
+
+The cheap groups are green in 43 s with all four controls failing.
+
+### Still open, from the same review
+
+Four README findings, unfixed: it names `nw_check.4` as the unit loop
+when `run.sh`'s own discovery prints it as the **bind** loop — the
+section headed *"so the next person does not lose a run to it"* causing
+that loss; its headline says "about five minutes" against its own
+forty-three; its provenance paragraph describes the two-file cksum the
+code replaced; and the STATUS note carries §78's false cause. Plus two
+LOWs: `leaf_name_ok.c` lacks the width parameterisation `leaf_path_ok.c`
+has, and the stub/leaf comment names properties the stubs do not assume.
