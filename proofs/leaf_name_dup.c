@@ -18,13 +18,41 @@
  * NW_E_DUPNAME to everything from satisfying it -- the same pairing the
  * suite's test needed, and the same one it was missing on the first draft.
  *
- * ASSUMPTION, and why it is sound: every name is non-empty and NUL-padded
- * to the field width. nw_check calls name_ok on unit i before name_dup, in
- * the same iteration, and name_ok rejects anything else -- proven in
- * leaf_name_ok.c, which asserts exactly this pair of post-conditions so the
- * two runs compose. Without the padding, "equal up to the terminator" (what
- * field_dup compares) and "equal over the field" (what fields_equal below
- * compares) are different questions and the equivalence is false, correctly.
+ * ASSUMPTION, and why it is sound: every field value is non-empty and
+ * NUL-padded to the field width. Without the padding, "equal up to the
+ * terminator" (what field_dup compares) and "equal over the field" (what
+ * fields_equal below compares) are different questions and the equivalence
+ * is false, correctly.
+ *
+ * IT HOLDS AT BOTH CALL SITES AND FOR DIFFERENT REASONS, which is what
+ * this paragraph did not say when the offset became a parameter: it
+ * justified `name` and was then run at `layer`, where the argument is not
+ * the same one.
+ *
+ *   name  -- nw_check calls name_ok(u[i].name, NW_NAME_LEN) on unit i
+ *            before field_dup, in the same iteration, and name_ok rejects
+ *            anything else. Non-emptiness and padding both come from there.
+ *
+ *   layer -- padding comes from the same place, name_ok(u[i].layer,
+ *            NW_NAME_LEN), and non-emptiness does NOT: an absent layer is
+ *            all-zero and legal. What supplies it is the guard on the call
+ *            itself,
+ *
+ *                if (u[i].layer[0]
+ *                    && field_dup(&lay, u, i, offsetof(...layer)))
+ *
+ *            so field_dup is never reached with an empty layer. The guard
+ *            exists because every brickless house shares the all-zero
+ *            value and an empty field must not collide with another empty
+ *            field -- nwcheck.c says so directly above it. An absent layer
+ *            is additionally required zero to the full width, so the
+ *            padding half holds for the case that skips name_ok too.
+ *
+ * Both are proven where they are asserted: leaf_name_ok.c carries exactly
+ * this pair of post-conditions, so the two runs compose. The layer guard is
+ * plain code in nw_check and is NOT proven here -- it is read. Remove it
+ * and this harness proves a property about inputs the call site no longer
+ * restricts, and nothing in proofs/ would notice.
  *
  * BOUNDS: the probe chain is bounded to PROOF_UNITS + 2 iterations, but
  * --unwinding-assertions is on, so that bound is *proven sufficient* for

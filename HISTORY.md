@@ -8745,3 +8745,39 @@ checked."*
 the 2595-second bound. The question put to `control` is the one that
 matters: **is there a change to `nwcheck.c` that the whole of
 `make proof` accepts and `make test` also accepts?**
+
+### The soundness worry does not fire, and checking it found the real gap
+
+I raised it and could not settle it: `leaf_name_dup` assumes its field
+is non-empty and NUL-padded, which `nw_check` gets from `name_ok` — and
+I had run it at the **layer** offset, where an absent layer is all-zero
+and legal. If that reached `field_dup`, forty-three minutes proved
+something about inputs that cannot occur.
+
+It does not reach it. The operator checked rather than reasoned, and
+`nwcheck.c` guards the call:
+
+```c
+        if (u[i].layer[0]
+            && field_dup(&lay, u, i, offsetof(struct nw_unit, layer)))
+            return NW_E_LAYERDUP;
+```
+
+with the reason written above it: every brickless house shares the
+all-zero value, so an empty field must not collide with another empty
+field. And the padding half holds too, from `name_ok(u[i].layer,
+NW_NAME_LEN)` at the top of the same loop, with an absent layer
+additionally required zero to the full width.
+
+**The gap was not the assumption, it was the argument for it.** The
+harness's docstring justified the assumption for `name` — where both
+halves come from `name_ok` — and was then run at `layer`, where
+non-emptiness comes from a **guard in `nw_check` that `proofs/` does not
+prove and only reads**. Remove that guard and the harness proves a
+property about inputs the call site no longer restricts, with nothing in
+`proofs/` noticing. Both call sites' arguments are stated in the
+harness now, and the dependence on unproven code is stated as such.
+
+*(Checking it also turned up a stale `name_dup` the rename had missed,
+in that same docstring's soundness sentence. Found by an edit failing to
+match, not by reading it.)*

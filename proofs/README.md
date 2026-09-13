@@ -86,6 +86,18 @@ a checker that answers `NW_E_DUPNAME` to everything satisfies the first one.
   the next reader would take it for a result about the real tree. Same
   shape as the suite's shared stage path, answered the same way.
 
+- **The `layer` run's non-emptiness assumption comes from a GUARD, not
+  from `name_ok`, and that is read rather than proven.** At the `name`
+  call site both halves come from `name_ok`. At `layer` the padding does
+  and the non-emptiness does not — an absent layer is all-zero and
+  legal, and what keeps `field_dup` from seeing one is
+  `if (u[i].layer[0] && field_dup(...))` in `nw_check`. Remove that
+  guard and the harness proves a property about inputs the call site no
+  longer restricts, and nothing in `proofs/` notices. Written down
+  because the harness was run at that offset before the argument for it
+  was; the operator checked the guard exists, and a reviewer is
+  confirming it independently.
+
 - **STATUS, 2026-09-13: the `name`-offset run has not completed, and the
   reason is a measurement rather than an omission.** `run.sh` runs
   `field_dup` at two offsets because `name` sits at offset 0, where
