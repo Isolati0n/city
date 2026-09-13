@@ -41,6 +41,22 @@ a checker that answers `NW_E_DUPNAME` to everything satisfies the first one.
 
 ## What is *not* proven, stated plainly
 
+
+**WHAT THESE PROOFS ARE GOOD FOR, AND WHAT THEY ARE BLIND TO.** They
+work against DELETION and are blind to a PREMISE BEING REWRITTEN.
+Measured both ways on 2026-09-13 (`HISTORY.md` §80): every mechanism
+removed from `nwcheck.c` turned a proof red naming its own assertion,
+including the `+ off` the layer offset exists for — and two edits that
+rewrite what a harness's soundness argument RESTS ON passed every proof,
+every control and `make test`. Narrowing `name_ok`'s alphabet is
+invisible because each assertion sits under `if (r == NW_OK)`; relaxing
+`len != need` is invisible because `caller_nw_check.c` justifies pinning
+`n_units`/`n_binds` by quoting that exact line. `mkcomp.py` keeps the
+leaf bodies in step. Nothing keeps an assumption's premise in step.
+
+Read a green run here as "no mechanism has been deleted", not as "this
+checker is right".
+
 - **Only one direction is.** Every assertion in `caller_nw_check.c` lives
   inside `if (r == NW_OK) { ... }`, so the whole harness expresses
   *accepted implies P* and nothing else. **No defect that makes `nw_check`
