@@ -170,10 +170,27 @@ def parse_cpus(v):
                     f"bound is the width of cpu_mask in struct nw_res, not "
                     f"a number chosen here.")
             mask |= 1 << i
-    if mask == 0:
-        raise SystemExit(
-            f"cpus={v}: names no CPU, and an empty mask is the value an "
-            f"unset field already holds. Omit cpus= for all CPUs.")
+    # NO EMPTY-MASK REFUSAL, and its absence is the point. One stood
+    # here -- `if mask == 0: raise ... "names no CPU, and an empty mask
+    # is the value an unset field already holds"` -- and `control`
+    # deleted it for a green `make test`, then showed why no test could
+    # have pinned it: the branch is UNREACHABLE. `str.split(",")` yields
+    # at least one part; a part that is not an integer is already
+    # refused, a backwards range is already refused, and an index
+    # outside 0..CPU_INDEX_MAX is already refused, so every surviving
+    # part sets a bit. Measured over a 7239-input corpus: zero inputs
+    # reached it.
+    #
+    # That is NW_E_RESZERO one level down -- a refusal whose message
+    # argues its own necessity, that nothing can perform -- shipped in
+    # the same commit that removed exactly that shape from blob.h.
+    # HISTORY.md 75.
+    #
+    # It would become reachable if the `runs backwards` guard went, so
+    # do not read this as "an empty mask is fine": an empty mask is the
+    # unset value and must never be baked. What makes that true is the
+    # three guards above, not a fourth one nothing can enter. If you
+    # loosen any of them, this is the paragraph to re-read.
     return mask
 
 

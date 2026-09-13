@@ -8345,7 +8345,7 @@ with the baker in `$ROOT`, and the copy is only reached by a
 class is `.claude/rules/plan.md`'s sidecar bullet again: adding a
 dependency to a file that several programs copy.
 
-### The controls, run in this session because the dispatched `control` never returned
+### The controls, run in this session while `control` was still out
 
 Each mutation is a scratch copy of the tree with `__pycache__` removed
 and `PYTHONDONTWRITEBYTECODE=1`, staged to its own directory —
@@ -8391,3 +8391,106 @@ assertion I wrote went red" are different claims and only the second is
 the one a control is run to establish.
 
 The layout and ledger controls are quoted in their own sections above.
+
+*(This section was headed "because the dispatched `control` never
+returned" when `ddfcb56` was pushed. It returned afterwards, with three
+findings none of these mutations reached — §76. The heading is
+corrected rather than the claim retracted in place: it was true when
+written and the reason it stopped being true is a section of its own.)*
+
+## 76. The refusal nothing could perform, again, one level down (2026-09-13)
+
+Base `ddfcb56`. `control` returned after that commit was pushed, having
+run a battery none of the hand-run mutations reached. Three findings,
+and the first is this repository's characteristic failure arriving in
+the commit that removed an instance of it.
+
+### `parse_cpus`'s empty-mask refusal cannot be reached
+
+```
+    if mask == 0:
+        raise SystemExit(
+            f"cpus={v}: names no CPU, and an empty mask is the value an "
+            f"unset field already holds. Omit cpus= for all CPUs.")
+```
+
+`control` deleted it and `make test` stayed green — then showed that no
+test could have pinned it. `str.split(",")` yields at least one part; a
+non-integer part is already refused, a backwards range is already
+refused, and an index outside `0..CPU_INDEX_MAX` is already refused, so
+every surviving part sets a bit. Measured against the real function over
+a 7239-input corpus: **zero inputs reached it**, and `grep` for its
+message across the suite returns nothing.
+
+That is `NW_E_RESZERO` exactly, in the baker instead of the enum — a
+refusal carrying a message that argues its own necessity, that nothing
+can perform — and it shipped in `ddfcb56`, the commit whose own record
+describes removing that shape from `blob.h` and calls it "the
+characteristic failure wearing an enum". The weakest-rule pattern in its
+strongest form: not a rule decaying, a rule violated by the change that
+articulated it.
+
+Deleted, with the reasoning left where the branch was. **The paragraph
+there says what the guards are, because "an empty mask is fine" is the
+wrong reading**: an empty mask IS the unset value and must never be
+baked; what makes that true is the three guards above it, not a fourth
+nothing can enter. It becomes reachable the moment the `runs backwards`
+guard changes — which `control` demonstrated, by removing that guard and
+watching `cpus=3-1` get refused by this one instead.
+
+### Twenty-six refusals and not one asserted that no blob was written
+
+`test_baker_refuses_bad_resources` checked the exit code and the reason
+string. `control` moved `check(houses, binds)` below the write in
+`bake()` — every message identical, every exit code identical — and the
+test printed `ok` on all of its cases while a blob of a refused plan sat
+at `--out`.
+
+The suite was not wholly blind: `path-traversal-refused` caught it. But
+this test covers the rules `nwcheck.c` has no subject for, which is the
+half nothing else can see, and its sibling on the probe path had
+asserted the same thing since the `lids=` round — so the shape was
+already in the file, one test over. A refusal that has already written
+the blob is one an operator walks past: the exit code is in a log and
+the file is in the slot.
+
+Fixed and controlled: the same mutation now gives `the baker refused a
+throttle exactly at the backstop AND wrote .../br.blob anyway.`
+
+### And a comment describing a control that cannot be run
+
+*"THE ZEROES. One per key that takes a size, because the refusal is
+per-key and a single case pins one of them: `control` can delete the
+guard from any other and the suite stays green if only mem-high is
+probed."* The refusal is not per-key: it is one guard in `parse_bytes`,
+parameterised by the key name, which is what makes the five messages
+look separate. Deleting it fails all five at once. The cases are cheap
+redundancy against the guard being split later and are worth keeping;
+the sentence beside them invoked a reviewer and named a control nobody
+could run, which is worse than no comment. (`cpu-weight=0` is genuinely
+a different path — the range check — and is genuinely separate.)
+
+### The positive control worth keeping
+
+`control` also isolated the `LAYOUT_DECL` widening rather than taking
+§75's word for it. Append a field to `struct nw_res`, bump
+`NW_RES_SIZE`, have the baker pack it: `THE LAYOUT MOVED AND NWPLAN09
+DID NOT`. Do the same with the pattern narrowed back to `NW_UNIT_SIZE`
+**and the ledger row re-derived under the narrowed pattern** — without
+that second step the narrowing alone moves the signature and the control
+is confounded, which `control` records getting wrong first — and the
+wire format moves under an unchanged `NWPLAN09` with `EXIT=0`. So the
+`RES` alternative is the only thing catching it, evidenced rather than
+asserted.
+
+### What to carry to the next field
+
+`control`'s note on the layout fixture is the durable part: the property
+that test needs is **pairwise distinct across every field whose width
+admits the other's value**, not "one value per field". On the
+pre-commit tree `cpus=0` and `sched=other` both baked to `1`, so
+swapping `cpu_mask` and `sched_policy` in `pack_res` produced
+byte-identical output and the layout test passed under a comment saying
+every permutation was separated. `ddfcb56` declares `cpus=0,4` and the
+same mutation goes red naming the position — but the fix was the values,
+and the rule is the one above.

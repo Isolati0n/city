@@ -372,3 +372,5 @@ prose-count	tests/run.py	# two declarations per line and anchoring hid the secon
 unpaired-absence	bakery/nw-cc.py	if v not in SCHED_NAMES:
 # paired in the same test, immediately above: the line is first asserted PRESENT and to name exactly ["bare0", "bare1"], so the mechanism is shown running before it is shown silent
 unpaired-absence	tests/run.py	expect("no resource block" not in (p.out + p.err),
+# paired in the same test: the refusal cases assert the exit code AND the reason string first (so the baker ran and refused for the stated reason), and the acceptance loop asserts the file EXISTS after a legal bake -- without that half, "no blob written" would be satisfied by a baker that never writes one. Both halves added in the same round, after `control` moved check() below the write for a green run
+unpaired-absence	tests/run.py	expect(not os.path.exists(out),

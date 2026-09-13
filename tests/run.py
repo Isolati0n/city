@@ -3044,10 +3044,15 @@ def test_baker_refuses_bad_resources():
          "a nice that is not a number"),
         (f"{bare} sched=fifo", "must be one of",
          "a scheduler policy outside the closed set"),
-        # THE ZEROES. One per key that takes a size, because the refusal
-        # is per-key and a single case pins one of them: `control` can
-        # delete the guard from any other and the suite stays green if
-        # only mem-high is probed.
+        # THE ZEROES, one per key that takes a size. NOT because the
+        # refusal is per-key -- it is ONE guard in parse_bytes,
+        # parameterised by the key name, which is what makes the five
+        # messages look separate. `control` deleted it and all five went
+        # red at once. So these are cheap redundancy against the guard
+        # being split later, and the comment that stood here described a
+        # control that cannot be run, which is worse than no comment.
+        # `cpu-weight=0` IS a different path -- the range check -- and
+        # is genuinely separate.
         (f"{bare} mem-high=0", "Omit mem-high=", "mem-high=0"),
         (f"{bare} mem-max=0", "Omit mem-max=", "mem-max=0"),
         (f"{bare} io-rbps=0", "Omit io-rbps=", "io-rbps=0"),
@@ -3084,13 +3089,30 @@ def test_baker_refuses_bad_resources():
         (f"{bare} layer-bytes=1G", "without layer=",
          "a layer capacity on a house with no layer"),
     ]
+    out = f"{WORK}/br.blob"
     for line, reason, what in cases:
         open(city, "w").write(line + "\n")
-        p = run(["python3", CC, "--city", city, "--out", f"{WORK}/br.blob"])
+        if os.path.exists(out):
+            os.unlink(out)
+        p = run(["python3", CC, "--city", city, "--out", out])
         expect(p.returncode != 0, f"baker accepted {what}\n{p.out}{p.err}")
         expect(reason in (p.out + p.err),
                f"wrong reason for {what}: expected {reason!r}\n"
                f"{p.out}{p.err}")
+        # AND NOTHING ON DISK. A refusal that has already written the
+        # blob is a refusal an operator can walk past: the exit code is
+        # in a log and the file is in the slot. `control` moved
+        # `check()` below the write in `bake()` -- every message here
+        # identical, every exit code identical -- and this test printed
+        # ok on all of its cases while a blob of a refused plan sat at
+        # --out. (The suite was not wholly blind: `path-traversal-refused`
+        # caught it. This test, which covers the rules nwcheck.c has no
+        # subject for, was.) Its sibling on the probe path already
+        # asserted this; that is where the shape comes from.
+        expect(not os.path.exists(out),
+               f"the baker refused {what} AND wrote {out} anyway. The "
+               f"refusal has to happen before the write, or a refused "
+               f"plan is on disk with only an exit code saying so.")
 
     # THE ACCEPTING SIDE. Legal values at both ends of every range, the
     # ordered memory pair, nice under the policy that honours it and
@@ -3121,10 +3143,22 @@ def test_baker_refuses_bad_resources():
     ]
     for line in ok:
         open(city, "w").write(line + "\n")
-        p = run(["python3", CC, "--city", city, "--out", f"{WORK}/br.blob"])
+        if os.path.exists(out):
+            os.unlink(out)
+        p = run(["python3", CC, "--city", city, "--out", out])
         expect(p.returncode == 0,
                f"the baker refused a legal resource declaration:\n"
                f"  {line}\n{p.out}{p.err}")
+        # THE PAIRING FOR THE ABSENCE ABOVE. "a refused plan leaves no
+        # blob" is also satisfied by a baker that never writes one --
+        # and every case in this test unlinks --out first, so nothing
+        # else here would notice. This is the half that says the file
+        # appears when the plan is legal, which is what makes the
+        # absence a claim about the refusal rather than about the
+        # baker.
+        expect(os.path.exists(out),
+               f"the baker accepted a legal resource declaration and "
+               f"wrote no blob:\n  {line}\n{p.out}{p.err}")
 
     # AND THE ABSENCE IS REPORTED BY NAME. "No defaults" is only
     # honest if a house with no block is visible without one; the
@@ -3161,7 +3195,9 @@ def test_baker_refuses_bad_resources():
           f"its own reason -- ranges at both ends, the zero-is-not-"
           f"unlimited keys, malformed sizes and cpu lists, and the "
           f"memory-ordering, nice-without-sched=other and capacity-"
-          f"without-layer pairs; {len(ok)} legal declarations accepted; the "
+          f"without-layer pairs, each leaving no blob at --out; "
+          f"{len(ok)} legal declarations accepted AND written, which is "
+          f"what pairs that absence; the "
           f"unbounded houses named and the bounded one not)")
 
 
