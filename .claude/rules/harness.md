@@ -277,6 +277,35 @@ A test that needs one of those gifts must say so in the `ok` line or
 or a copied library to make the test green without recording that the
 machine will not have it.
 
+## A claim that needs a real boot goes to the operator, with the fixture
+
+**Do not reason about what a boot would do. Hand it over.** This machine
+has no boot at all, `landlock` is UNAVAILABLE and the kernel cannot
+mount vfat — `print_environment()` says all three on every run — so a
+whole class of question cannot be settled here and has been costing
+rounds that a run would have ended.
+
+The operator reports a machine that can (2026-09-13): Ubuntu
+6.8.0-139 under QEMU, real ext4 and real FAT32, erofs and `mkfs.erofs`
+present, Landlock at ABI 7 on the host clone, with six boots and a
+ceiling ladder already run there. Written as **reported**, not as fact,
+because nothing here can check it and an environment claim this file
+states as fact is the shape `CLAUDE.md`'s green-suite corollary exists
+to catch.
+
+What to hand over is the **fixture**, not the question: the city, the
+blob, the probe and the exact line whose output decides it. A question
+without a fixture turns into the operator writing the test, which is
+the cost this rule is meant to remove rather than move.
+
+The boundary is not "hard to test" — it is **this machine cannot
+execute it**: anything needing Landlock enforcement, a FAT ESP, a
+bootloader handoff, `pivot_root` from rootfs, a real `reboot(2)`, or a
+kernel whose limits are not this container's. Everything above in
+*The harness is more capable than the machine* is a list of those, and
+each entry there is a candidate for this route rather than for more
+reasoning.
+
 ## Scale: measured 2026-09-11, and the numbers are in the tool
 
 The gap is closed by `tools/scale-probe.py`. It rebuilds the tree at a

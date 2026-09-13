@@ -177,9 +177,24 @@ sections after this one and are deliberately not numbered here.
    and no reset. (This retraction previously claimed the grep returned
    nothing, which the commit that wrote it had already made false;
    `claims` ran it.)*
-5. **The init provisions nothing.** Every house gets `/dev/null` on 0 and its
-   own log pipe on 1 and 2. `close_others` sweeps the rest. There is no third
-   thing, and no mechanism for granting one. (This replaces the pre-2026-09-10
+5. **The init provisions no DESCRIPTORS — and that is the whole of what
+   this invariant says.** Every house gets `/dev/null` on 0 and its own
+   log pipe on 1 and 2. `close_others` sweeps the rest. There is no third
+   thing, and no mechanism for granting one.
+
+   **It provisions CAPABILITY, and that half was never written down.**
+   A house is uid 0, and unless a lid says otherwise it can mknod,
+   mount, unshare and chroot inside its own namespace — measured on a
+   real boot by the operator on 2026-09-13 against a house declaring
+   `lids=newns` and nothing else, all four returning 0. "The init
+   provisions nothing" was true about the descriptor table and read as
+   a statement about what a house can do. Both halves are true; only one
+   of them was here.
+
+   What follows from it is invariant 6's business and not this one's:
+   the lid set is the only thing that lowers it, and `lids=` is required
+   in a city precisely so the height is declared rather than defaulted
+   into. (This replaces the pre-2026-09-10
    statement "wiring is non-provision, not enforcement", which concerned
    declared edges. Edges are erased permanently — `HISTORY.md` §17.)
 
@@ -718,8 +733,20 @@ fixed in the round that found it — a matcher change is its own change.
 The sequence: widen the gate, re-measure with the command above, write
 the new number down, dispatch a reviewer.
 
-**Run `make prereport` before you write the report.** It reads the diff
-you are about to report on and asks five questions that have each cost a
+**Run `make prereport` before the FIRST PUSH, not before the report.**
+That is a change from 2026-09-13 and it is the cheaper end of the same
+tool. Its shapes are ones a reviewer would otherwise find, so running it
+after the work is done and before the reviewers go out moves them from
+round two to round zero. Running it last means the reviewers spend a
+round on what a build step already knew.
+
+It also has to be the LAST thing before the push rather than the last
+thing before the prose: `dee1516`'s message said `prereport clean` on
+two lines that same commit added, because the gates ran, then the
+HISTORY sections were written, then it was committed. A gate result is
+about the tree that existed when it ran.
+
+It reads the diff and asks five questions that have each cost a
 review round here: a comment claiming a mechanism is load-bearing, an
 absence assertion with no paired positive, a count in prose, a capability
 inferred from an installed tool, and a new test with no control language
@@ -892,6 +919,20 @@ Two habits follow from this:
 
   *This bullet's own change was four deletions and no rewording, which is
   the check it prescribes run against the diff that introduces it.*
+
+- **PROSE GETS ONE REVIEW ROUND.** Not four. This file reached that
+  conclusion and then the next prose change took four rounds anyway,
+  which is the weakest-rule pattern applied to a rule about rounds.
+
+  The rule: dispatch `claims` once. If a second round finds something,
+  the answer is **deletion of the passage**, not another correction —
+  because the corrections are where the defects came from. Measured
+  across four rounds on one passage: the rule being corrected never
+  accrued a defect, and the retractions did, almost exclusively.
+
+  A second round is still worth running; what changes is what you are
+  allowed to do with its findings. Correcting is how a passage grows a
+  fifth round.
 
 ## The characteristic failure
 

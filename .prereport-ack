@@ -326,3 +326,8 @@ prose-count	HISTORY.md	**`Twenty-two controls` in that message is an unnamed ins
 # Names both instances in the two sentences beneath it (the flat cp, and
 # the anchor written from a report). A named list, which the rule permits.
 prose-count	HISTORY.md	**Two controls in the same script, two different ways of testing
+# A sentinel, not an assertion: `lids = None` distinguishes "the key was
+# not given" from `lids=none`, which parses to 0. The paired positive is
+# in test_baker_rejects -- omitting the key is refused AND lids=none is
+# accepted, so a baker refusing both would fail the second half.
+unpaired-absence	bakery/nw-cc.py	if lids is None:

@@ -284,7 +284,8 @@ def load_city(path: str):
         parts = line.split()
         if parts[0] == "house":
             name, exe = parts[1], parts[2]
-            budget, lids = 3, 0
+            budget = 3
+            lids = None
             kind = None
             brick, layer, binds = "", "", []
             for kv in parts[3:]:
@@ -301,7 +302,7 @@ def load_city(path: str):
                         "budget is a hard total for the life of nw-sup, "
                         "not a sliding window")
                 elif k == "lids":
-                    lids = parse_lids(v)
+                    lids = parse_lids(v)   # `none` is a legal token
                 elif k == "brick":
                     brick = v
                 elif k == "layer":
@@ -326,6 +327,37 @@ def load_city(path: str):
                     f"house {name}: kind= is required and has no default. "
                     "Use kind=oneshot (exit 0 completes, never restarted) or "
                     "kind=longrun (any exit is unexpected, including 0).")
+            # LIDS= IS REQUIRED, AND `none` IS THE WAY TO SAY NO LIDS.
+            # Omitting it used to mean 0, which is the same byte a
+            # deliberate `lids=none` bakes -- so a reader of a city file
+            # could not tell a bare house somebody chose from one
+            # somebody forgot. The floor's HEIGHT is not the defect;
+            # its height being unrecorded is.
+            #
+            # This is what a bare house actually is, measured on a real
+            # boot by the operator (2026-09-13): a house with
+            # `lids=newns` and nothing else ran mknod, mount, unshare of
+            # mount and user namespaces, and chroot, all returning 0. It
+            # is uid 0 with essentially full capability inside its own
+            # namespace. Declaring that is a different act from
+            # defaulting into it.
+            #
+            # BAKE TIME ONLY, and that is the honest scope rather than a
+            # gap: the blob has one lids byte and 0 is 0, so nothing in
+            # `nwcheck.c` can tell an omission from a declaration. The
+            # distinction exists in the city file and dies at the seal.
+            # `.claude/rules/plan.md` says a rule the RUNTIME relies on
+            # must be in the checker too -- nothing at runtime relies on
+            # this one, so there is no second site to add.
+            if lids is None:
+                raise SystemExit(
+                    f"house {name}: lids= is required and has no default. "
+                    f"Say lids=none to declare a house with no lids -- "
+                    f"which on a real boot is uid 0 able to mknod, mount, "
+                    f"unshare and chroot inside its own namespace. "
+                    f"Omitting the key baked the identical byte, so a "
+                    f"deliberate bare house and a forgotten one read the "
+                    f"same.")
             # exec_path is resolved inside the brick, so it is already the
             # path the house will see and must not be rewritten against the
             # baker's cwd. Without a brick it names a machine path.

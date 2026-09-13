@@ -595,11 +595,36 @@ def test_bad_crc():
 
 def test_baker_rejects():
     city = f"{WORK}/bad-city.txt"
-    open(city, "w").write("house a /bin/true kind=oneshot\n"
-                          "house a /bin/true kind=oneshot\n")
+    # `lids=none` on both, so the refusal under test is the DUPLICATE and
+    # not the missing key. Asserting the reason string is what caught
+    # this when `lids=` became required: the bake still failed, for
+    # another reason, and `expect(returncode != 0)` alone would have
+    # stayed green on a test that had stopped testing duplicates.
+    open(city, "w").write("house a /bin/true kind=oneshot lids=none\n"
+                          "house a /bin/true kind=oneshot lids=none\n")
     p = run(["python3", CC, "--city", city, "--out", f"{WORK}/nope.blob"])
     expect(p.returncode != 0, "duplicate name should fail bake")
     expect("duplicate name" in (p.out + p.err), f"reason\n{p.out}{p.err}")
+
+    # AND THE NEW KEY ITSELF, in both directions. Omitting it is
+    # refused; saying `none` is accepted and bakes the same byte the
+    # omission used to -- which is the whole point, and why the
+    # acceptance half has to be here: a baker that refused BOTH would
+    # satisfy the refusal below.
+    nolids = f"{WORK}/nolids-city.txt"
+    open(nolids, "w").write("house a /bin/true kind=oneshot\n")
+    p = run(["python3", CC, "--city", nolids, "--out", f"{WORK}/nope.blob"])
+    expect(p.returncode != 0 and "lids= is required" in (p.out + p.err),
+           f"a house with no lids= must be refused: a bare house somebody "
+           f"chose and one somebody forgot bake the identical byte"
+           f"\n{p.out}{p.err}")
+    okl = f"{WORK}/okl-city.txt"
+    open(okl, "w").write("house a /bin/true kind=oneshot lids=none\n")
+    p = run(["python3", CC, "--city", okl, "--out", f"{WORK}/okl.blob"])
+    expect(p.returncode == 0,
+           f"lids=none must be ACCEPTED -- it is how a bare house is "
+           f"declared, and refusing it would leave no way to say it"
+           f"\n{p.out}{p.err}")
     open(city, "w").write("house a /bin/true kind=oneshot window=1 lids=none\n")
     p = run(["python3", CC, "--city", city, "--out", f"{WORK}/nope.blob"])
     expect(p.returncode != 0, "window= must fail the bake")
