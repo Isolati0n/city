@@ -2268,8 +2268,20 @@ def test_the_layer_reset_fires_once_per_run():
         # exactly an unchanged house keeping its data across a plan
         # change, the property this whole round is about. Under that
         # mutation the second plan's stage wipes it.
+        # A DIFFERENT CITY, NOT JUST A DIFFERENT PATH. Both blobs were
+        # baked from one city, so their sidecar LINES were byte-identical
+        # and `control` keyed `_LAYERS_RESET` on the whole line for a
+        # green run -- the second-blob fix killed blob-PATH keying and
+        # not blob-CONTENT keying. The diverging input is a second plan
+        # naming the same id over a different brick, which is the
+        # distinction the rest of this round is about and which that
+        # mutation would silently wipe.
+        city2 = f"{WORK}/reset2-{os.getpid()}.city"
+        open(city2, "w").write(
+            f"house resetprobe {BIN}/unit-probe kind=oneshot "
+            f"lids=newns,seccomp brick={'cd' * 32} layer={lid}\n")
         blob2 = f"{WORK}/reset2-{os.getpid()}.blob"
-        b2 = run(["python3", CC, "--city", city, "--out", blob2])
+        b2 = run(["python3", CC, "--city", city2, "--out", blob2])
         expect(b2.returncode == 0, f"bake the second plan\n{b2.out}{b2.err}")
         open(sentinel, "w").write("this boot wrote this\n")
         stage_layers(blob2)
@@ -4263,20 +4275,24 @@ def _candidate_stager_body(_sh, _ids_made):
     _ids_made += [keep_lid, move_lid]
     for i in (keep_lid, move_lid):
         _sh.rmtree(f"{_layer_dir()}/{i}", ignore_errors=True)
-    # MOVER LANDS ON A BRICK THE LIVE PLAN ALREADY USES, and that is the
-    # separating input rather than a detail. `control` keyed the guard on
-    # `want[i] not in live_ids.values()` -- "a brick the live plan uses
-    # ANYWHERE" instead of "the same brick FOR THIS ID" -- and both
-    # assertions below still held, because mover's new brick appeared
-    # nowhere live. Two forms that agree throughout a fixture's range
-    # cannot pin each other; only an input that separates them can, which
-    # is `LargestCityFits`'s lesson arriving in the stager.
+    # THREE DISTINCT BRICKS ACROSS THE TWO PLANS, because a guard read
+    # from either end agrees with the honest one on any fixture with
+    # fewer. `control` broke it twice: once keyed on "a brick the
+    # CANDIDATE names that the live plan does not" -- which mover's
+    # then-unique brick satisfied -- and once on "the live brick for
+    # this id appears nowhere in the candidate's set", which a two-brick
+    # fixture also cannot separate. Here keeper stays on `cd`, mover
+    # moves from `ab` to `ef`, so `ef` is new to the live plan AND `ab`
+    # is absent from the candidate's set: both readings diverge from
+    # the honest one. `LargestCityFits`'s lesson, third time in this
+    # tree -- two predicates that agree throughout the legal range
+    # cannot pin each other.
     two_city = f"{WORK}/cand-two-{tag}.city"
     open(two_city, "w").write(
         f"house keeper {BIN}/unit-probe kind=oneshot "
         f"lids=newns,seccomp brick={'cd' * 32} layer={keep_lid}\n"
         f"house mover {BIN}/unit-probe kind=oneshot "
-        f"lids=newns,seccomp brick={'cd' * 32} layer={move_lid}\n")
+        f"lids=newns,seccomp brick={'ef' * 32} layer={move_lid}\n")
     open(f"{slots}/A/plan.blob.layers", "w").write(
         f"{keep_lid} {'cd' * 32}\n{move_lid} {'ab' * 32}\n")
     r = _stage(city=two_city)
@@ -4289,6 +4305,42 @@ def _candidate_stager_body(_sh, _ids_made):
            f"than per id, so it refuses an unchanged house's carry-over "
            f"whenever any other house in the plan changed\n{r.out}{r.err}")
     _no_new_layers("two-id clash", keep_lid, move_lid)
+
+    # AND A SWAP, which is the only input that separates the OTHER
+    # end-reading. `control` keyed the guard on "the live brick for this
+    # id appears nowhere in the candidate's set" and the case above
+    # cannot see it: with live {cd, ab} and candidate {cd, ef} that
+    # reading returns exactly what the honest one does. Two houses
+    # exchanging bricks while both keep their ids makes every live brick
+    # present in the candidate's set, so that reading refuses NOTHING
+    # while the honest one refuses BOTH -- every house's layer now sits
+    # over an image it was not folded onto.
+    #
+    # Two mutations, two ends of the same pair, and each needed its own
+    # input. Adding bricks does not generalise; adding the shape that
+    # divides the two readings does.
+    swap_a, swap_b = f"l-cs-swa-{tag}", f"l-cs-swb-{tag}"
+    _ids_made += [swap_a, swap_b]
+    for i in (swap_a, swap_b):
+        _sh.rmtree(f"{_layer_dir()}/{i}", ignore_errors=True)
+    swap_city = f"{WORK}/cand-swap-{tag}.city"
+    open(swap_city, "w").write(
+        f"house sw1 {BIN}/unit-probe kind=oneshot "
+        f"lids=newns,seccomp brick={'bb' * 32} layer={swap_a}\n"
+        f"house sw2 {BIN}/unit-probe kind=oneshot "
+        f"lids=newns,seccomp brick={'aa' * 32} layer={swap_b}\n")
+    open(f"{slots}/A/plan.blob.layers", "w").write(
+        f"{swap_a} {'aa' * 32}\n{swap_b} {'bb' * 32}\n")
+    r = _stage(city=swap_city)
+    expect(r.returncode != 0, f"a candidate that SWAPS two houses' bricks "
+           f"while both keep their live layer ids was staged; each layer "
+           f"would then sit over an image it was not folded onto"
+           f"\n{r.out}{r.err}")
+    expect(swap_a in (r.out + r.err) and swap_b in (r.out + r.err),
+           f"the refusal must name BOTH swapped ids -- naming one is what "
+           f"a guard reading the pair from the wrong end produces"
+           f"\n{r.out}{r.err}")
+    _no_new_layers("swapped bricks", swap_a, swap_b)
 
     # THE FIELDS THE OTHER WAY ROUND ARE REFUSED BY SHAPE, and this
     # case exists because the tree already refused them by ACCIDENT.
@@ -5696,6 +5748,32 @@ def test_fold_house_refuses_a_house_that_is_not_closed():
                    f"_ours does not recognise the ids this test made "
                    f"({made}), so the machine-root check below is "
                    f"satisfied by a filter that matches nothing")
+            # AND `made` MUST BE COMPLETE, which the line above cannot
+            # say. It fails when a CLAUSE is missing and cannot fail
+            # when a `made.append` is missing -- `made` stays non-empty
+            # and every element left in it is still claimed. That is
+            # the direction `control`'s finding was actually in: a
+            # renamed, unappended id leaked to the machine root and the
+            # suite printed green. `claims` measured the asymmetry by
+            # dropping an append and getting a pass, in the round that
+            # added the comment claiming both halves.
+            #
+            # The body's layers live under its own root, so that
+            # directory IS the list of ids it created. Requiring every
+            # one of them to be in `made` closes the other direction.
+            own = f"{WORK}/fh-root{_layer_dir()}"
+            on_disk = set(os.listdir(own)) if os.path.isdir(own) else set()
+            # Paired: an empty listing would satisfy the check below for
+            # the wrong reason -- the body stages layers under its own
+            # root on every path that gets here.
+            expect(on_disk,
+                   f"{own} is empty, so the completeness check below is "
+                   f"satisfied by the body having created nothing")
+            missed = sorted(on_disk - set(made))
+            expect(not missed,
+                   f"the body created layer(s) {missed} and did not append "
+                   f"them to `made`, so `_ours` is unchecked for whatever "
+                   f"prefix they use and a leak of one would pass")
         leaked = sorted(i for i in (after - before) if _ours(i))
         if leaked and sys.exc_info()[0] is None:
             expect(False,
@@ -5754,6 +5832,16 @@ def _fold_house_body(made):
     # kills both. It does not kill `houses[1]` -- no fixed layout can,
     # and the only thing that would is folding two different units in
     # one test, which is not built.
+    #
+    # AND THE FIRST HOUSE'S NAME CONTAINS THE FOLDED UNIT'S. `control`
+    # replaced the lookup with `unit in h["name"]` and the suite stayed
+    # green, because `other`, `h1` and `zlast` contained none of each
+    # other's names -- a second unkilled family beside the index one,
+    # and one the index comment did not cover. `h1sub` sits before `h1`,
+    # so substring matching returns the wrong house and case 1 goes red.
+    # The name costs nothing and it is the same trick as the middle
+    # position: make the fixture an input the mutation answers wrongly,
+    # rather than a bigger fixture.
     os.makedirs(f"{tree}/mnt", exist_ok=True)
     open(f"{tree}/bin/other", "wb").write(b"#!/bin/sh\nexit 0\n")
     os.chmod(f"{tree}/bin/other", 0o755)
@@ -5775,13 +5863,13 @@ def _fold_house_body(made):
     os.makedirs(f"{root}{_layer_dir()}/{lid3}/work")
     city = f"{root}/live.city"
     open(city, "w").write(
-        f"house other /bin/other kind=longrun budget=7 "
-        f"lids=newns,newnet,seccomp,landlock brick={H2} layer={lid2} "
-        f"bind=/mnt\n"
+        f"house h1sub /bin/other kind=oneshot lids=newns,seccomp "
+        f"brick={H2} layer={lid3}\n"
         f"house h1 /bin/prog kind=oneshot lids=newns,seccomp "
         f"brick={H} layer={lid}\n"
-        f"house zlast /bin/other kind=oneshot lids=newns,seccomp "
-        f"brick={H2} layer={lid3}\n")
+        f"house other /bin/other kind=longrun budget=7 "
+        f"lids=newns,newnet,seccomp,landlock brick={H2} layer={lid2} "
+        f"bind=/mnt\n")
     b = run(["python3", CC, "--city", city, "--out", f"{slots}/A/plan.blob"])
     expect(b.returncode == 0, f"bake the live plan\n{b.out}{b.err}")
     open(f"{slots}/current", "w").write("A\n")
@@ -5959,13 +6047,13 @@ def _fold_house_body(made):
     # with only h1's brick and layer changed.
     want_city = f"{root}/expected.city"
     open(want_city, "w").write(
-        f"house other /bin/other kind=longrun budget=7 "
-        f"lids=newns,newnet,seccomp,landlock brick={H2} layer={lid2} "
-        f"bind=/mnt\n"
+        f"house h1sub /bin/other kind=oneshot budget=3 "
+        f"lids=newns,seccomp brick={H2} layer={lid3}\n"
         f"house h1 /bin/prog kind=oneshot budget=3 lids=newns,seccomp "
         f"brick={newh} layer={nid}\n"
-        f"house zlast /bin/other kind=oneshot budget=3 "
-        f"lids=newns,seccomp brick={H2} layer={lid3}\n")
+        f"house other /bin/other kind=longrun budget=7 "
+        f"lids=newns,newnet,seccomp,landlock brick={H2} layer={lid2} "
+        f"bind=/mnt\n")
     wb = run(["python3", CC, "--city", want_city, "--out", f"{root}/want.blob"])
     expect(wb.returncode == 0, f"bake the expected city\n{wb.out}{wb.err}")
     expect(open(f"{root}/want.blob", "rb").read()
@@ -6001,9 +6089,29 @@ def _fold_house_body(made):
            f"two different saves derived the same layer id {nid2}; the "
            f"second candidate would boot the first one's data")
 
-    # 5. REUSING THE ID IS REFUSED, asked for explicitly.
+    # CHANGE THE LAYER FIRST, or case 5 cannot see WHEN the refusal
+    # happens. The tool used to fold and then refuse, and the wrapper's
+    # "a refusal changed nothing" passed anyway: case 4b had already
+    # produced the byte-identical image, so the brick the late refusal
+    # wrote was one that already existed and `_slot_state` saw no
+    # change. `control` found it by adding a byte; the guard moved
+    # before the fold and NOTHING pinned the move -- reverting it left
+    # the suite green, because the late check still refuses.
+    #
+    # With different content the fold would write a new .img and .meta,
+    # so a refusal that folds first is caught by the post-check that
+    # already exists rather than by a new assertion.
+    open(f"{up}/third-save", "w").write("so a fold would write anew\n")
+
+    # 5. REUSING THE ID IS REFUSED, asked for explicitly -- BY THE
+    #    HELPER, and the reason string has to say which. `whiteout`
+    #    appears in the helper's message AND in the stager's, so it
+    #    matched either and `HISTORY.md` §73 recorded this case as red
+    #    via the stager when the helper refuses first and the stager is
+    #    never reached. `claims` showed the actual message by asking for
+    #    an impossible reason. Keyed on text only the helper emits.
     _refuse("reusing the live layer id", lambda: _fold(new_layer=lid),
-            "whiteout")
+            "the one the live plan already uses")
 
     return (f"ok fold-house (closed established by two paired scans -- "
             f"environ and mountinfo, the second seeing a grandchild the "

@@ -111,7 +111,7 @@ The boundary that does matter here is not between files, it is **trust**:
   declared id is for -- from one that reuses it over a different brick,
   which after a fold stacks the folded contents over themselves.
   `tools/stage-layers.py` reads field 0 and ignores the rest, because it
-  creates directories and the brick does not bear on that. The two
+  creates directories and the brick does not bear on that.
   `tools/stage-layers.py` and `tools/stage-candidate.py` disagreeing
   about a one-field line is not the asymmetry `control` found before:
   they are answering different questions, and `tools/stage-candidate.py`

@@ -74,6 +74,20 @@ sections after this one and are deliberately not numbered here.
    <<filecontains:plan.als:assert FdArithmetic>>
    <<filecontains:Plan.tla:FdNeedAgrees ==>>
 
+   **The brick width is the same class and is annotated for the same
+   reason.** `tools/stage-candidate.py` checks a sidecar's brick field
+   against `NW_BRICK_HASH * 2` read from `blob.h`. The first version
+   spelled `64`, `claims` found it under the docstring forbidding a
+   second copy of a limit, and `control` then showed that nothing
+   distinguishes the derived form from the literal: replacing the read
+   with `64` leaves `make test` green, because every real sidecar
+   satisfies either. So the derivation is pinned by text, which is what
+   this annotation form can do and all it can do:
+   <<filecontains:tools/stage-candidate.py:_blob_h("NW_BRICK_HASH")>>
+   It catches the site ceasing to read the header. It does not catch
+   the header and the site disagreeing about a value, which is the
+   limitation this whole paragraph is about.
+
    **What that buys, measured rather than reasoned, because the first
    version of this paragraph was wrong.** It said the annotations catch a
    site disappearing and not a site disagreeing, so `* 3` in `blob.h`
@@ -480,8 +494,12 @@ rediscover them.
 make            # all binaries
 make stage      # stages to /tmp/nw-init-run
 make test       # stage + install-agents.sh --check + nw-check
-                # + tests/run.py + tools/coverage-tcb.sh (the floor is
-                #   the script's own default -- read it there, not here)
+                # + tests/run.py + bakery/test_fold.py
+                # + tools/coverage-tcb.sh (the floor is the script's own
+                #   default -- read it there, not here)
+                # Read the target, not this line: the fold suite was
+                # missing from it for as long as the list was written
+                # by hand, and this list exists to be run step by step.
 make proof      # the CBMC proofs of the validator, and their controls
 ```
 

@@ -7414,9 +7414,14 @@ property that matters is not "differs from the old one" but "two
 different saves cannot collide", so the suite now folds twice with
 changed content and requires both the brick hash and the id to move.
 
-Also: the reuse refusal is red via the *stager's* refusal rather than
-the helper's, which is correct redundancy — the test tells them apart by
-reason string.
+Also: the reuse refusal is red via the **helper's** own guard, which
+runs before the stager is called at all. The stager's copy of the
+refusal is real and is unreached on that path. *(This said the opposite
+and added that the test told them apart by reason string; `claims` asked
+for an impossible reason to make the refusal print, and it was the
+helper's. `whiteout` — the string the case wanted — appears in both
+messages, so it separated nothing. The case is keyed on text only the
+helper emits now.)*
 
 ### And one hang, in an assertion written to report a failure
 
@@ -7448,7 +7453,7 @@ name. So the guard made a fold of a two-house city impossible except by
 orphaning the other house's data, which is the failure the keying
 exists to prevent.
 
-### The guard's own two reasons split, and only one of them was general
+### The guard's own reasons split, and neither was general
 
 *"After a fold it would stack the folded contents over themselves"* is
 about the house that was folded. Its brick now contains that layer's
@@ -7745,11 +7750,13 @@ unreliable in a way that looks like a finding. Worth a scratch copy on
 both sides, and worth knowing that a reviewer's "the tree moved under
 me" is not always another agent's commit.
 
-### Round two: four of five controls stayed green, all against the fixes
+### Round two: the controls that stayed green, all against the fixes
 
 `control` and `claims` were re-dispatched against this round's fixes
 rather than against what they originally found. That is §53's rule, and
-it paid: **four of `control`'s five mutations passed.**
+it paid: every mutation below passed, and the only one that behaved was
+the baker pairing every id with `houses[0]["brick"]`, which the
+two-bricks fixture caught.
 
 - **`made` never held `lid2`.** `_ours` has three clauses and the
   `fo<pid>` one was paired by nothing, so `control` renamed that id,
@@ -7818,7 +7825,8 @@ pairing turns a class of mistake from something a reviewer catches into
 something the suite catches, and the evidence for that is the author
 making the same mistake twice with two different outcomes.
 
-**The red baseline did not invalidate the three controls beside it.**
+**The red baseline did not invalidate the controls beside it** — the
+`houses[-1]`, set-valued-guard and per-blob-reset mutations.
 Each died at its own assertion and earlier in the run than the pairing:
 the reset and stager tests both precede `fold-house`, and F2 died in
 `fold-house`'s first case, at which point the machine-root block
@@ -7826,10 +7834,147 @@ correctly printed nothing and let the body's failure stand — the
 masking fix from earlier in this round, working, in the run that
 exposed a different defect.
 
+### Round three: a gate result reported from before the last edit
+
+**`dee1516`'s own message says `prereport clean` and the tool says
+otherwise**, on two lines that commit added. The sequence: run the
+gates, write the HISTORY sections, commit. The gate was green when it
+ran and the report was about a tree that no longer existed by the time
+it was written — the partial-gate trap at one remove, in a commit
+message quoting the partial-gate trap. A commit is immutable, so this
+paragraph is the correction; the lesson is that the gates go last, after
+the prose, not before it.
+
+Both flagged lines were defensible in content — `HISTORY.md` is exempt
+as a record, and one of them enumerated what it counted — which is
+beside the point. The claim under review is the report line, and
+`prereport clean` is not what the run said.
+
+**`Twenty-two controls` in that message is an unnamed instance-count.**
+`CLAUDE.md`: *name them and the number beside them is redundant but
+checkable; without names, give no number.* There is no list of
+twenty-two anywhere, and `claims` could not reconstruct it from the
+sections that do name controls. The usual defence for a commit message
+— immutable, dated, so not a hostage to the next commit — answers
+staleness and not this: the objection is that nobody, the author
+included, can re-derive it.
+
+### And the pairing added last round enforced one direction
+
+`expect(made and all(_ours(i) for i in made))` fails when a CLAUSE is
+missing — the `fz` episode above — and **cannot fail when a
+`made.append` is missing**, because `made` stays non-empty and every
+element left in it is still claimed. `claims` dropped an append and got
+a pass.
+
+That is the direction `control`'s finding was actually in: a renamed,
+unappended id leaked to the machine root and the suite printed green.
+So the fix taught the pairing the other half, and the comment beside it
+claimed both. The body's layers live under its own root, so that
+directory IS the list of ids it created; every entry in it must now be
+in `made`.
+
+Worth separating from the other instances in this round. The earlier
+ones were fixes that reproduced the defect's *mechanism*; this is a fix
+that closed the defect's *mirror image* while its comment claimed the
+pair. A claim with parts, in the assertion written to close a
+claim-with-parts failure, two rounds running.
+
+### And the control for that fix ran against a tree without the fix in it
+
+`cp tests/run.py .prereport-ack HISTORY.md CLAUDE.md $SP/t3/` puts every
+source **flat** in the target, so the edited suite landed at
+`$SP/t3/run.py` and `$SP/t3/tests/run.py` stayed the committed version.
+The whole control round — baseline and mutation — exercised the tree
+without the change. The mutation came back GREEN, which read as "the
+new check does not work" and meant "the new check was not there".
+
+The staging trap, in a scratch copy instead of a stage, and it was
+caught only because the green answer was surprising. Nothing announced
+it: `cp` succeeded, the suite ran, the target printed `PASSED`. The
+tell was a line count, and the check that settles it is one command —
+`grep -c` for the new code in the copy before believing anything the
+copy says. That sanity line is in the control script now.
+
+**Two controls in the same script, two different ways of testing
+nothing.** The other's mutation anchor was written from a reviewer's
+report rather than from the file and was indented four spaces where the
+report showed eight, so it never applied; the assertion beside it
+turned that into a traceback instead of a silent pass. One announced
+itself and one did not, and the difference was an assertion on the
+anchor — which is why every scripted mutation here carries one.
+
+### `control` round three: a guard read from the other end, and a tool that refused too late
+
+**The clash guard has two ends and each needed its own input.** Round
+two's mutation was "a brick the CANDIDATE names that the live plan does
+not"; round three's was "the live brick for this id appears nowhere in
+the candidate's set". `mover` landing on a live brick separated the
+first and does nothing for the second — checked arithmetically before
+touching the fixture, and three bricks in the obvious arrangement does
+not separate it either. What does is a **swap**: two houses exchanging
+bricks while both keep their live ids, so every live brick is present
+in the candidate's set and that reading refuses nothing while the
+honest one refuses both. Its own case now.
+
+Adding bricks does not generalise. Adding the shape that divides the
+two readings does.
+
+**The same for the reset test.** Both its blobs were baked from one
+city, so their sidecar lines were byte-identical and keying
+`_LAYERS_RESET` on the whole line passed. The second-blob fix killed
+blob-PATH keying and not blob-CONTENT keying. The second blob declares
+a different brick now.
+
+**And a tool defect, not a test one.** `fold_house` folded and THEN
+refused a reused layer id, so `_refuse`'s "a refusal changed nothing"
+was false of the tool and passed only because case 4b had already
+written the byte-identical image. An explicit reuse refuses before the
+fold now — `new_layer` needs no hash — and the derived case keeps its
+late check, where it cannot move.
+
+**THE FIX FOR THAT WAS ITSELF UNPINNED, which is the same defect one
+level up.** Reverting the guard to after the fold left the suite green,
+because the late check still refuses and only the ORDER changed. Case 5
+writes a byte into the layer first now, so a fold would produce a
+different image and the post-check that already exists catches a
+refusal that folded first:
+
+```
+FAIL: reusing the live layer id: the refusal changed
+['…1ba4ff075862….img', '…1ba4ff075862….meta'] -- a refusal that printed
+its reason AFTER doing the work satisfies every other assertion here
+```
+
+A check passing by coincidence, and then its fix passing by
+coincidence. The tell both times was the same question: what single
+change would leave this green.
+
+**Two survivors named, one of them closed.** `houses[1]` is unkillable
+by any fixed layout and the comment says so. Substring name matching —
+`unit in h["name"]` — passed because `other`, `h1` and `zlast`
+contained none of each other's names; the first house is `h1sub` now,
+which costs nothing and is the same trick as the middle position: make
+the fixture an input the mutation answers wrongly rather than a bigger
+fixture.
+
+**The brick width's derivation is pinned by `checkbrief`, not the
+suite.** Replacing `int(_blob_h("NW_BRICK_HASH")) * 2` with `64` leaves
+`make test` green, because every real sidecar satisfies either.
+Annotated under invariant 3, where it reports `contradicted` — which
+catches the site ceasing to read the header and not the header and the
+site disagreeing, the limitation that paragraph is already about.
+
 ### One migration consequence, recorded because nothing enforces it
 
-A live slot staged before this change has a one-field `.layers`, and
-`stage-candidate.py` refuses every candidate against it until the live
-plan is re-baked. The refusal names the file and the line and says
+A live slot staged before this change has a one-field `.layers` **if
+its plan declares a layer**, and `stage-candidate.py` then refuses every
+candidate against it until the live plan is re-baked. A brickless live
+plan emits no sidecar lines at all — `NW_E_LAYERPAIR` makes a layer
+without a brick unrepresentable — so it is unaffected, and that is the
+common case in the suite. The qualifier reached `.claude/rules/plan.md`
+and the commit message and not this paragraph: corrected in one file and
+not the other, which is this project's most common defect, inside the
+record of a round that says so. The refusal names the file and the line and says
 "Re-bake the plan", so it is self-diagnosing rather than silent. Found
 by `claims` reading the guard, not by hitting it.

@@ -415,6 +415,28 @@ def fold_house(slots, city, unit, root="", nw_check=None, new_layer=None,
     layer_dir = os.path.join(root + mkbrick._define("NW_LAYER_DIR"), layer_id)
     upper = os.path.join(layer_dir, mkbrick._define("NW_LAYER_UPPER"))
 
+    # AN EXPLICIT REUSE IS REFUSED BEFORE THE FOLD, not after it. The
+    # check below runs on `nid`, which needs the folded image's hash, so
+    # it sat after `foldmod.fold()` -- and a refusal that has already
+    # written a brick is the thing the test's own post-check says it is
+    # not. `control` proved the post-check passes by coincidence: case 5
+    # follows a fold of identical content, so the image it wrote was
+    # byte-identical to one already there and nothing appeared to
+    # change. One extra byte of layer content before it and the refusal
+    # names the .img and .meta it left behind.
+    #
+    # `new_layer` is known here and needs no hash, so the explicit case
+    # -- the one an operator can ask for and the one the suite pins --
+    # refuses having written nothing. The derived case keeps its check
+    # below, where it cannot be moved: a derived id collides only when
+    # the fold reproduced the base exactly, i.e. an empty layer.
+    if new_layer and new_layer == layer_id:
+        raise SystemExit(
+            f"fold-house: the candidate's layer id {new_layer!r} is the one "
+            f"the live plan already uses. Reusing it stacks the just-folded "
+            f"content over itself and re-applies its whiteouts, deleting "
+            f"files the fold just saved.")
+
     require_closed(layer_id, upper)
     if not quiet:
         print(f"fold-house: {unit} is closed (no NW_LAYER={layer_id} and no "

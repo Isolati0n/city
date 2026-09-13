@@ -51,9 +51,13 @@ file's length to dodge it; that is a property of your edit, not of the
 mechanism.
 
 **The partial-gate trap.** `make test` is not one step. It stages, runs
-`install-agents.sh --check`, runs `nw-check`, runs `tests/run.py`, and
-runs `tools/coverage-tcb.sh`, in that order — and **the suite is what
-the target runs, not its middle step.** On 2026-09-12 a commit was
+`install-agents.sh --check`, runs `nw-check`, runs `tests/run.py`, runs
+`bakery/test_fold.py`, and runs `tools/coverage-tcb.sh`, in that order —
+and **the suite is what the target runs, not its middle step.** (The
+fold suite was missing from this enumeration from the day it landed
+until `claims` grepped the Makefile. An enumeration inside the warning
+about running steps individually, short by the step most recently added
+— read the target.) On 2026-09-12 a commit was
 reported as done on the evidence of `make stage` followed by `python3
 tests/run.py`; the brief gate, which runs *before* the suite, was red
 and had been made red by that same commit. Both `tcb-review` and

@@ -313,3 +313,16 @@ unpaired-absence	tests/run.py	expect(not os.path.exists(sentinel),
 # English, not a count of a list: "folding two different units in one test"
 # names a thing that does not exist. Nothing here can grow past it.
 prose-count	tests/run.py	# one test, which is not built.
+# "§73" matched as a count. A section name, not a quantity.
+prose-count	tests/run.py	#    matched either and `HISTORY.md` §73 recorded this case as red
+# Paired by the `expect(on_disk, ...)` immediately above it, which
+# requires the body to have created layers under its own root. Without
+# that, an empty listing makes "nothing was missed" true for the wrong
+# reason.
+unpaired-absence	tests/run.py	expect(not missed,
+# Quotes the count it is condemning. HISTORY is exempt as a record, and
+# the sentence exists to say the number should not have been written.
+prose-count	HISTORY.md	**`Twenty-two controls` in that message is an unnamed instance-count.**
+# Names both instances in the two sentences beneath it (the flat cp, and
+# the anchor written from a report). A named list, which the rule permits.
+prose-count	HISTORY.md	**Two controls in the same script, two different ways of testing
