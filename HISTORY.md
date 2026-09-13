@@ -8709,3 +8709,39 @@ direction. **Recorded with the reason, not as a gap.** The next reader
 needs to know it costs forty-three minutes a run before deciding
 whether to start one, or "not completed" reads as "nobody got round to
 it" and they begin it expecting it to finish.
+
+### The shape, named, because it arrived twice on one day from opposite directions
+
+The operator, on §78's guard: *"a success signal confirming the step
+that ran rather than the step that mattered, with the failure invisible
+because the wrong stream was discarded."*
+
+Their instance, reported and not checkable here: `gcc` failed, the `cp`
+after it succeeded, `staged on root` printed, and two boot results were
+read off a binary that was never compiled. Ours: cbmc failed to run,
+`--show-loops` produced nothing, and the guard reported a loop as
+absent. Different tools, one structure.
+
+**The tell is always in the part of the output nobody was reading** — a
+mode-`0644` binary, an empty loop list. In both cases every line the
+reader *was* looking at was true.
+
+The actionable half is in `CLAUDE.md` now, with the in-tree
+counter-example that makes it a rule rather than a warning:
+`tools/coverage-tcb.sh` discards `gcov`'s stderr too, and then asserts
+the output file EXISTS and refuses a percentage it cannot parse. Same
+discarded stream, opposite outcome, because it checks a positive
+artifact instead of reading meaning into a silence.
+
+### And `proofs/` went out unreviewed, which is where the next round starts
+
+§78 was found, fixed, run and pushed by one party with no reviewer on
+any of it — in the directory that is the CBMC oracle for `nwcheck.c`.
+The operator's reading, and it is right: *"that's the one place in the
+tree where the thing checking correctness has never itself been
+checked."*
+
+`tcb-review` and `control` are dispatched against it, scoped away from
+the 2595-second bound. The question put to `control` is the one that
+matters: **is there a change to `nwcheck.c` that the whole of
+`make proof` accepts and `make test` also accepts?**

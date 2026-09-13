@@ -1398,6 +1398,44 @@ shape this file names as the durable kind.)
   **"when did it last fire, and what made it fire?"** If the answer is
   "never", that is the finding — not the reassurance it resembles.
 
+- **A SUCCESS SIGNAL CONFIRMS THE STEP THAT RAN, NOT THE STEP THAT
+  MATTERED — and the failure is invisible because the wrong stream was
+  discarded.** Two instances on 2026-09-13, different tools, one
+  structure.
+
+  `proofs/run.sh`'s `check_unwindset` ran `cbmc --show-loops … 2>/dev/null`.
+  cbmc failed to run; the empty result was read as "the loop is absent";
+  and the guard printed `--unwindset names field_dup.1, which is not a
+  loop in this program` while 25 such loops exist in both builds.
+  **Tool-didn't-run and bound-names-nothing produce identical evidence**,
+  and the guard reported the second, with a message whose every clause
+  was about something else. `HISTORY.md` §78.
+
+  The operator reports the same shape from the other side on the same
+  day: `gcc` failed, the `cp` after it succeeded, `staged on root`
+  printed, and two boot results were read off a binary that was never
+  compiled. Written as **reported**, because nothing here can check a
+  claim about that machine — but the structure is checkable and it is
+  the same one.
+
+  **The tell is always in the part of the output nobody was reading.**
+  A mode-`0644` binary; an empty loop list. Neither is the line the
+  reader is looking at, and in both cases every line they *were* looking
+  at was true. So when a diagnosis names a cause, ask what else produces
+  exactly that evidence — and never discard a stream you are about to
+  draw a conclusion from. `2>/dev/null` on a command whose *silence* you
+  will interpret is the specific form to grep for.
+
+  **The fix is to check a positive artifact, not to interpret an
+  absence**, and `tools/coverage-tcb.sh` is the worked example already
+  in this tree. It discards `gcov`'s stderr too — and then asserts
+  `[ -f nwcheck.c.gcov ]` and refuses with `gcov produced nothing`, and
+  separately refuses a percentage it cannot parse. A `gcov` that fails
+  there produces a correct diagnosis rather than a confident wrong one,
+  because the script asks whether the output EXISTS instead of reading
+  meaning into its silence. Same discarded stream, opposite outcome; the
+  difference is the whole rule.
+
   **And FIRING is not the same as being obeyed, which `tools/review-gate.sh`
   demonstrated from both sides in successive days.** On 2026-09-11 it showed a
   review owed and three commits were pushed anyway — a stop hook asking
