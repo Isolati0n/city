@@ -409,9 +409,11 @@ rediscover them.
   landed 2026-09-13 — and does not implement this; its own docstring
   says so and says an operator pointing it at a running house gets no
   warning.** What is missing is the caller that establishes the
-  precondition, and the two are called "the fold helper" in different
-  places, so this bullet and that file pointed at each other with one
-  qualifier between them missing. `claims`. "The house is not
+  precondition. The asymmetry matters and a first telling smoothed it
+  away: `bakery/fold.py` has never used the phrase "fold helper" — it
+  calls itself the fold engine and disclaims the check, and it did so in
+  the commit that landed it. This bullet was the only place the
+  qualifier was missing. `claims`. "The house is not
   running" is satisfied by a longrun house between restarts, which is
   about to write; the supervisor is the thing whose absence means the
   unit will not run again before the next boot, because it stops
@@ -647,8 +649,8 @@ never examined; the measured proportion is in `HISTORY.md` §63, not
 here. Whether a count in a brief is caught depends on where the line
 wraps.
 
-**There is a SECOND blindness, and widening the gate does not touch
-it.** `COUNTED` is a vocabulary, so a count of a noun it does not list
+**There is a further blindness beside the gate, and widening the gate
+does not touch it.** `COUNTED` is a vocabulary, so a count of a noun it does not list
 is invisible even on a line the gate passes: `two checks` and `three
 files` match, `two constants` and `three greps` do not. Both of those
 went into the falsifiable-surface paragraph and `prereport` returned
@@ -931,8 +933,10 @@ silent — it returns the same verdict, *hypothesis*, for everything unwritten,
 which is the same as ranking nothing. A careful specification and an
 unfalsifiable one score identically under it, so neither is inspected.
 ("Nothing to say about it" stood here for a round and contradicted the
-sentence three lines above, which says in as many words that such writing is
-a hypothesis. `claims`.)
+sentence closing the section above, which says in as many words that such
+writing is a hypothesis. The retraction first gave that sentence's distance
+in lines and got it wrong — a positional count, in a file that records
+positional counts as a shape it retired. `claims`, twice.)
 
 The test that applies earlier: **could any existing thing falsify a single
 sentence of this?** Ask it of a design note, a plan, a critique, a set of
@@ -957,29 +961,28 @@ yet.
 **Measure the falsifiable surface rather than asserting it is small — and
 never say you have measured all of it.** `docs/NW-EXPECTATIONS-UNANCHORED.md`
 (its status is line 3, under the title) is the worked instance. Checked
-against the tree: the `SIGCHLD`/`waitpid`/`signalfd` counts in `pid1.c` and
-`nwsup.c`; the absence of a layer-size bound; and `NW_KIND_ONESHOT` and
-`NW_KIND_LONGRUN` in `blob.h`. Those held.
+against the tree and holding: the `SIGCHLD`/`waitpid`/`signalfd` counts in
+`pid1.c` and `nwsup.c`, the absence of a layer-size bound, and
+`NW_KIND_ONESHOT` and `NW_KIND_LONGRUN` in `blob.h`.
 
-**This paragraph said they were its "whole falsifiable surface", and
-`claims` disproved that in the same round it was written.** Three more
-sentences the tree can answer, one of which it *disagrees* with — the
-document says a container's state is bounded to one directory, and a house
-with a declared bind has durable state in two, since `nwsup.c` binds
-`MS_BIND | MS_REC` with no `MS_RDONLY` and a full write grant, machine-side
-and outside the layer. So the exhaustiveness is gone rather than the number
-corrected: "three" would have been the same claim with a different integer,
-and what the phrase asserted was *how hard someone looked*, which this file's
-count rule already retired. Name what you checked; let the list be the claim
-and let the next reader add to it.
+**Name what you checked and stop there.** This paragraph claimed those were
+its "whole falsifiable surface"; the correction claimed a number instead;
+both were wrong and the second was wrong in the same shape as the first,
+because a count and a completeness claim are both statements about how hard
+somebody looked. The omission that mattered was the document's own thesis —
+it says nothing in the tree can disagree with any sentence in it or confirm
+one, and the list above refutes that in both directions. `HISTORY.md` §71
+has the audit; do not tell it twice, and note that the two tellings had
+already drifted apart when `claims` compared them.
 
-Two smaller lessons from that audit, both about the checks rather than the
-document. Only two of the three above are greps — "no layer-size bound" is a
-negative over a set of files somebody chose, and naming the chooser is part
-of the claim, because on a kernel with an on-disk quota format it would be
-true of the codebase and false of the machine. And half of `nwsup.c`'s count
-is comment, the weakness invariant 1 records for its own `mount` grep,
-adopted here uncritically as a headline measurement.
+**Every absence is over a set somebody chose, and the chooser is part of the
+claim.** "No layer-size bound" is the obvious case — on a kernel with an
+on-disk quota format it would be true of the codebase and false of the
+machine, which is a description of the model presented as a description of
+the machine. But the greps are no different: `pid1.c` and `nwsup.c` were
+picked and `nwspawn.c`, `dawn.c` and `rescue.c` were not. Half of `nwsup.c`'s
+count is comment, too — invariant 1's own recorded weakness, adopted here
+uncritically as a headline measurement.
 
 *The test comes from `docs/NW-EXPECTATIONS-UNANCHORED.md`, written by another
 agent from a review with a second and relayed by the operator; `a27563d`
