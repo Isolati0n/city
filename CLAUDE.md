@@ -1398,6 +1398,26 @@ shape this file names as the durable kind.)
   **"when did it last fire, and what made it fire?"** If the answer is
   "never", that is the finding — not the reassurance it resembles.
 
+- **A SOUNDNESS ARGUMENT IS A CLAIM ABOUT WHERE ITS ASSUMPTIONS COME
+  FROM, AND MOVING THE HARNESS REASSIGNS THOSE ORIGINS SILENTLY.** No
+  code changes; the sentence changes meaning because its subject moved.
+
+  `proofs/leaf_name_dup.c` assumed its field is non-empty and NUL-padded
+  and said both halves come from `name_ok`. True of `name`. It was then
+  parameterised by offset and run at `layer`, where padding still comes
+  from `name_ok` and **non-emptiness comes from a guard in `nw_check`
+  that `proofs/` does not prove and only reads**. The assumption held;
+  the argument for it did not.
+
+  Those two are indistinguishable from a passing run, and only one is a
+  defect — which is why the question is not "is this proof vacuous" but
+  **"for each assumption, what establishes it, and is that thing proven
+  or merely read?"** An assumption resting on unproven code is fine and
+  common; recording it as resting on proven code is the defect, because
+  the dependence then has nothing watching it. State it as a dependence
+  and name what would have to be re-checked if that code moves.
+  `HISTORY.md` §78.
+
 - **A SUCCESS SIGNAL CONFIRMS THE STEP THAT RAN, NOT THE STEP THAT
   MATTERED — and the failure is invisible because the wrong stream was
   discarded.** Two instances on 2026-09-13, different tools, one
