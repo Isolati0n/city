@@ -105,19 +105,32 @@
  * one itemised.
  *
  * The counted peak, measured 2026-09-14 on two independent machines.
- * Before the interleave, 3 + 2n at the pipe loop: stdio only, since the
- * plan fd is opened at pid1.c:447 and closed at 469 before it. Last open
- * 510, first fail 511 against soft 1024, with no slack at either end --
- * floor((1024-3)/2) is exactly 510. After the interleave, 6 + n: stdio,
- * one log_w per house, signalfd, two report-pipe ends. Last open 1018,
- * first fail 1020 on `report pipe`.
+ * TRUE OF THIS TREE: 3 + 2n at the pipe loop -- stdio only, since the plan
+ * fd is opened at pid1.c:447 and closed at 469 before it. Last open 510,
+ * first fail 511 against soft 1024, with no slack at either end, and
+ * floor((1024-3)/2) is exactly 510. Reproduced independently on a second
+ * machine and confirmed against the source here.
  *
- * So the fd pre-flight's `NW_FD_RESERVED + n` sits two above the peak and
- * refuses two houses a 1024-descriptor machine would honour. That cost is
- * taken deliberately. It is written here because the check compares this
- * constant against rlim_max, which getrlimit measured, and an unlabelled 8
- * beside a measured 1024 reads as though both were obtained the same way.
- * They were not.
+ * NOT TRUE OF THIS TREE, and written as kind 3 because the measurement is
+ * worth keeping and the tense is not. The interleave and the fd pre-flight
+ * are one composed patch that is NOT LANDED -- there is no getrlimit and
+ * no reader of NW_FD_RESERVED anywhere but the two asserts below
+ * (`grep -rn NW_FD_RESERVED --include=*.c`). The first draft of this
+ * comment stated both as present fact, which is a blob.h comment
+ * describing a check that does not exist: the characteristic failure, in
+ * the header that declares the constant. When that stack lands:
+ *
+ *   - the peak becomes 6 + n -- stdio, one log_w per house, signalfd, two
+ *     report-pipe ends; last open 1018, first fail 1020 on `report pipe`;
+ *   - the pre-flight's `NW_FD_RESERVED + n` then sits two above that peak
+ *     and refuses two houses a 1024-descriptor machine would honour, a
+ *     cost taken deliberately;
+ *   - and the reason to label 8 at all becomes live: the check compares
+ *     this constant against rlim_max, which getrlimit MEASURED, and an
+ *     unlabelled 8 beside a measured 1024 reads as though both were
+ *     obtained the same way. They were not.
+ *
+ * Until then the only thing 8 does is sit in the asserts below.
  *
  * The asserts below spell the peak 2n + 8, which is the shape from before
  * the interleave. At NW_MAX_FDS = 1024 that caps NW_MAX_UNITS at 508 where

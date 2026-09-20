@@ -115,6 +115,19 @@ INITRD=$OUT/initrd.cpio
 MNT=$OUT/mnt
 mkdir -p "$MNT/root" "$MNT/esp"
 
+# BAKED BEFORE THE ROOT IMAGE, not beside the ESP where it used to sit.
+# The plan is an input to BOTH images now: the ESP carries it, and the root
+# image needs its per-house layer directories staged into /nw/layers before
+# it is unmounted. Baking after root.img was built and unmounted made that
+# impossible without mounting it twice.
+esp_stage="$MNT/espstage"
+mkdir -p "$esp_stage/slots/A" "$esp_stage/slots/B"
+python3 "$ROOT/bakery/nw-cc.py" \
+    --probe /nw/bin/unit-probe \
+    --out "$esp_stage/slots/A/plan.blob" \
+    --lids seccomp
+printf 'A\n' > "$esp_stage/slots/current"
+
 echo "== root.img (ext4, 64 MiB) =="
 dd if=/dev/zero of="$ROOTIMG" bs=1M count=64 status=none
 mkfs.ext4 -q -F -L nw-root "$ROOTIMG"
@@ -128,6 +141,24 @@ cp -f "$BUILD/nw-root" "$BUILD/nw-spawn" "$BUILD/nw-sup" \
       "$BUILD/unit-brick" \
       "$MNT/root/nw/bin/"
 chmod 0755 "$MNT/root/nw/bin/"*
+# THE PER-HOUSE LAYER CHILDREN, from the plan, by the only thing that makes
+# them. `mkdir /nw/layers` above is the parent only -- the same split the
+# Makefile's stage target documents: that line stands in for dawn, and
+# <id>/upper and <id>/work come from tools/stage-layers.py. nw-sup must NOT
+# create them (.claude/rules/runtime.md: a supervisor that mkdir'd a missing
+# layer turns "nothing staged this plan" into "the house silently got an
+# empty layer", which is the orphaned-data failure the layer id exists to
+# prevent). A burned image had no stager step at all, so a brick house in
+# this city would die at `FAIL mount layer` -- .claude/rules/plan.md
+# predicted exactly that and called it latent.
+#
+# A NO-OP FOR THE CITY THIS SCRIPT BAKES, and that is not a reason to omit
+# it. The city is four unit-probe houses with no brick, so .layers is zero
+# bytes and this creates nothing. It stops being a no-op the moment the city
+# grows a brick house, which is when the latent defect would have become a
+# boot failure with a misleading message.
+python3 "$ROOT/tools/stage-layers.py" \
+    "$esp_stage/slots/A/plan.blob" --root "$MNT/root"
 sync
 umount "$MNT/root"
 
@@ -146,17 +177,24 @@ mkfs.vfat -F 32 -n NW-ESP "$ESPIMG"
 # substituted with ext4, which would make the boot prove less than it
 # claims. Detect the capability the way tests/run.py does, by asking
 # /proc/filesystems rather than by trying and reading the error.
-esp_stage="$MNT/espstage"
-mkdir -p "$esp_stage/slots/A" "$esp_stage/slots/B"
-python3 "$ROOT/bakery/nw-cc.py" \
-    --probe /nw/bin/unit-probe \
-    --out "$esp_stage/slots/A/plan.blob" \
-    --lids seccomp
-printf 'A\n' > "$esp_stage/slots/current"
+# THE .layers SIDECAR TRAVELS WITH THE PLAN. Neither sidecar was copied
+# before, which .claude/rules/plan.md records as latent: a burned image
+# whose plan declares layers, with nothing on the ESP naming them, and THE
+# RECOVERY in .claude/rules/runtime.md -- `python3 tools/stage-layers.py
+# <blob>` -- cannot run on that slot because the stager reads the sidecar,
+# not the blob's layer fields.
+#
+# .sha256 is deliberately NOT copied. It is a bake-time integrity record
+# for the file as written, and nothing on the boot path reads it; adding it
+# would be a second copy of the plan's identity on the ESP with no reader,
+# which is the shape the mechanism rule this same commit adds exists to
+# refuse. If a boot-path reader appears, it comes with that reader.
 if grep -qw vfat /proc/filesystems; then
     mount -o loop "$ESPIMG" "$MNT/esp"
     mkdir -p "$MNT/esp/slots/A" "$MNT/esp/slots/B"
     cp "$esp_stage/slots/A/plan.blob" "$MNT/esp/slots/A/plan.blob"
+    cp "$esp_stage/slots/A/plan.blob.layers" \
+       "$MNT/esp/slots/A/plan.blob.layers"
     cp "$esp_stage/slots/current" "$MNT/esp/slots/current"
     sync
     umount "$MNT/esp"
@@ -165,6 +203,8 @@ else
     need mcopy
     mmd -i "$ESPIMG" ::/slots ::/slots/A ::/slots/B
     mcopy -i "$ESPIMG" "$esp_stage/slots/A/plan.blob" ::/slots/A/plan.blob
+    mcopy -i "$ESPIMG" "$esp_stage/slots/A/plan.blob.layers" \
+          ::/slots/A/plan.blob.layers
     mcopy -i "$ESPIMG" "$esp_stage/slots/current" ::/slots/current
     echo "  ESP populated with mtools (host kernel has no FAT driver;"
     echo "  the image is still FAT32 and the guest kernel mounts it)"
@@ -219,8 +259,21 @@ if [ -n "$MODDIR" ]; then
     #
     # CONFIG_BLK_DEV_LOOP=y on this kernel, so loop needs no staging; erofs
     # is mounted through a loop device by lid_brick.
-    # ORDER IS LOAD ORDER. libcrc32c before erofs: erofs.ko has an
-    # undefined reference to crc32c, and libcrc32c.ko is what exports it.
+    # THE DEPENDENCY IS REAL; THIS LIST IS NOT WHAT ENFORCES IT. libcrc32c
+    # must be loaded before erofs -- erofs.ko has an undefined reference to
+    # crc32c and libcrc32c.ko is what exports it -- but nothing about the
+    # order of THIS loop reaches the kernel. It copies files into $IRD, and
+    # the cpio below is built with `find . -print0`, so archive order is
+    # filesystem order. Load order is the sequence of load() calls in
+    # tools/initrd-init.c, and that is the only place it is decided.
+    #
+    # This comment said "ORDER IS LOAD ORDER" for one round, and the two
+    # lists already disagreed: staged libcrc32c/overlay/erofs, loaded
+    # overlay/libcrc32c/erofs. Harmless, because the one constraint that
+    # matters (libcrc32c before erofs) holds in both -- and exactly the
+    # sentence that would send the next person reordering this list to fix
+    # a load-order bug, changing nothing. Keep the two in step as
+    # documentation; change initrd-init.c to change behaviour.
     # Staging erofs alone gets "erofs: Unknown symbol crc32c (err -2)" at
     # boot and then ENODEV at the brick mount -- the same symptom as not
     # staging it at all, with a different cause. Measured 2026-09-14.

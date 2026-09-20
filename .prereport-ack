@@ -374,3 +374,13 @@ unpaired-absence	bakery/nw-cc.py	if v not in SCHED_NAMES:
 unpaired-absence	tests/run.py	expect("no resource block" not in (p.out + p.err),
 # paired in the same test (the mutated run was green for THIS test only -- path-traversal-refused was red): the refusal cases assert the exit code AND the reason string first (so the baker ran and refused for the stated reason), and the acceptance loop asserts the file EXISTS after a legal bake -- without that half, "no blob written" would be satisfied by a baker that never writes one. Both halves added in the same round, after `control` moved check() below the write for a green run
 unpaired-absence	tests/run.py	expect(not os.path.exists(out),
+
+# --- 2026-09-20, Saturday queue items 1/2/4/5. Each looked at; none is a fix. ---
+# meta-commentary about a CLAUSE in the comment above it, not a claim that code has a mechanism -- and the paragraph's whole point is that "if any" is NOT a safety argument
+mechanism-claim	blob.h	/* "if any" is the load-bearing clause and it is not a safety argument.
+# names both cases in the two bullets immediately below (no brick; layer shadow), which is the redundant-but-checkable form CLAUDE.md permits
+prose-count	blob.h	* Two cases where resolution is NOT inside a sealed image:
+# not an instance count: "the only one with no line" is a statement about which death printed nothing, and the `spent` line this patch adds is what makes it false going forward
+prose-count	nwsup.c	* death that ENDED the house was the only one with no line at all,
+# "the two" are the two lists named in the sentence before it -- this loop and initrd-init.c's load() calls; naming, not counting, and the paragraph exists because they disagreed
+prose-count	tools/mkboot.sh	# a load-order bug, changing nothing. Keep the two in step as

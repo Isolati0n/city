@@ -165,6 +165,25 @@ stage: all
 test: stage
 	sh install-agents.sh --check
 	$(STAGE)/nw/bin/nw-check $(STAGE)/efi/slots/A/plan.blob
+# THE BOOT GLUE IS COMPILED BY NOTHING ELSE. tools/initrd-init.c is built
+# only inside tools/mkboot.sh, which needs root to mount its images, so no
+# gate anyone runs had ever compiled it -- a syntax error there ships and
+# surfaces as a QEMU boot that dies before dawn. Found 2026-09-20, after a
+# patch added three finit_module calls to that file and `make test` could
+# not have caught a typo in them.
+#
+# -c -O2 -o /dev/null, NOT -fsyntax-only, and the difference is the whole
+# gate: -fsyntax-only skips the analysis that produces warn_unused_result,
+# so it reported 0 warnings on a file where -c -O2 reports 2. The first
+# version of this line used it and would have passed by not looking --
+# adding a gate of exactly the class it was written to catch. No link:
+# mkboot builds this -static for the initrd and this target has no
+# business producing that artifact. -Werror because a
+# gate that prints two warnings every run is one people stop reading; the
+# file was made clean in the same change so the flag can bite. What this
+# buys is that the file still compiles; what it does NOT buy is that the
+# initrd works, which needs a boot and is the operator's.
+	gcc -c -O2 -std=gnu11 -Wall -Wextra -Werror -o /dev/null tools/initrd-init.c
 	NW_STAGE=$(STAGE) python3 tests/run.py
 # The fold's own suite. It runs HERE rather than beside the tarball it
 # arrived in, because a suite outside the tree is a suite nobody runs --
