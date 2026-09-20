@@ -468,3 +468,13 @@ unpaired-absence	docs/relayed/NW-VIRTIO-STATUS.md	Measured 2026-09-14. Not in th
 # line in order to say the document is not scheduled. A quotation of a
 # label, not an assertion about the tree.
 unpaired-absence	.claude/rules/plan.md	"Written 2026-09-14. Not in the tree", and the directory it sits in
+
+# .claude/rules/runtime.md, the rescue section. Two English matches.
+# "no handler is installed" is about a signal handler in pid1.c, not a
+# tool on the machine -- the matcher's `is installed` looking for the
+# mkfs.vfat shape and finding a sentence about sigaction. And "is NOT
+# in that chain" is a statement of territory membership, not a test
+# assertion; there is nothing to pair it with, and the positive half
+# ("which is yours") is the same sentence.
+tool-presence	.claude/rules/runtime.md	signals are not blocked at that point and no handler is installed, so
+unpaired-absence	.claude/rules/runtime.md	machine. **Plus `rescue.c`, which is yours and is NOT in that chain** —

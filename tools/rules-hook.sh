@@ -34,7 +34,8 @@ path = ti.get("file_path") or ""
 cmd = ti.get("command") or ""
 
 MAP = [
-    ({"dawn.c", "pid1.c", "nwspawn.c", "nwsup.c", "lids.c", "lids.h"}, "runtime"),
+    ({"dawn.c", "pid1.c", "nwspawn.c", "nwsup.c", "lids.c", "lids.h",
+      "rescue.c"}, "runtime"),
     ({"blob.h", "nwcheck.c", "nwcheck_main.c", "nw-cc.py", "plan.als",
       "Plan.tla"}, "plan"),
     ({"run.py", "unit_probe.c"}, "harness"),

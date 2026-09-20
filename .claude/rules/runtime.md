@@ -4,12 +4,14 @@
 **Not an agent.** This was a dispatchable brief until 2026-09-10 and was
 never dispatched once. Its content is reference read at the moment it
 applies, so `tools/rules-hook.sh` delivers it on a `PreToolUse` for any
-file in this territory. Scope: Owns the boot chain and per-unit execution — dawn.c, pid1.c, nwspawn.c, nwsup.c and lids.c. Use for mount and pivot, boot sequence, forking and reaping, shutdown ordering, restart budgets, namespaces, seccomp, Landlock, bricks and binds, and exec of a house. NOT for liveness or freeze detection: there is none, deliberately — read the Liveness section before proposing any.
+file in this territory. Scope: Owns the boot chain and per-unit execution — dawn.c, pid1.c, nwspawn.c, nwsup.c, lids.c and rescue.c. Use for mount and pivot, boot sequence, forking and reaping, shutdown ordering, restart budgets, namespaces, seccomp, Landlock, bricks and binds, and exec of a house. NOT for liveness or freeze detection: there is none, deliberately — read the Liveness section before proposing any.
 
 You own the chain that turns a validated blob into running houses:
 `dawn.c` → `pid1.c` → `nwspawn.c` → `nwsup.c` (+ `lids.c`) → the
 house. All TCB. A fault here does not crash a program, it fails to boot a
-machine.
+machine. **Plus `rescue.c`, which is yours and is NOT in that chain** —
+it is a mode PID 1 enters instead of booting, and the sentence above
+would otherwise answer "no" to a reader asking whether it is theirs.
 
 ## Why this is one territory and not two
 
@@ -311,6 +313,80 @@ elsewhere was already there. `tcb-review`.*
   the same path inside and out. Invariant 5 is about the descriptor table a
   house is born with, and that is still `/dev/null` on 0 and a log pipe on
   1 and 2.
+
+## `rescue` — an operator mode, and it is not a fallback
+
+Added 2026-09-20, when an audit of `tools/rules-hook.sh` found `rescue.c`
+in no territory. It is TCB by `CLAUDE.md`'s table, it is forked by PID 1,
+and no rules file mentioned it — so the hook had never delivered anything
+to anyone editing it, and there was nothing to deliver.
+
+**`rescue.c` is the smallest thing in the TCB and the rule is to keep it
+that way.** It writes a fixed string to fd 2 and returns 3: one
+`write(2)` IN THE SOURCE, no parsing, and `int main(void)`, so no
+argument handling at all. Say source rather than process — `strace -c`
+on the built binary counts thirty syscalls dynamically linked and
+fifteen static, because the loader runs first, and `brk` appears in
+both. Anything that makes the SOURCE need a second syscall is a request
+to put logic in the one component whose value is that it has none.
+`claims` measured it.
+
+**The behaviour is in `run_rescue` in `pid1.c`, not in `rescue.c`.** PID 1
+composes `<dir>/nw-rescue` from the `--rescue` argument, forks, execs,
+waits, and exits with the child's status. Read that function before
+changing anything here; the binary is a message, the mode is the caller.
+
+**It is reached only when asked for, and a failed boot does not fall into
+it.** `run_rescue` runs when `--rescue DIR` is given and none of `--plan`,
+`--slot` or `--slots` is. Nothing in the boot chain passes it — `dawn`
+execs `nw-root --slots <path>` and nothing else — and the only `--rescue`
+in the tree outside `pid1.c` is in `tests/run.py`. So a burned image
+carries a rescue binary that the burned image's own boot chain cannot
+reach. If you want rescue on a failure, that is a new mechanism and a
+design decision, not a repair.
+
+**It ends in `_exit`, as every `halt_now` in `pid1.c` does. The split
+worth naming is success against failure, not rescue against shutdown.**
+`_exit` is the rule across the boot chain — `halt_now` at every failure
+in `pid1.c`, `die` in `dawn.c` — and `shutdown_city`'s
+`reboot(RB_POWER_OFF)` is the exception, guarded by `getpid() != 1`.
+`pid1.c`'s comment says why it reboots: returning is `Attempted to kill
+init`. What makes rescue different is that it is the only `_exit` on a
+SUCCESS path.
+
+A first telling called it an asymmetry against shutdown and said that on
+hardware the success path panics the machine. That is a rule with no
+subject, and the paragraph above is what denies it: argv is fixed at
+every exec of the burned chain — `initrd-init` execs `/dawn` with
+`{"init", 0}`, `dawn` execs `nw-root --slots <path>`, and the
+`APPEND=` line in `tools/mkboot.sh` carries no `init=` or `rdinit=` —
+so no hardware boot can reach this mode at all. **If one ever does, its success path exits
+PID 1, which is a panic**; that is the prerequisite, and it arrives with
+whatever adds a hardware caller. The lab cannot see it either way,
+because `unshare --pid --fork` turns a PID 1 exit into a status, which
+is the gift `.claude/rules/harness.md` inventories. `claims` ran the
+reachability census.
+
+**Exit status 3 means two things.** `rescue.c` returns 3, and
+`run_rescue`'s `WIFEXITED` fallback also reports 3 when the child died
+on a signal — reproduced with a stand-in that kills itself. So "rescue
+ran and printed" and "rescue was killed before it could" are one
+status. `test_rescue` is not fooled because it requires the message
+text as well as the status; the status alone would not be a pin. Keep
+the pair if that test is ever touched.
+
+Two more things this channel does, neither wrong and both worth knowing
+before anyone changes it. A missing `nw-rescue` in the named directory
+exits **70**, not 3, because the child's own `halt_now` becomes the
+child's status and PID 1 passes it through — "exits with the child's
+status" working exactly as written. And `waitpid`'s return is discarded
+into an `st` initialised to zero, so a `waitpid` that failed would make
+`WIFEXITED(0)` true and PID 1 would exit **0**, reporting success
+having collected nothing. Reachability of that one is unestablished —
+signals are not blocked at that point and no handler is installed, so
+`claims` could not construct it — but the subject of this section is
+what the status means, and a path that reports success from a failed
+wait belongs in it.
 
 ## Liveness — a recorded refusal, not a missing feature
 
