@@ -384,3 +384,30 @@ prose-count	blob.h	* Two cases where resolution is NOT inside a sealed image:
 prose-count	nwsup.c	* death that ENDED the house was the only one with no line at all,
 # "the two" are the two lists named in the sentence before it -- this loop and initrd-init.c's load() calls; naming, not counting, and the paragraph exists because they disagreed
 prose-count	tools/mkboot.sh	# a load-order bug, changing nothing. Keep the two in step as
+
+# Item 3 (the fd pre-flight). 2026-09-20.
+# blob.h: the 4 is a VALUE -- the setting of NW_FD_RESERVED whose
+# control is quoted -- not a count of anything. The matcher read
+# '4 and the check' as four checks.
+prose-count	blob.h	* Set it to 4 and the check ACCEPTS a city that then dies at
+# blob.h: 'the one place' is English, not an instance-count; the
+# claim is about WHERE the 6 lives, and it names the place.
+prose-count	blob.h	* the counted 6 in the compiler, which is the one place "counted peak is
+# pid1.c: '2 pointer file' is the return code -2 being documented.
+# Same false positive the fd-auditor and tcb-review rounds both
+# identified independently.
+prose-count	pid1.c	/* 0 ok, -2 pointer file absent (unchosen), -1 present but untrusted. */
+# HISTORY.md: prose about an arithmetic identity, not a test
+# assertion -- there is nothing to pair it with. The claim is
+# checked by reading 6 + n, which contains no 8.
+unpaired-absence	HISTORY.md	8; the counted `6 + n` does not contain it at all, which is
+# tests/run.py, all three: paired, and the docstring says so and
+# says which half is the pin. The positives are rc == 70, 'plan
+# sealed', 'HALT: fd ' and the three numbers; the absences only
+# rule out falling through to pipe2 discovery. Controls run at
+# n=3 against three mutants: pre-flight deleted -> red, soft-raise
+# deleted -> red, -1 init deleted -> STILL GREEN and recorded in
+# the docstring as an uncovered gap rather than acked away.
+unpaired-absence	tests/run.py	expect("HALT: log pipe" not in out,
+unpaired-absence	tests/run.py	expect("city open" not in out,
+unpaired-absence	tests/run.py	expect("HALT: fd " not in out2, f"accepted plan still refused\n{out2}")

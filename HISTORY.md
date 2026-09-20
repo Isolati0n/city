@@ -8947,7 +8947,8 @@ reader goes hunting in `proofs/`.
 Recorded, not fixed. M1 and C2c are both live gaps in the pair, and the
 completeness direction is the piece that would close C2c's class.
 
-## 81. Interleave the log pipes; absence is unchosen (2026-09-13)
+## 81. Interleave the log pipes; absence is unchosen
+(authored 2026-09-13, landed 2026-09-20)
 
 The 2n peak was two sequential loops: every pipe, both ends, then
 every logger. `spawn_logger` already closed the read end in the
@@ -8964,7 +8965,8 @@ from 511 to 1019–1020.
 `HALT: slots/current`. A file that is present and untrusted still
 names the file. Absence and untrusted are different states.
 
-## 82. Fd pre-flight stacked on the interleave (2026-09-13)
+## 82. Fd pre-flight stacked on the interleave
+(authored 2026-09-13, landed 2026-09-20)
 
 Same check as designed: hard limit, named shortfall, raise soft
 only when the need already fits. The need follows the peak the
@@ -8980,14 +8982,19 @@ defect the other way. The two `_Static_assert`s are
 unchanged. They still spell `2n + 8`. DECIDED on 1f11c37:
 they stay conservative. Three statements of one quantity in
 two shapes — counted `6 + n`, pre-flight `8 + n`, asserts
-`2n + 8`. They share the constant 8. They do not share a
-peak. The check is derived from `NW_FD_RESERVED + n`, not
+`2n + 8`. The pre-flight and the asserts share the constant
+8; the counted `6 + n` does not contain it at all, which is
+what the next sentence but one says and what this one said
+otherwise. None of the three shares a peak. The check is derived from `NW_FD_RESERVED + n`, not
 from the counted 6. The asserts are derived from the same
 constant plus the old double-ended peak. That is what
 "none is derived from another" was for, written before the
 pre-flight existed; it still holds of the three *peaks*,
 and would be wrong if read as "the check is not derived
-from the constant." All three err upward.
+from the constant." The two DERIVED forms err upward; the
+counted `6 + n` is neither high nor low, it is the measured
+peak -- with the check removed the city opens at exactly
+rlimit `6 + n` and halts `report pipe` at `5 + n`.
 At `NW_MAX_FDS = 1024` the asserts cap `NW_MAX_UNITS` at 508
 where the count allows 1018. Raising the unit limit past 508
 is when that bound gets revisited.

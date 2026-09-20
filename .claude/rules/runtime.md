@@ -373,8 +373,18 @@ as a gap, and the fixture it lacked is `houses/orphan.c`.
 `getrlimit(RLIMIT_NOFILE)` before the first fork. Need is
 `NW_FD_RESERVED + n` after the log-pipe interleave (was `+ 2n`
 when both ends were held). Compared to the HARD limit. Soft is
-not the ceiling. Raising soft to hard is an optimisation off the
-correctness path.
+not the ceiling.
+
+**The raise of soft to hard is NOT an optimisation.** What is off
+the correctness path is the *decision* — refuse or accept, made
+against `rlim_max` and unaffected by the raise. The raise is what
+makes an accept mean anything: delete only the `setrlimit` and a
+plan the check just accepted halts `report pipe` whenever
+`soft < need <= hard`. Measured at n=3 soft=8 hard=20, and again
+at n=6 soft=10, by two reviewers from different rungs. This file,
+`blob.h` and `pid1.c` all carried the wrong version for one round;
+it is the shape `CLAUDE.md` calls characteristic, and none of the
+three was caught by reading.
 
 Refusal names need, hard, and shortfall. It does not start fewer
 houses than the plan named.

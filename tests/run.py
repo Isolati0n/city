@@ -688,9 +688,9 @@ def test_bad_crc():
 def test_fd_preflight_names_the_shortfall():
     """Refuse when reserved+n exceeds the HARD nofile limit.
 
-    After the interleave the peak is reserved + one write end per
-    house, not 2n. The check is the same: compare need to hard,
-    name need, hard, and shortfall.
+    After the interleave the NEED is reserved + one write end per
+    house, not 2n; the peak underneath it is 6+n. The check is the
+    same: compare need to hard, name need, hard, and shortfall.
 
     Those three numbers are the positive half — the run reached
     the check. "No HALT: log pipe" and "no city open" are absences
@@ -700,17 +700,43 @@ def test_fd_preflight_names_the_shortfall():
     need, soft held below the need, so a check that compared
     against soft would refuse a city the machine can run.
 
-    soft=8 is synthetic. Below reserved; a real machine at that
-    soft limit would fail earlier. Not an operating value.
+    soft=8 is synthetic and EQUALS reserved -- it is not below it,
+    which this said for one round. Not an operating value.
+
+    n IS 3 AND THAT IS THE WHOLE OF WHY IT IS NOT 2. The peak is
+    6+n, so at n=2 the peak is 8 and fits the synthetic soft limit
+    of 8 unaided: the accepting half looks like it exercises the
+    raise of soft to hard and does not, and deleting the setrlimit
+    leaves this test green. At n=3 the peak is 9, soft=8 refuses
+    it, and the raise becomes load-bearing. Each mutation below
+    was run as a control against the staged binary:
+
+      as committed        refuse(hard=10) HALT: fd need=11 hard=10 shortfall=1
+                          accept(hard=11) city open houses=3
+      pre-flight DELETED  refuse(hard=10) HALT: report pipe        -> red
+                          accept(hard=11) HALT: report pipe        -> red
+      soft-raise DELETED  refuse(hard=10) HALT: fd need=11 ...     (unchanged)
+                          accept(hard=11) HALT: report pipe        -> red
+
+    So the refusing half pins the check and the accepting half pins
+    the raise, and neither alone pins both. Reviewers found the n=2
+    blindness independently and proposed the same one digit.
+
+    WHAT THIS STILL DOES NOT PIN, said here rather than left to be
+    discovered: deleting the `-1` initialisation of log_r/log_w in
+    pid1.c leaves this test green, and leaves the suite green, while
+    every logger but the last loses fd 0 -- the sentinel becomes the
+    static zero and the guard beside it waves it through. That is a
+    live gap, not a covered one.
     """
     reserved = int(blob_h("NW_FD_RESERVED"))
-    n = 2
+    n = 3
     need = reserved + n
     city = f"{WORK}/fd-preflight.city"
     blob = f"{WORK}/fd-preflight.blob"
     open(city, "w").write(
-        "house a /bin/true kind=oneshot lids=none\n"
-        "house b /bin/true kind=oneshot lids=none\n")
+        "".join(f"house h{i} /bin/true kind=oneshot lids=none\n"
+                for i in range(n)))
     b = run(["python3", CC, "--city", city, "--out", blob])
     expect(b.returncode == 0, f"bake fd-preflight\n{b.err}{b.out}")
 

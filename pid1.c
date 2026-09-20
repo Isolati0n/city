@@ -492,8 +492,18 @@ int main(int argc, char **argv)
 
     /* Pre-flight, before the first fork. need = reserved + one write
      * end per house (the interleave dropped the 2n peak). Compared
-     * to the HARD limit. Soft is not the ceiling. Raising soft to
-     * hard is an optimisation off the correctness path. */
+     * to the HARD limit: soft is not the ceiling.
+     *
+     * THE RAISE BELOW IS NOT AN OPTIMISATION, which this comment,
+     * blob.h and .claude/rules/runtime.md all said for one round --
+     * named rather than counted. What is off the correctness
+     * path is the DECISION -- refuse or accept, made against rlim_max
+     * and unaffected by whether soft is then raised. The raise is what
+     * makes an accept mean anything: delete only the setrlimit and a
+     * plan this check just ACCEPTED halts `report pipe` whenever
+     * soft < need <= hard. Measured at n=3, soft=8, hard=20, and
+     * again at n=6, soft=10. fd-auditor and claims, independently,
+     * from different rungs. */
     {
         struct rlimit rl;
         if (getrlimit(RLIMIT_NOFILE, &rl) < 0)
@@ -518,12 +528,20 @@ int main(int argc, char **argv)
     }
 
     /* Create a pipe, fork its logger, close the read end in the parent.
-     * Two sequential loops held both ends of every pipe at once
-     * (peak 8+2n). spawn_logger already closes log_r in the parent;
-     * the peak was the ordering, not a missing close. After this,
-     * only write ends remain here — nw-spawn hands those to the
-     * houses. Peak 8+n. Nothing between here and the spawner reads
-     * a log_r in the parent. */
+     * Two sequential loops held both ends of every pipe at once, so the
+     * PEAK was 3+2n. spawn_logger already closes log_r in the parent;
+     * the peak was the ordering, not a missing close. After this, only
+     * write ends remain here — nw-spawn hands those to the houses.
+     * Peak 3+n+1+2 = 6+n: stdio, one log_w per house, the signalfd and
+     * the two report-pipe ends. Nothing between here and the spawner
+     * reads a log_r in the parent.
+     *
+     * 6+n and 3+2n are PEAKS; 8+n and 8+2n are NEEDS. This comment
+     * wrote 8+n and 8+2n for the peaks, which is the reserved 8 read
+     * as a count -- and the sentence opening blob.h's comment on that
+     * constant is that it was never one. Measured: with the check
+     * removed the city opens at exactly rlimit 6+n and halts `report
+     * pipe` at 5+n, at n = 1, 2, 6, 8, 16, 20 and 40. */
     for (uint32_t i = 0; i < n_houses; i++) {
         memcpy(houses[i].name, u[i].name, NW_NAME_LEN);
         houses[i].pid = 0;

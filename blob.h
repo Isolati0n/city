@@ -109,8 +109,13 @@
  *     two report-pipe ends. Bounded 2026-09-14: last open 1018, first
  *     fail 1020 on `report pipe`. The interleave is why it is n not 2n.
  *   - pid1.c reads this constant and compares NW_FD_RESERVED + n to
- *     rlim_max from getrlimit. Soft is not the ceiling. The raise of
- *     soft to hard is off the correctness path.
+ *     rlim_max from getrlimit. Soft is not the ceiling. What is off
+ *     the correctness path is the DECISION -- refuse or accept, made
+ *     against rlim_max and unaffected by the raise that follows.
+ *     THE RAISE ITSELF IS ON IT, and this bullet said otherwise for
+ *     one round: delete only the setrlimit and a plan this check
+ *     ACCEPTED halts `report pipe` whenever soft < need <= hard.
+ *     Measured at n=3 soft=8 hard=20, and at n=6 soft=10.
  *   - that check sits two above the counted peak and refuses two
  *     houses a 1024-descriptor machine would honour, a cost taken
  *     deliberately. The 8 is labelled because it now stands beside a
@@ -125,7 +130,8 @@
  * The asserts below still spell the peak 2n + 8, the shape from
  * before the interleave. At NW_MAX_FDS = 1024 that caps
  * NW_MAX_UNITS at 508 where the count allows 1018. DECIDED
- * 2026-09-14 (1f11c37): they stay conservative and are NOT
+ * 2026-09-14, landed as 1f11c37 on 2026-09-20: they stay
+ * conservative and are NOT
  * corrected to follow the count. Tightening them would relax a
  * bound to fix a problem nobody has. Whoever raises NW_MAX_UNITS
  * past 508 revisits this, with a plan that needs the room. */
@@ -143,6 +149,20 @@
 
 _Static_assert(NW_MAX_UNITS * 2 + NW_FD_RESERVED <= NW_MAX_FDS,
                "derived fd budget");
+
+/* AND BOUNDED FROM BELOW, which the two asserts above and below are not.
+ * They cap this constant; nothing capped it the other way, and pid1.c's
+ * pre-flight is sound only because 8 >= the counted peak's constant 6.
+ * Set it to 4 and the check ACCEPTS a city that then dies at
+ * `HALT: report pipe` -- measured, reserved=4 n=4 hard=8. The suite goes
+ * red on that mutation for the wrong reason (the fd test's synthetic
+ * soft=8 collides with hard_lo=7 and it CRASHES rather than failing an
+ * assertion), and at reserved=7 there is no collision and it passes
+ * green. So the only honest detector was a fixture literal. This puts
+ * the counted 6 in the compiler, which is the one place "counted peak is
+ * 6 + n" stops being a comment. `tcb-review`. */
+_Static_assert(NW_FD_RESERVED >= 6,
+               "pre-flight must cover the counted peak 6 + n");
 
 /* How far nwspawn.c's close_others must sweep, and how many descriptors it
  * must be able to hold while doing it. Derived here, beside the budget it
