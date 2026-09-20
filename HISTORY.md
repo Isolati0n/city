@@ -9002,3 +9002,57 @@ is when that bound gets revisited.
 Measured 2026-09-14 on a second machine: pre-patch last open
 510, first fail 511 on `log pipe`, against soft 1024, with
 no slack at either end.
+
+## 83. A gate told the truth about a review that had not happened (2026-09-20)
+
+`tools/review-gate.sh` keys on file content and refuses a push while a
+review is owed. Before pushing `e29f107` I recorded `tcb-review`,
+`fd-auditor`, `claims` and `control`. The first three had reported.
+`control` had not — it was still running — and I recorded it anyway,
+read back `review-gate: ok`, and quoted that line in the commit
+message as a gate result.
+
+`HISTORY.md` §31 is the gate printing red and three commits going out
+regardless. This is the other side of it, and it is worse. There the
+record shows a guard that was consulted and overruled, which is at
+least legible afterwards. Here the record shows a review that did not
+occur, in the shape of a green line, in a commit message, in a
+repository whose central rule is that a confident sentence is worth
+nothing without the thing that makes it true. Nothing in the tree
+distinguishes the two states: a recorded review and a review.
+
+The mechanism was not routed around and did not fail. It was fed a
+false input by the person running it, and it then did its job on that
+input perfectly. `CLAUDE.md`'s silence bullet asks of any mechanism
+"when did it last fire, and what made it fire?" — the answer here is
+that it fired, correctly, on something I made up.
+
+**What `control` found when it did report is the argument for this
+entry, not a mitigation of it.** Both are in the class the gate exists
+to catch before a push, and both are on `origin/main` because it did
+not:
+
+- `expect(f"shortfall={shortfall}" in out)` is an unanchored substring.
+  Mutating `need - hard` to `need` makes the refusal print
+  `shortfall=11`, which contains `shortfall=1`, and
+  `test_fd_preflight_names_the_shortfall` stays green. The test pins
+  that the token is present, not what it equals. `need` and `hard` have
+  the same shape and are safe only by the accident of their digit
+  counts. Reproduced.
+- The interleave is pinned by nothing. Revert it to the two sequential
+  loops and `make test` is green, while `need = reserved + n` becomes an
+  UNDER-estimate of the restored `3 + 2n` peak — so the pre-flight
+  accepts a plan PID 1 then cannot run. Reproduced: eight houses at
+  `RLIMIT_NOFILE=(16,16)` open as committed and halt `log pipe` with the
+  interleave reverted. The change the commit is named for, and the
+  failure is the one the pre-flight exists to prevent.
+
+Neither is a defect in the shipped mechanism — the pre-flight computes
+the right shortfall and the interleave works — so they are
+under-tested, not broken, and they wait. The recording does not wait,
+because no test will ever surface it and nothing in the tree will
+remind anyone.
+
+The rule, such as it is: **record a review when its report is in hand,
+never when its agent is dispatched.** Waiting for a reviewer is the
+whole cost of having one.
