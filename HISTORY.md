@@ -9056,3 +9056,65 @@ remind anyone.
 The rule, such as it is: **record a review when its report is in hand,
 never when its agent is dispatched.** Waiting for a reviewer is the
 whole cost of having one.
+
+## 84. The other way a gate result stands in for nothing (2026-09-20)
+
+§83 is a green I manufactured: a review recorded before its agent
+reported, read back as `review-gate: ok`, quoted in a commit message.
+This is the same sentence arriving by the opposite route, one round
+later, and it is worth separating because neither follows from the
+other.
+
+Editing `.claude/rules/plan.md`, I ran the target through a filter —
+`make test 2>&1 | grep -E "^(PASSED|FAIL)|checks:|coverage-tcb: "` —
+and it printed one line, from `make checkbrief`. No `PASSED`, no
+`FAIL`. I read that as a run with nothing to report and was a keystroke
+from moving on. Re-run with `tail`, the target had stopped before the
+suite:
+
+    install-agents: FAIL plan.md carries a struct format string or a
+      magic literal; take it from the code at run time instead
+    install-agents: FAIL plan.md names `mkboot.sh`, which does not exist
+    make: *** [Makefile:166: test] Error 1
+
+**The filter excluded the failure message itself**, and that is the
+part worth carrying. `FAIL` was in the pattern — anchored to the start
+of a line, `^(PASSED|FAIL)`. The gate prefixes its own output, so
+`install-agents: FAIL ...` does not start with `FAIL` and was dropped by
+the very alternative written to catch it. A pattern that names the word
+it is looking for, and misses it on the one line that carried it.
+
+**§83 is a green that was made up. This is a green inferred from an
+absence.** Both end with a result standing in for something that did
+not happen, and the second is the cheaper mistake to make, because
+nothing is fabricated — a filter did not match, and a filter not
+matching looks exactly like nothing to report. `CLAUDE.md`'s 2026-09-13
+corollary is the rule and it generalises past `2>/dev/null`: a grep over
+a command's output is a discarded stream too. The exit status was the
+positive artifact and it was available the whole time — nothing had to
+be invented here, a stronger signal was already present and a weaker
+derived one got read instead.
+
+**The rule under both, which is worth more than either entry: prefer
+the artifact the mechanism PRODUCES over one you DERIVE from its
+output.** An exit status is produced. A grep over stdout is inferred,
+and so is a review record you wrote yourself. Neither §83 nor this one
+would have happened against the produced artifact, and the next
+instance will not look like either of them.
+
+`.claude/rules/harness.md`'s partial-gate trap named the mechanism
+before it fired here — `make test` is not one step, and the step most
+likely to be skipped is the cheap one that runs first. It was not
+skipped; it was filtered out of view, which is the same result through
+a different hole.
+
+**Both defects were in the edit and both are instructive.** A brief
+carrying the magic as a literal, inside the very section arguing that a
+second copy of an identity is the drift class — the rule at its weakest
+in the change that introduces it, with the subject matching exactly.
+And a file named without its directory, in the sentence citing that
+file as evidence. The entry points at `NW_MAGIC` in `blob.h` now and
+says why rather than being corrected silently.
+
+The gate caught both, before a push, on a prose-only diff, which is the
+dispatch table's stated reason for naming that class at all.

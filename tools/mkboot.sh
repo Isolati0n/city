@@ -184,17 +184,31 @@ mkfs.vfat -F 32 -n NW-ESP "$ESPIMG"
 # <blob>` -- cannot run on that slot because the stager reads the sidecar,
 # not the blob's layer fields.
 #
-# .sha256 is deliberately NOT copied. It is a bake-time integrity record
-# for the file as written, and nothing on the boot path reads it; adding it
-# would be a second copy of the plan's identity on the ESP with no reader,
-# which is the shape the mechanism rule this same commit adds exists to
-# refuse. If a boot-path reader appears, it comes with that reader.
+# .sha256 IS copied, and the reason the first version left it off is the
+# reason to keep this comment. It reasoned: nothing on the boot path reads
+# it, so a copy on the ESP would be a second copy of the plan's identity
+# with no reader. The premise is true and it was the wrong test.
+#
+# tools/stage-layers.py -- which is THE RECOVERY in
+# .claude/rules/runtime.md, and the whole reason .layers is copied above --
+# REFUSES when a layer sidecar is present and the hash sidecar beside it is
+# not, because then nothing says the layer list describes this blob. The
+# baker writes an empty-but-EXISTING .layers even for a brickless city, so
+# that refusal fired on the burned image from the day .layers was copied,
+# on the default city, not only on a city with bricks.
+#
+# Measured against exactly the file set this script used to produce -- the
+# blob and an empty .layers, no hash -- stage-layers exits 1 naming the
+# file it could not read. Copying the blob's identity next to the blob is
+# not a second copy of anything; the sidecar IS where that identity lives.
 if grep -qw vfat /proc/filesystems; then
     mount -o loop "$ESPIMG" "$MNT/esp"
     mkdir -p "$MNT/esp/slots/A" "$MNT/esp/slots/B"
     cp "$esp_stage/slots/A/plan.blob" "$MNT/esp/slots/A/plan.blob"
     cp "$esp_stage/slots/A/plan.blob.layers" \
        "$MNT/esp/slots/A/plan.blob.layers"
+    cp "$esp_stage/slots/A/plan.blob.sha256" \
+       "$MNT/esp/slots/A/plan.blob.sha256"
     cp "$esp_stage/slots/current" "$MNT/esp/slots/current"
     sync
     umount "$MNT/esp"
@@ -205,6 +219,8 @@ else
     mcopy -i "$ESPIMG" "$esp_stage/slots/A/plan.blob" ::/slots/A/plan.blob
     mcopy -i "$ESPIMG" "$esp_stage/slots/A/plan.blob.layers" \
           ::/slots/A/plan.blob.layers
+    mcopy -i "$ESPIMG" "$esp_stage/slots/A/plan.blob.sha256" \
+          ::/slots/A/plan.blob.sha256
     mcopy -i "$ESPIMG" "$esp_stage/slots/current" ::/slots/current
     echo "  ESP populated with mtools (host kernel has no FAT driver;"
     echo "  the image is still FAT32 and the guest kernel mounts it)"

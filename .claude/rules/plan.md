@@ -133,12 +133,22 @@ The boundary that does matter here is not between files, it is **trust**:
   reader written as `split(" ", 1)` would work against the baker and
   break on a hand-edited sidecar.
 
-  **`tools/mkboot.sh` copies neither sidecar into the ESP.** Latent
-  only: its city is brickless, so `.layers` is empty. The moment that
-  city grows a brick house the burned image carries a plan declaring
-  layers with nothing naming them, and `.claude/rules/runtime.md`'s THE
-  RECOVERY — which is `python3 tools/stage-layers.py <blob>` — cannot
-  run on that slot. `drift`.
+  **`tools/mkboot.sh` copies BOTH sidecars into the ESP, and the second
+  one is why.** `.layers` alone is not enough: `tools/stage-layers.py` —
+  which is `.claude/rules/runtime.md`'s THE RECOVERY — refuses outright
+  when a layer sidecar is present and the hash sidecar beside it is not,
+  because then nothing says the layer list describes this blob. The
+  baker writes an empty-but-EXISTING `.layers` for a brickless city, so
+  that refusal fires on the common case, not only on a city with bricks.
+
+  That was the state of the burned image until 2026-09-20, and the
+  reasoning is worth keeping because it looked sound: `.sha256` was left
+  off on the grounds that nothing on the BOOT PATH reads it, which is
+  true and was the wrong test. The reader that matters is the recovery
+  tool the `.layers` copy exists to feed. Reproduced against the exact
+  file set the script copied — `plan.blob` and an empty
+  `plan.blob.layers` — `stage-layers` exits 1 naming the missing hash.
+  `claims`.
 
   **`tools/stage-candidate.py` refuses a line that is not exactly an id and a
   brick — not "at least".** So the next field added breaks it for every
@@ -300,6 +310,120 @@ The boundary that does matter here is not between files, it is **trust**:
   after §17 none are definable. Fields are range-checked, which is not
   typing.
 
+## Waiting on a prerequisite
+
+Kind 3, in the sense `CLAUDE.md` gives it: real rules with no subject in
+this territory yet, and this is where they should go.
+
+Not where they all are. *Hard rules* above already carries kind-3
+material — the resource block's "Nothing writes them yet", and the CPU
+mask whose out-of-range case nothing refuses — so this section is
+somewhere to move such items TO, not a boundary the file already keeps.
+Claiming it kept one would have been an assertion about editorial
+practice contradicted seventy lines up, which is the defect this
+section exists to record. `claims` caught that sentence.
+
+- **A plan hash in `struct nw_hdr` waits for a reader that holds the blob
+  WITHOUT the file beside it.** Proposed 2026-09-20 as half of a magic
+  increment and deferred, for a reason that is not the
+  migration cost.
+
+  **The plan's identity already exists, and it is recomputed rather
+  than trusted.** The baker writes `<blob>.sha256` beside the blob;
+  `tools/stage-layers.py` and `tools/stage-candidate.py` each read the
+  blob's bytes, hash them and compare — neither reads the sidecar and
+  believes it. At STAGING time, by two non-TCB tools. Nothing verifies
+  it at boot and nothing proposed here would.
+
+  Name both readers or the omission bites: the first version of this
+  paragraph named only `tools/stage-candidate.py`, and the one it left
+  out is precisely the one the burned-image defect above turns on.
+  Naming it would have surfaced that defect while writing this
+  sentence. Read the calls rather than a line number — this file still
+  quotes line numbers into the specs that no longer point at what they
+  claim, which the spec section below now says instead of pretending
+  it is past.
+
+  So a header field would be a SECOND copy of an identity that exists,
+  and the two could not be reconciled: the proposal hashes the blob with
+  the hash field zeroed, the sidecar hashes the blob, and neither is
+  derivable from the other without running the algorithm. That is
+  invariant 3's drift class pointed at an identity instead of a limit. It
+  `tools/mkboot.sh` is NOT evidence for this, and an earlier draft of
+  this bullet cited it as though it were. It omitted `.sha256` from the
+  ESP reasoning that nothing on the boot path reads it — an omission
+  that was a defect rather than an argument, because the recovery tool
+  reads it. The sidecar bullet in *Hard rules* carries it. A file on an
+  ESP is not a plan field either, so the mechanism rule was being
+  stretched past its own heading to justify a `cp`.
+
+  **Clause 5 does not rescue it.** Descriptive metadata is exempt from
+  needing a runtime mechanism; that is not the same as making a second
+  copy of an existing identity into a first one.
+
+  **The trigger, which is the whole point of this entry: the day
+  something reads the plan's name without the file beside it.** That is
+  PID 1, recording the identity of what it booted. No such consumer
+  exists in this tree and no document here designs one — the nearest is
+  `docs/NW-EXPECTATIONS-UNANCHORED.md`, whose own third line says it is
+  not a design and not a queue, so the decision does not live there
+  either. That is the honest state: the trigger is named and its home
+  is not, and whoever builds the consumer picks it.
+
+  On that day the header field is right, the SIDECAR becomes the
+  redundant copy, and the bump should carry that consumer with it so
+  the field arrives with its reader rather than ahead of it.
+
+  **Invariant 8 is untouched by any of this and must stay that way in the
+  same change.** CRC32 stays DIAGNOSTIC, the structural checks in
+  `nwcheck.c` stay the safety property, and the threat model stays
+  corruption rather than tampering. Calling CRC32 "the integrity
+  mechanism" stood here for one round and promoted it to the role both
+  `CLAUDE.md` and this file's own Hard rules deny it — three lines from
+  where that rule says not to argue for SHA-256 on integrity grounds it
+  does not provide. A header hash that `nwcheck`
+  VERIFIES is a different proposal: it rewrites that claim and brings bug
+  1 — the seal must be verified, not merely read — to bear on a new
+  field. Whoever wants that should want it on its own terms, not inside a
+  format bump.
+
+- **`gate` — a unit naming another whose socket must exist before it is
+  forked — was proposed in the same increment and deferred harder.** It
+  has no subject at all: there is no house that needs it, the driver
+  being a desktop that does not exist here. Recorded because the next
+  person to want ordering will reach for the same field.
+
+  The scope the proposal understated: the field is nothing without the
+  pre-fork wait that enforces it, and a format-only landing is `nw_res`
+  again — declared, baked, validated, read by nobody — which is the
+  defect the mechanism rule was adopted to prevent. It also needs a
+  socket path field, because nothing declares a socket today, and without
+  one the refusal it most wants (a gate whose named socket is unreachable
+  from the dependent's namespace) has no input. That check turns on
+  `NW_LID_NEWNS` and the bind set, not on `NW_LID_NEWNET`: a unix socket
+  on a filesystem path does not care about a network namespace.
+
+  And the wait needs a bounded constant, which `.claude/rules/runtime.md`
+  refuses without the constant, its owner, and what happens when it is
+  wrong. A boot-time wait may well be a different animal from freeze
+  detection; that argument has to be made rather than assumed.
+
+  **Cycle detection is TCB-legal only while `gate` is single-valued**, and
+  this is the sentence to carry into the field's comment on the day it
+  exists. One parent per unit is a functional graph, so the check is a
+  chain walk with a step counter bounded by `NW_MAX_UNITS` — no
+  allocation, no recursion, no nested scan, all of which `nwcheck.c`
+  forbids. Make `gate` a list and you need a real graph algorithm in the
+  TCB against a rule that does not permit one.
+
+  Landing it means re-filing TWO refusals above, not one. Cycle
+  detection names this route without endorsing it — "a design decision,
+  not a restoration" states a cost rather than granting permission. And
+  the bullet directly beneath it refuses *ordering* outright, on the
+  ground that after §17 it is not definable; a `gate` field makes it
+  definable and falsifies that clause. Both re-filings belong in the
+  change, not in a paragraph attached to a format bump.
+
 ## The specs, honestly
 
 **They run.** `tools/jars/` holds TLC and Alloy, and
@@ -380,9 +504,14 @@ concluding the arithmetic had shrunk to two places, and once by
 concluding `Plan.tla` had dropped it, which `sed -n 42p Plan.tla`
 disproves.
 
-And when you count them, **`plan.als:137` and `Plan.tla:152` are not
-sites.** They are the deliberate second copies that pin the other two;
-counting them as drift is flagging the guard. That is a weaker pin and a real one, and
+And when you count them, **`assert FdArithmetic` in `plan.als` and
+`FdNeedAgrees` in `Plan.tla` are not sites.** They are the deliberate
+second copies that pin the other two; counting them as drift is
+flagging the guard. Those were written here as `plan.als:137` and
+`Plan.tla:152`, correct when written and pointing at unrelated prose by
+2026-09-20 — the stale pair this file elsewhere cites as a lesson while
+leaving it standing. Named rather than numbered now, which is the only
+form that cannot drift. That is a weaker pin and a real one, and
 "nothing pins it" — written here for one round without the preposition
 — reads as licence to change a spec to match a `* 3` header and then be
 surprised by a red suite.
