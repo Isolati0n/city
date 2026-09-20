@@ -700,6 +700,15 @@ def test_fd_preflight_names_the_shortfall():
     need, soft held below the need, so a check that compared
     against soft would refuse a city the machine can run.
 
+    THE TWO HALVES PIN DIFFERENT THINGS and the first one reads as
+    though it pins both. The refusing half pins the three values the
+    refusal PRINTS. It does not pin what was compared: swap
+    `rl.rlim_max` for `rl.rlim_cur` in the test and keep formatting
+    `hard` from rlim_max, and the refusing half's output is
+    byte-identical to a correct tree's. The accepting half is what
+    catches that, and it names it -- `accepting half did not open`,
+    with `HALT: fd need=11 hard=11 shortfall=0`. `control`.
+
     soft=8 is synthetic and EQUALS reserved -- it is not below it,
     which this said for one round. Not an operating value.
 
@@ -747,13 +756,29 @@ def test_fd_preflight_names_the_shortfall():
     expect("plan sealed" in out,
            f"never reached the check (plan did not seal)\n{out}")
     expect("HALT: fd " in out,
-           f"never reached the fd check (no HALT: fd)\n{out}")
-    expect(f"need={need}" in out, f"refusal did not name need={need}\n{out}")
-    expect(f"hard={hard_lo}" in out, f"refusal did not name hard={hard_lo}\n{out}")
-    expect(f"shortfall={shortfall}" in out,
-           f"refusal did not name shortfall={shortfall}\n{out}")
-    expect("HALT: log pipe" not in out,
-           f"fell through to pipe2 discovery\n{out}")
+           f"no `HALT: fd ` line -- the check did not fire, or it fired "
+           f"and the refusal was renamed; the dump says which\n{out}")
+    # PARSE AND COMPARE INTEGERS, do not test for a substring. Each of
+    # these was `expect(f"shortfall={shortfall}" in out)`, and
+    # "shortfall=1" is a prefix of "shortfall=11": mutating `need - hard`
+    # to `need` in pid1.c printed the wrong value and this test stayed
+    # green. `need` and `hard` had the identical shape and were safe only
+    # by the accident of their digit counts at this n. `control`.
+    m = re.search(r"HALT: fd need=(\d+) hard=(\d+) shortfall=(\d+)$",
+                  out, re.M)
+    expect(m is not None,
+           f"refusal did not match the HALT: fd shape\n{out}")
+    got = tuple(int(x) for x in m.groups())
+    expect(got == (need, hard_lo, shortfall),
+           f"refusal named need/hard/shortfall {got}, "
+           f"expected {(need, hard_lo, shortfall)}\n{out}")
+    # The fd refusal is the ONLY halt. This was
+    # `"HALT: log pipe" not in out`, which names a symptom the
+    # fall-through does not produce -- with the pre-flight deleted the
+    # run halts `report pipe`, so that assertion was true in both worlds.
+    halts = [l for l in out.splitlines() if "HALT:" in l]
+    expect(len(halts) == 1 and "HALT: fd " in halts[0],
+           f"expected the fd refusal and nothing else, got {halts}\n{out}")
     expect("city open" not in out,
            f"started a city the check should have refused\n{out}")
 
@@ -764,6 +789,83 @@ def test_fd_preflight_names_the_shortfall():
            f"accepting half did not start all {n} houses\n{out2}")
     print(f"ok fd-preflight (need={need} hard={hard_lo} shortfall={shortfall}; "
           f"same plan opens at hard={need} with synthetic soft=8)")
+
+
+def test_log_pipe_peak_is_one_end_per_house():
+    """The interleave: the parent never holds both ends of every pipe.
+
+    The change the fd stack is named for, and nothing pinned it. Two
+    sequential loops -- every pipe, then every logger -- peak at
+    3 + 2n; creating each pipe and forking its logger in one loop
+    peaks at 6 + n, because spawn_logger closes the read end in the
+    parent before the next pipe exists.
+
+    That is not a speed difference. The pre-flight needs
+    reserved + n, and under the sequential ordering that is an
+    UNDER-estimate of the real peak, so PID 1 approves a city it then
+    cannot run -- the exact failure the pre-flight exists to prevent.
+
+    One plan, one rlimit, and the two orderings land either side of
+    it. n is derived from reserved, and what holds the separation is
+    `_Static_assert(NW_FD_RESERVED >= 6)` in blob.h -- not anything
+    here. With n = reserved, `6 + n <= 2n` is exactly `n >= 6` and
+    `2n < 3 + 2n` is a tautology, so every value of the constant that
+    BUILDS keeps this test discriminating. Swept: 6, 7, 10 and 12 all
+    pass and all still separate; 5 fails the static assert and does
+    not compile.
+
+    A Python guard restating that arithmetic stood here for one round
+    and is deleted rather than reworded. It could not fail for any
+    tree that builds, it read nothing from pid1.c, and it compared
+    this function's own literals with each other -- a mechanism that
+    reads as working and cannot fire, in a test written to close a
+    gap of exactly that shape. `control` swept the range to show it.
+
+    WHAT THIS TOLERATES, because the margin is not symmetric. Against
+    the regression it exists for the margin is `(3 + 2n) - 2n` = 3
+    descriptors, constant in n. Above the interleaved peak the slack
+    is `2n - (6 + n)` = `NW_FD_RESERVED - 6`, so the test gets LOOSER
+    as the header grows, and today it will not notice PID 1 acquiring
+    two more descriptors of constant overhead -- measured: +2 passes,
+    +3 goes red with `HALT: report pipe`. At +2 the real peak is
+    8 + n and blob.h's "counted peak 6 + n" is false with everything
+    green. That bound is the static assert's business, not this
+    test's, and it is written here so nobody reads this test as
+    covering it.
+
+    Control, run against the staged binary: revert the loop to the two
+    sequential passes, changing nothing else, and this goes red with
+    `HALT: log pipe` while the whole rest of `make test` stays green.
+    That was `control`'s finding and it is why this test exists.
+    """
+    reserved = int(blob_h("NW_FD_RESERVED"))
+    n = reserved
+    need = reserved + n
+    interleaved, sequential = 6 + n, 3 + 2 * n
+    city = f"{WORK}/interleave.city"
+    blob = f"{WORK}/interleave.blob"
+    open(city, "w").write(
+        "".join(f"house i{i} /bin/true kind=oneshot lids=none\n"
+                for i in range(n)))
+    b = run(["python3", CC, "--city", city, "--out", blob])
+    expect(b.returncode == 0, f"bake interleave\n{b.err}{b.out}")
+
+    rc, out = boot(plan=blob, hold=400, nofile=(need, need))
+    expect("plan sealed" in out, f"never got as far as the pipes\n{out}")
+    # The census FIRST. This rlimit sits exactly on the pre-flight's
+    # accept boundary (need == hard), so an off-by-one there halts here
+    # too -- and "the city did not open" would blame the interleave for
+    # a comparison operator. The halt line names the real culprit.
+    halts = [l for l in out.splitlines() if "HALT:" in l]
+    expect(not halts, f"halted at rlimit {need}: {halts}\n{out}")
+    expect(f"city open houses={n}" in out,
+           f"the city did not open at rlimit {need}\n{out}")
+    expect(f"closed houses_reaped={n}" in out,
+           f"not every house was reaped\n{out}")
+    print(f"ok log-pipe-peak ({n} houses at RLIMIT_NOFILE=({need},{need}); "
+          f"model says interleaved 6+n={interleaved} fits and sequential "
+          f"3+2n={sequential} does not -- the city opening is the "
+          f"measurement, those two are this test's arithmetic)")
 
 
 def test_baker_rejects():
@@ -7179,6 +7281,7 @@ def main():
         test_baker_rejects, test_fuzz_checker, test_happy, test_slot_b,
         test_rescue, test_halt_spawner, test_bad_crc,
         test_fd_preflight_names_the_shortfall,
+        test_log_pipe_peak_is_one_end_per_house,
         test_last_words_survive_group_term,
         test_orphans_across_restarts,
         test_crash_does_not_halt, test_budget_is_hard_total,

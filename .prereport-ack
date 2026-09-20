@@ -411,3 +411,11 @@ unpaired-absence	HISTORY.md	8; the counted `6 + n` does not contain it at all, w
 unpaired-absence	tests/run.py	expect("HALT: log pipe" not in out,
 unpaired-absence	tests/run.py	expect("city open" not in out,
 unpaired-absence	tests/run.py	expect("HALT: fd " not in out2, f"accepted plan still refused\n{out2}")
+
+# tests/run.py, the interleave test's halt census. Paired on both sides
+# in the same test: `plan sealed` before it (the run got as far as the
+# pipes) and `city open houses=n` plus `closed houses_reaped=n` after
+# it (the houses ran and were reaped). An empty halt list cannot mean
+# "never booted" with those three present. Controlled: the sequential
+# ordering makes this the assertion that fails, naming HALT: log pipe.
+unpaired-absence	tests/run.py	expect(not halts, f"halted at rlimit {need}: {halts}\n{out}")
