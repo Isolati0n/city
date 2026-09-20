@@ -419,3 +419,9 @@ unpaired-absence	tests/run.py	expect("HALT: fd " not in out2, f"accepted plan st
 # "never booted" with those three present. Controlled: the sequential
 # ordering makes this the assertion that fails, naming HALT: log pipe.
 unpaired-absence	tests/run.py	expect(not halts, f"halted at rlimit {need}: {halts}\n{out}")
+
+# .claude/rules/plan.md, the gate re-filing paragraph. "not in a
+# paragraph attached to a format bump" is English, not an absence
+# assertion -- there is no test and nothing to pair. The matcher's
+# known false-positive class on prose files.
+unpaired-absence	.claude/rules/plan.md	change, not in a paragraph attached to a format bump.
