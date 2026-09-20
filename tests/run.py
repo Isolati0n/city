@@ -470,7 +470,7 @@ def stage_layers(blob, reset=True):
     expect(r.returncode == 0, f"stage-layers failed\n{r.out}{r.err}")
 
 
-def boot(slot=None, plan=None, extra=None, hold=800):
+def boot(slot=None, plan=None, extra=None, hold=800, nofile=None):
     # Staged here so no test can forget it, and so the suite exercises the
     # production ordering: layers exist BEFORE the boot that needs them.
     # stage_layers() resets an id the FIRST time it sees it in this
@@ -486,7 +486,14 @@ def boot(slot=None, plan=None, extra=None, hold=800):
         cmd += [plan]
     extra = extra or []
     cmd += extra
-    p = run(cmd)
+    kw = {}
+    if nofile is not None:
+        soft, hard = nofile
+        def _cap():
+            import resource
+            resource.setrlimit(resource.RLIMIT_NOFILE, (soft, hard))
+        kw["preexec_fn"] = _cap
+    p = run(cmd, **kw)
     out = (p.stdout or b"").decode("utf-8", "replace") + (p.stderr or b"").decode("utf-8", "replace")
     return p.returncode, out
 
@@ -676,6 +683,61 @@ def test_bad_crc():
     rc, out = boot(plan=bad, hold=200)
     expect(rc == 70 and "crc32" in out, f"boot crc\n{out}")
     print("ok bad-crc")
+
+
+def test_fd_preflight_names_the_shortfall():
+    """Refuse when reserved+n exceeds the HARD nofile limit.
+
+    After the interleave the peak is reserved + one write end per
+    house, not 2n. The check is the same: compare need to hard,
+    name need, hard, and shortfall.
+
+    Those three numbers are the positive half — the run reached
+    the check. "No HALT: log pipe" and "no city open" are absences
+    and are not the pin.
+
+    Pair with the same plan against a hard limit that admits the
+    need, soft held below the need, so a check that compared
+    against soft would refuse a city the machine can run.
+
+    soft=8 is synthetic. Below reserved; a real machine at that
+    soft limit would fail earlier. Not an operating value.
+    """
+    reserved = int(blob_h("NW_FD_RESERVED"))
+    n = 2
+    need = reserved + n
+    city = f"{WORK}/fd-preflight.city"
+    blob = f"{WORK}/fd-preflight.blob"
+    open(city, "w").write(
+        "house a /bin/true kind=oneshot lids=none\n"
+        "house b /bin/true kind=oneshot lids=none\n")
+    b = run(["python3", CC, "--city", city, "--out", blob])
+    expect(b.returncode == 0, f"bake fd-preflight\n{b.err}{b.out}")
+
+    hard_lo = need - 1
+    shortfall = need - hard_lo
+    rc, out = boot(plan=blob, hold=200, nofile=(8, hard_lo))
+    expect(rc == 70, f"refusal rc={rc}\n{out}")
+    expect("plan sealed" in out,
+           f"never reached the check (plan did not seal)\n{out}")
+    expect("HALT: fd " in out,
+           f"never reached the fd check (no HALT: fd)\n{out}")
+    expect(f"need={need}" in out, f"refusal did not name need={need}\n{out}")
+    expect(f"hard={hard_lo}" in out, f"refusal did not name hard={hard_lo}\n{out}")
+    expect(f"shortfall={shortfall}" in out,
+           f"refusal did not name shortfall={shortfall}\n{out}")
+    expect("HALT: log pipe" not in out,
+           f"fell through to pipe2 discovery\n{out}")
+    expect("city open" not in out,
+           f"started a city the check should have refused\n{out}")
+
+    rc2, out2 = boot(plan=blob, hold=400, nofile=(8, need))
+    expect("city open" in out2, f"accepting half did not open\n{out2}")
+    expect("HALT: fd " not in out2, f"accepted plan still refused\n{out2}")
+    expect(f"city open houses={n}" in out2,
+           f"accepting half did not start all {n} houses\n{out2}")
+    print(f"ok fd-preflight (need={need} hard={hard_lo} shortfall={shortfall}; "
+          f"same plan opens at hard={need} with synthetic soft=8)")
 
 
 def test_baker_rejects():
@@ -7090,6 +7152,7 @@ def main():
         test_hash_pin, test_difftest, test_lids_are_not_advisory,
         test_baker_rejects, test_fuzz_checker, test_happy, test_slot_b,
         test_rescue, test_halt_spawner, test_bad_crc,
+        test_fd_preflight_names_the_shortfall,
         test_last_words_survive_group_term,
         test_orphans_across_restarts,
         test_crash_does_not_halt, test_budget_is_hard_total,

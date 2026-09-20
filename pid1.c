@@ -1,6 +1,7 @@
 #define _GNU_SOURCE
 #include "blob.h"
 
+#include <errno.h>
 #include <fcntl.h>
 #include <poll.h>
 #include <signal.h>
@@ -9,6 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/reboot.h>
+#include <sys/resource.h>
 #include <sys/signalfd.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
@@ -283,8 +285,10 @@ static void spawn_logger(uint32_t i)
         close(houses[i].log_w);
         for (uint32_t j = 0; j < n_houses; j++) {
             if (j == i) continue;
-            close(houses[j].log_r);
-            close(houses[j].log_w);
+            /* Interleaved create/fork: later houses have no pipe yet
+             * (log_* == -1). Closing an unset fd would close 0. */
+            if (houses[j].log_r >= 0) close(houses[j].log_r);
+            if (houses[j].log_w >= 0) close(houses[j].log_w);
         }
         char prefix[NW_NAME_LEN + 4];
         int pn = snprintf(prefix, sizeof prefix, "[%.*s] ",
@@ -336,13 +340,14 @@ static int run_rescue(const char *slot)
  * behind several past bugs, and it made A/B a directory layout rather than a
  * mechanism. PID 1 mounts nothing here and still learns nothing about
  * filesystems -- it opens a path it was handed. */
+/* 0 ok, -2 pointer file absent (unchosen), -1 present but untrusted. */
 static int slot_from_current(const char *slots, char *out, size_t outsz)
 {
     char cur[512];
     if (snprintf(cur, sizeof cur, "%s/current", slots) >= (int)sizeof cur)
         return -1;
     int fd = open(cur, O_RDONLY);
-    if (fd < 0) return -1;
+    if (fd < 0) return (errno == ENOENT) ? -2 : -1;
     char nm[NW_NAME_LEN];
     ssize_t n = read(fd, nm, sizeof nm - 1);
     close(fd);
@@ -420,8 +425,13 @@ int main(int argc, char **argv)
      * rewriting the file that records which slot is current. */
     char slotbuf[384];
     if (!plan && !slot && slots) {
-        if (slot_from_current(slots, slotbuf, sizeof slotbuf) < 0)
-            halt_now("slots/current");
+        {
+            int sc = slot_from_current(slots, slotbuf, sizeof slotbuf);
+            if (sc == -2)
+                halt_now("slot unchosen");
+            if (sc < 0)
+                halt_now("slots/current");
+        }
         slot = slotbuf;
         say("live slot", slot);
     }
@@ -479,17 +489,55 @@ int main(int argc, char **argv)
     const struct nw_hdr *h = nw_hdr(blob);
     const struct nw_unit *u = nw_units(blob);
     n_houses = h->n_units;
+
+    /* Pre-flight, before the first fork. need = reserved + one write
+     * end per house (the interleave dropped the 2n peak). Compared
+     * to the HARD limit. Soft is not the ceiling. Raising soft to
+     * hard is an optimisation off the correctness path. */
+    {
+        struct rlimit rl;
+        if (getrlimit(RLIMIT_NOFILE, &rl) < 0)
+            halt_now("getrlimit nofile");
+        unsigned long long need =
+            (unsigned long long)NW_FD_RESERVED + (unsigned long long)n_houses;
+        unsigned long long hard = (rl.rlim_max == RLIM_INFINITY)
+            ? ~0ull : (unsigned long long)rl.rlim_max;
+        if (rl.rlim_max != RLIM_INFINITY && need > (unsigned long long)rl.rlim_max) {
+            char why[96];
+            snprintf(why, sizeof why,
+                     "fd need=%llu hard=%llu shortfall=%llu",
+                     need, hard, need - hard);
+            halt_now(why);
+        }
+        if (rl.rlim_cur != RLIM_INFINITY &&
+            need > (unsigned long long)rl.rlim_cur) {
+            rl.rlim_cur = rl.rlim_max;
+            if (setrlimit(RLIMIT_NOFILE, &rl) < 0)
+                halt_now("setrlimit nofile");
+        }
+    }
+
+    /* Create a pipe, fork its logger, close the read end in the parent.
+     * Two sequential loops held both ends of every pipe at once
+     * (peak 8+2n). spawn_logger already closes log_r in the parent;
+     * the peak was the ordering, not a missing close. After this,
+     * only write ends remain here — nw-spawn hands those to the
+     * houses. Peak 8+n. Nothing between here and the spawner reads
+     * a log_r in the parent. */
     for (uint32_t i = 0; i < n_houses; i++) {
         memcpy(houses[i].name, u[i].name, NW_NAME_LEN);
         houses[i].pid = 0;
+        houses[i].logger = 0;
+        houses[i].log_r = -1;
+        houses[i].log_w = -1;
+    }
+    for (uint32_t i = 0; i < n_houses; i++) {
         int pfd[2];
         if (pipe2(pfd, O_CLOEXEC) < 0) halt_now("log pipe");
         houses[i].log_r = pfd[0];
         houses[i].log_w = pfd[1];
-    }
-
-    for (uint32_t i = 0; i < n_houses; i++)
         spawn_logger(i);
+    }
 
     /* After the loggers exist. signalfd is SFD_CLOEXEC, which does
      * nothing for a child that never execs; creating it first left

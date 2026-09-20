@@ -104,43 +104,31 @@
  * line written beside the assert, slack for "PID 1's own table" that no
  * one itemised.
  *
- * The counted peak, measured 2026-09-14 on two independent machines.
- * TRUE OF THIS TREE: 3 + 2n at the pipe loop -- stdio only, since the plan
- * fd is opened at pid1.c:447 and closed at 469 before it. Last open 510,
- * first fail 511 against soft 1024, with no slack at either end, and
- * floor((1024-3)/2) is exactly 510. Reproduced independently on a second
- * machine and confirmed against the source here.
+ * TRUE OF THIS TREE after the interleave and the fd pre-flight:
+ *   - counted peak is 6 + n -- stdio, one log_w per house, signalfd,
+ *     two report-pipe ends. Bounded 2026-09-14: last open 1018, first
+ *     fail 1020 on `report pipe`. The interleave is why it is n not 2n.
+ *   - pid1.c reads this constant and compares NW_FD_RESERVED + n to
+ *     rlim_max from getrlimit. Soft is not the ceiling. The raise of
+ *     soft to hard is off the correctness path.
+ *   - that check sits two above the counted peak and refuses two
+ *     houses a 1024-descriptor machine would honour, a cost taken
+ *     deliberately. The 8 is labelled because it now stands beside a
+ *     measured rlim_max; an unlabelled 8 next to a measured 1024
+ *     reads as though both were obtained the same way. They were not.
  *
- * NOT TRUE OF THIS TREE, and written as kind 3 because the measurement is
- * worth keeping and the tense is not. The interleave and the fd pre-flight
- * are one composed patch that is NOT LANDED -- there is no getrlimit and
- * no reader of NW_FD_RESERVED anywhere but the two asserts below
- * (`grep -rn NW_FD_RESERVED --include=*.c`). The first draft of this
- * comment stated both as present fact, which is a blob.h comment
- * describing a check that does not exist: the characteristic failure, in
- * the header that declares the constant. When that stack lands:
+ * WAS TRUE of the tree before that stack, measured on two machines:
+ * 3 + 2n at the pipe loop -- stdio only, plan fd already closed.
+ * Last open 510, first fail 511 against soft 1024, no slack,
+ * floor((1024-3)/2) = 510.
  *
- *   - the peak becomes 6 + n -- stdio, one log_w per house, signalfd, two
- *     report-pipe ends; last open 1018, first fail 1020 on `report pipe`;
- *   - the pre-flight's `NW_FD_RESERVED + n` then sits two above that peak
- *     and refuses two houses a 1024-descriptor machine would honour, a
- *     cost taken deliberately;
- *   - and the reason to label 8 at all becomes live: the check compares
- *     this constant against rlim_max, which getrlimit MEASURED, and an
- *     unlabelled 8 beside a measured 1024 reads as though both were
- *     obtained the same way. They were not.
- *
- * Until then the only thing 8 does is sit in the asserts below.
- *
- * The asserts below spell the peak 2n + 8, which is the shape from before
- * the interleave. At NW_MAX_FDS = 1024 that caps NW_MAX_UNITS at 508 where
- * the count allows 1018. DECIDED 2026-09-14: they stay conservative and
- * are NOT corrected to follow the count. The ceiling is not reached by any
- * plan that exists, so tightening it would relax a bound to fix a problem
- * nobody has, and the looser bound is the one that fails safe. This is a
- * decision, not an oversight -- whoever raises NW_MAX_UNITS past 508 is
- * the one who should revisit it, with a plan in hand that needs the room.
- * Recorded in HISTORY (see the interleave/pre-flight stack entry). */
+ * The asserts below still spell the peak 2n + 8, the shape from
+ * before the interleave. At NW_MAX_FDS = 1024 that caps
+ * NW_MAX_UNITS at 508 where the count allows 1018. DECIDED
+ * 2026-09-14 (1f11c37): they stay conservative and are NOT
+ * corrected to follow the count. Tightening them would relax a
+ * bound to fix a problem nobody has. Whoever raises NW_MAX_UNITS
+ * past 508 revisits this, with a plan that needs the room. */
 #define NW_FD_RESERVED  8
 #define NW_MAX_FDS      1024
 

@@ -8946,3 +8946,52 @@ reader goes hunting in `proofs/`.
 
 Recorded, not fixed. M1 and C2c are both live gaps in the pair, and the
 completeness direction is the piece that would close C2c's class.
+
+## 81. Interleave the log pipes; absence is unchosen (2026-09-13)
+
+The 2n peak was two sequential loops: every pipe, both ends, then
+every logger. `spawn_logger` already closed the read end in the
+parent; the peak was the ordering. One loop now: pipe, fork logger,
+parent drops the read end. Counted peak is `6 + n`. The
+pre-flight refuses `reserved + n` against the hard limit;
+this commit is what changes the need from `2n` to `n`.
+
+Lab ladder on aed2db2 + this change: 511 and 1018 opened;
+1020 halted `report pipe` (not `log pipe`). First fail moved
+from 511 to 1019–1020.
+
+`slots/current` missing is `HALT: slot unchosen`, not
+`HALT: slots/current`. A file that is present and untrusted still
+names the file. Absence and untrusted are different states.
+
+## 82. Fd pre-flight stacked on the interleave (2026-09-13)
+
+Same check as designed: hard limit, named shortfall, raise soft
+only when the need already fits. The need follows the peak the
+interleave left: `reserved + n`, not `2n`. A 2n pre-flight on
+this tree would refuse cities the pipes now fit.
+
+`blob.h` is touched in this commit only to flip the
+provenance comment from future to present: 1f11c37 split
+the 3+2n half (true of that tree) from the 6+n / pre-flight
+half (not yet true). The moment this stack lands the forward
+half is fact, and leaving it marked future is the same
+defect the other way. The two `_Static_assert`s are
+unchanged. They still spell `2n + 8`. DECIDED on 1f11c37:
+they stay conservative. Three statements of one quantity in
+two shapes — counted `6 + n`, pre-flight `8 + n`, asserts
+`2n + 8`. They share the constant 8. They do not share a
+peak. The check is derived from `NW_FD_RESERVED + n`, not
+from the counted 6. The asserts are derived from the same
+constant plus the old double-ended peak. That is what
+"none is derived from another" was for, written before the
+pre-flight existed; it still holds of the three *peaks*,
+and would be wrong if read as "the check is not derived
+from the constant." All three err upward.
+At `NW_MAX_FDS = 1024` the asserts cap `NW_MAX_UNITS` at 508
+where the count allows 1018. Raising the unit limit past 508
+is when that bound gets revisited.
+
+Measured 2026-09-14 on a second machine: pre-patch last open
+510, first fail 511 on `log pipe`, against soft 1024, with
+no slack at either end.

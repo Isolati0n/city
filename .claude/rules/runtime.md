@@ -368,6 +368,19 @@ blocking drain in `shutdown_city` turns the second half red at 3.01s.
 **Reaping across restarts is no longer untested** — that entry was here
 as a gap, and the fixture it lacked is `houses/orphan.c`.
 
+## File descriptors — hard limit, named shortfall
+
+`getrlimit(RLIMIT_NOFILE)` before the first fork. Need is
+`NW_FD_RESERVED + n` after the log-pipe interleave (was `+ 2n`
+when both ends were held). Compared to the HARD limit. Soft is
+not the ceiling. Raising soft to hard is an optimisation off the
+correctness path.
+
+Refusal names need, hard, and shortfall. It does not start fewer
+houses than the plan named.
+`test_fd_preflight_names_the_shortfall` asserts all three numbers
+and pairs the refusal with an accepting run.
+
 ## The resource block is in the plan and nothing applies it
 
 **Kind 3: a real rule with no subject in this territory yet.** As of

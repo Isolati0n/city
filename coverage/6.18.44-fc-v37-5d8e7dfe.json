@@ -31,6 +31,7 @@
   "dawn-real-boot",
   "difftest",
   "dupname-refused",
+  "fd-preflight-names-the-shortfall",
   "fold-house-refuses-a-house-that-is-not-closed",
   "fuzz-checker",
   "halt-spawner",
