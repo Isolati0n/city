@@ -99,6 +99,35 @@
 #define NW_BRICK_HEX    (NW_BRICK_HASH * 2)
 #define NW_MAX_BINDS    128
 #define NW_MAX_UNITS    64
+/* Chosen, not counted, and the difference is the point. Nothing below
+ * enumerates eight descriptors, because nothing ever did: 8 was a budget
+ * line written beside the assert, slack for "PID 1's own table" that no
+ * one itemised.
+ *
+ * The counted peak, measured 2026-09-14 on two independent machines.
+ * Before the interleave, 3 + 2n at the pipe loop: stdio only, since the
+ * plan fd is opened at pid1.c:447 and closed at 469 before it. Last open
+ * 510, first fail 511 against soft 1024, with no slack at either end --
+ * floor((1024-3)/2) is exactly 510. After the interleave, 6 + n: stdio,
+ * one log_w per house, signalfd, two report-pipe ends. Last open 1018,
+ * first fail 1020 on `report pipe`.
+ *
+ * So the fd pre-flight's `NW_FD_RESERVED + n` sits two above the peak and
+ * refuses two houses a 1024-descriptor machine would honour. That cost is
+ * taken deliberately. It is written here because the check compares this
+ * constant against rlim_max, which getrlimit measured, and an unlabelled 8
+ * beside a measured 1024 reads as though both were obtained the same way.
+ * They were not.
+ *
+ * The asserts below spell the peak 2n + 8, which is the shape from before
+ * the interleave. At NW_MAX_FDS = 1024 that caps NW_MAX_UNITS at 508 where
+ * the count allows 1018. DECIDED 2026-09-14: they stay conservative and
+ * are NOT corrected to follow the count. The ceiling is not reached by any
+ * plan that exists, so tightening it would relax a bound to fix a problem
+ * nobody has, and the looser bound is the one that fails safe. This is a
+ * decision, not an oversight -- whoever raises NW_MAX_UNITS past 508 is
+ * the one who should revisit it, with a plan in hand that needs the room.
+ * Recorded in HISTORY (see the interleave/pre-flight stack entry). */
 #define NW_FD_RESERVED  8
 #define NW_MAX_FDS      1024
 
@@ -260,6 +289,23 @@ struct nw_res {
 
 struct nw_unit {
     char     name[NW_NAME_LEN];
+    /* "if any" is the load-bearing clause and it is not a safety argument.
+     * Audited 2026-09-14 against docs/options/07, which nwcheck.c:109
+     * already names: "an exec_path or a bind whose name resolves through a
+     * link escapes just as cleanly... the fix is to stop carrying free-form
+     * paths -- which the brick has now done and these two have not."
+     *
+     * Two cases where resolution is NOT inside a sealed image:
+     *   - No brick. All-zero `brick` shares the machine root, so this is
+     *     exactly a TCB path and path_ok_len is the only guard.
+     *   - Layer shadow. Even with a brick, resolution happens in the
+     *     OVERLAY (brick + layer), not the sealed lower. A symlink planted
+     *     in the writable layer over exec_path is followed, and a restart
+     *     execs through it again. Content-addressing the brick does not
+     *     freeze this path the second time.
+     * fexecve on an O_PATH opened after the overlay is up would pin one
+     * resolution per spawn; it does not take the name out of the plan, so
+     * it is not a format change. path_ok_len is a guard, not the fix. */
     char     exec_path[NW_PATH_LEN];   /* resolved inside the brick, if any */
     uint8_t  brick[NW_BRICK_HASH];     /* all-zero = no brick: shares the machine root */
     char     layer[NW_NAME_LEN];       /* "" = no layer; set iff brick is set */

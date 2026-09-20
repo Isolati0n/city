@@ -205,13 +205,40 @@ else
     exit 1
 fi
 if [ -n "$MODDIR" ]; then
-    for pair in "nls_iso8859-1:nls_iso8859_1.ko" "nls_utf8:nls_utf8.ko"; do
-        src=${pair%%:*}
-        dst=${pair##*:}
+    # THE BRICK PATH HAD NEVER RUN IN A BOOT. Measured 2026-09-14: on Ubuntu
+    # 6.8.0-139-generic, CONFIG_OVERLAY_FS=m and CONFIG_EROFS_FS=m, and this
+    # loop staged only the two NLS modules. So mount("overlay", ...) in
+    # nw-sup returns ENODEV and a brick house cannot start under QEMU at all.
+    #
+    # That was invisible because the suite's brick tests -- brick-is-a-root,
+    # brick-image-is-sealed, layer-survives-a-restart, many-brick-houses-
+    # all-start, fold-house -- run in the host harness on the HOST kernel,
+    # where both filesystems are present. They pass. They do not cover the
+    # boot path, and no QEMU boot in this project's history had mounted an
+    # overlay when this was written.
+    #
+    # CONFIG_BLK_DEV_LOOP=y on this kernel, so loop needs no staging; erofs
+    # is mounted through a loop device by lid_brick.
+    # ORDER IS LOAD ORDER. libcrc32c before erofs: erofs.ko has an
+    # undefined reference to crc32c, and libcrc32c.ko is what exports it.
+    # Staging erofs alone gets "erofs: Unknown symbol crc32c (err -2)" at
+    # boot and then ENODEV at the brick mount -- the same symptom as not
+    # staging it at all, with a different cause. Measured 2026-09-14.
+    # crc32c-intel and crc32c_generic ARE builtin here; those are the
+    # crypto algorithm, not the C function erofs links against.
+    for pair in "fs/nls:nls_iso8859-1:nls_iso8859_1.ko" \
+                "fs/nls:nls_utf8:nls_utf8.ko" \
+                "lib:libcrc32c:libcrc32c.ko" \
+                "fs/overlayfs:overlay:overlay.ko" \
+                "fs/erofs:erofs:erofs.ko"; do
+        dir=${pair%%:*}
+        rest=${pair#*:}
+        src=${rest%%:*}
+        dst=${rest##*:}
         for cand in \
-            "$MODDIR/kernel/fs/nls/${src}.ko" \
-            "$MODDIR/kernel/fs/nls/${src}.ko.zst" \
-            "$MODDIR/kernel/fs/nls/${src}.ko.xz"
+            "$MODDIR/kernel/${dir}/${src}.ko" \
+            "$MODDIR/kernel/${dir}/${src}.ko.zst" \
+            "$MODDIR/kernel/${dir}/${src}.ko.xz"
         do
             [ -f "$cand" ] || continue
             case "$cand" in
@@ -249,6 +276,23 @@ if [ -n "$MODDIR" ]; then
         [ -n "${NW_NLS_BUILTIN:-}" ] || exit 1
         echo "mkboot: NW_NLS_BUILTIN=1 set; continuing without the module." >&2
     fi
+    # ASSERT THE BRICK ARTIFACTS TOO, for the reason the block above exists:
+    # the loop checks nothing, and a silent miss surfaces much later as
+    #     [nw-sup] FAIL overlay mount errno=19
+    # which reads as a nw-sup bug and is not one. A kernel with these built
+    # in is legitimate and indistinguishable from a broken tree by looking,
+    # so it must be said rather than detected.
+    for m in overlay erofs; do
+        [ -f "$IRD/${m}.ko" ] && continue
+        echo "mkboot: $MODDIR has no $m module." >&2
+        echo "mkboot: brick houses mount erofs and overlay after the pivot;" >&2
+        echo "mkboot: without these the guest fails with ENODEV and no brick" >&2
+        echo "mkboot: house can start. The suite will not catch it -- those" >&2
+        echo "mkboot: tests run on the host kernel, not on this one." >&2
+        echo "mkboot: If this kernel has them built in, set NW_FS_BUILTIN=1." >&2
+        [ -n "${NW_FS_BUILTIN:-}" ] || exit 1
+        echo "mkboot: NW_FS_BUILTIN=1 set; continuing without $m." >&2
+    done
 fi
 ( cd "$IRD" && find . -print0 | cpio --null -o -H newc --quiet ) > "$INITRD"
 

@@ -653,10 +653,36 @@ int main(int argc, char **argv)
          * reset the tally and never hit the cap — budget=3 window=1
          * dying every 1.2s restarted for as long as anyone watched. */
         deaths++;
-        if (budget == 0 || deaths > (int)budget)
+        /* The supervisor holds six facts at a death and reported two.
+         * `restart X death=1` was byte-identical whether the house
+         * segfaulted, was OOM-killed, or returned 1 from main -- WIFEXITED
+         * was in scope and the branch that would use it did not exist. The
+         * ordinal was bare: death=2 reads as one more chance or nearly
+         * spent depending on a budget the reader did not have. And the
+         * death that ENDED the house was the only one with no line at all,
+         * because the exhaustion path _exit()s before the line below.
+         *
+         * Nothing new is computed. WIFEXITED(st) selects the form,
+         * WEXITSTATUS/WTERMSIG supplies the value, budget is a parameter.
+         * No new state, no new syscall, no new field, same say(), same
+         * fixed buffer. NW-SUPERVISOR-OBSERVATION proposal 1. */
+        char line[96];
+        if (budget == 0 || deaths > (int)budget) {
+            if (WIFEXITED(st))
+                snprintf(line, sizeof line, "spent %s death=%d/%u exit=%d",
+                         name, deaths, (unsigned)budget, WEXITSTATUS(st));
+            else
+                snprintf(line, sizeof line, "spent %s death=%d/%u signal=%d",
+                         name, deaths, (unsigned)budget, WTERMSIG(st));
+            say(line);
             _exit(WIFEXITED(st) ? WEXITSTATUS(st) : 71);
-        char line[80];
-        snprintf(line, sizeof line, "restart %s death=%d", name, deaths);
+        }
+        if (WIFEXITED(st))
+            snprintf(line, sizeof line, "restart %s death=%d/%u exit=%d",
+                     name, deaths, (unsigned)budget, WEXITSTATUS(st));
+        else
+            snprintf(line, sizeof line, "restart %s death=%d/%u signal=%d",
+                     name, deaths, (unsigned)budget, WTERMSIG(st));
         say(line);
     }
 }

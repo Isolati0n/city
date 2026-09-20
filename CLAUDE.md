@@ -488,6 +488,57 @@ sections after this one and are deliberately not numbered here.
    annotations for `respawn` and `restart` are the guard.
    `HISTORY.md` §65, §66 and §73.
 
+## Adding a field to the plan — the mechanism rule
+
+Adopted 2026-09-14, after `nw_res` was found declared in the format, written
+by the baker, validated by `nwcheck`, and referenced zero times in
+`nwsup.c`. A setting with three signatures on it that does nothing. This rule
+exists to make that unrepresentable, and it is written as clauses a reviewer
+can check rather than as a principle.
+
+The unit is **the bit, not the field**. `lids` packs four independent
+declarations into one `uint8_t`; each bit has its own mechanism, and applying
+this rule to the byte would let the whole byte through on one answer.
+
+1. **Every configuration field has exactly one mechanism that makes it true
+   at runtime, named where the field is declared.** Name the syscall or the
+   file: `cgroup.cpu.max`, `unshare(CLONE_NEWNS)`, a Landlock rule, a
+   descriptor the house holds. "The checker validates it" is not a mechanism
+   — validation is what refuses a plan, not what makes a statement true.
+
+2. **Every mechanism named in the plan serves at least one field**, and
+
+3. **no field is served by more than one mechanism** — two mechanisms for one
+   statement is where the two disagree at three in the morning.
+
+   Note that the converse is false and the rule does not claim it: one
+   mechanism legitimately serves several fields. A mount namespace carries
+   isolation, path visibility and the bind set; a cgroup carries CPU, memory
+   and IO. This is a function from fields to mechanisms, not a bijection, and
+   an earlier draft of this rule said bijection and was wrong.
+
+4. **A field whose mechanism is a single translation unit must name that unit
+   and have a test that exercises the consumer.** This clause is the one that
+   earns its place. An audit of the format proposed exempting "numbers whose
+   interpretation is code" — `lids`, `kind`, `budget` — and that class, as
+   stated, also contained `nw_res`, the defect this rule exists to prevent.
+   A category defined by what it lacks is a hole. Defined by what it
+   requires, it is a contract.
+
+5. **Descriptive metadata is a separate syntactic class and is not a
+   configuration field.** A build timestamp is inert and should be. The
+   disease was never inertness; it was a field whose class was ambiguous at
+   review time.
+
+**And one obligation that is not a format rule, because it cannot be checked
+by reading the plan.** Every configuration field must have at least one test
+that *runs* and fails when its mechanism is absent. **A `SKIP` is a failure,
+not a neutral outcome.** Eight tests in this suite reported `SKIP` for weeks
+on a missing `mkfs.erofs` and every reader took it to mean *not applicable*
+rather than *no evidence* — among them `landlock-confines`, so the main
+isolation mechanism had never executed anywhere the project ran. That belongs
+in the test plan and is stated here because this is where field authors look.
+
 *Renumbered 2026-09-10: the old invariant 7 left the enforced list (see
 Waiting on a prerequisite, below), so old 8 → 7 and old 9 → 8. Invariants 1–6
 kept their numbers. A pre-2026-09-10 reference to "invariant 8" means the

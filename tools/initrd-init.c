@@ -32,6 +32,14 @@ int main(void)
 {
     load("/nls_iso8859_1.ko");
     load("/nls_utf8.ko");
+    /* Brick houses mount erofs and overlay AFTER the pivot, in nw-sup. A
+     * module loaded here is kernel-global and survives the pivot, so this
+     * is the right place even though the mounts are not. Both are =m on
+     * Ubuntu 6.8 generic; without them mount() returns ENODEV and a brick
+     * house cannot start. Measured 2026-09-14. */
+    load("/overlay.ko");
+    load("/libcrc32c.ko");   /* erofs links against crc32c; must precede it */
+    load("/erofs.ko");
     if (mount(NULL, "/", NULL, MS_REC | MS_PRIVATE, NULL) < 0) {
         (void)write(2, "[initrd] FAIL MS_PRIVATE /\n", 27);
         _exit(80);
