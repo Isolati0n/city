@@ -9090,10 +9090,30 @@ not happen, and the second is the cheaper mistake to make, because
 nothing is fabricated — a filter did not match, and a filter not
 matching looks exactly like nothing to report. `CLAUDE.md`'s 2026-09-13
 corollary is the rule and it generalises past `2>/dev/null`: a grep over
-a command's output is a discarded stream too. The exit status was the
-positive artifact and it was available the whole time — nothing had to
-be invented here, a stronger signal was already present and a weaker
-derived one got read instead.
+a command's output is a discarded stream too.
+
+**The first telling of this entry then said the exit status "was the
+positive artifact and it was available the whole time", and that is
+false of the very command quoted above.** In `make test | grep …` the
+shell reports GREP's status, and grep succeeded — it matched the
+checkbrief line. Measured:
+
+    $ bash -c '{ echo "checks: 9"; exit 1; } | grep -E "checks:"; \
+        echo "pipeline $?=$?"'
+    checks: 9
+    pipeline $?=0        # the left side exited 1
+    $ bash -c 'set -o pipefail; { exit 1; } | grep x; echo "$?"'
+    1
+
+So the pipe discarded the status and the FAIL line together. Nothing
+was invented, and nothing stronger was lying around either: the
+produced artifact had to be RECOVERED — `set -o pipefail`,
+`${PIPESTATUS[0]}`, or not piping at all. A reader who takes the rule
+below and keeps the pipeline gets this same silent green.
+
+That correction is the entry's own subject arriving one level down: an
+account of reading the wrong signal, wrong about which signal was
+there. `claims`, on the pass that reviewed this section.
 
 **The rule under both, which is worth more than either entry: prefer
 the artifact the mechanism PRODUCES over one you DERIVE from its
@@ -9116,5 +9136,56 @@ And a file named without its directory, in the sentence citing that
 file as evidence. The entry points at `NW_MAGIC` in `blob.h` now and
 says why rather than being corrected silently.
 
-The gate caught both, before a push, on a prose-only diff, which is the
-dispatch table's stated reason for naming that class at all.
+`install-agents.sh --check` caught both, before a push — not
+`review-gate.sh`, which is the gate §83 is about and the one a reader
+carries forward from the paragraph above. Worth separating: they fail
+for different reasons and only one of them keys on content.
+
+And the commit this entry ships in is NOT prose-only; it carries
+`tools/mkboot.sh` as well. The moment described was a prose edit, the
+diff around it was not, and the dispatch table's prose row was being
+cited as though it covered the whole change.
+
+
+## 85. The burned image could not run its own recovery (2026-09-20)
+
+`HISTORY.md` §74 filed this as latent: `tools/mkboot.sh` copied neither
+`.layers` nor `.sha256` into the ESP, "harmless today because its city
+is brickless and the sidecar is empty". Half of that closed on
+2026-09-20 when `1f11c37` began copying `.layers` — and the half that
+closed is what broke the other.
+
+`tools/stage-layers.py` is THE RECOVERY `.claude/rules/runtime.md`
+documents, and it refuses when a layer sidecar is present and the hash
+sidecar beside it is not, because then nothing says the layer list
+describes this blob. The baker writes an empty-but-EXISTING `.layers`
+even for a brickless city. So copying `.layers` alone moved the burned
+image from a slot whose recovery failed for §74's reason to a slot
+whose recovery failed for a new one, on the default city.
+
+Measured against all three file sets, exit codes read from the command:
+
+    neither sidecar   exit=1  no layer sidecar beside …/plan.blob
+    .layers only      exit=1  its hash sidecar cannot be read
+    both              exit=0  stage-layers: 0 layer(s) under …/nw/layers
+
+`tools/mkboot.sh` copies both now, on the mount path and the mtools
+path. **Not verified by a boot** — that script needs root and cannot
+run here, so this is `sh -n` plus the three runs above.
+
+**The reasoning that omitted it is the part worth keeping.** `.sha256`
+was left off deliberately, on the grounds that nothing on the boot path
+reads it and a second copy of the plan's identity with no reader is
+what the mechanism rule refuses. The premise is true — no boot-path
+reader exists — and it was the wrong test, because the reader that
+mattered is the recovery tool the `.layers` copy was added to enable.
+An absence argued over the wrong set: `CLAUDE.md` says every absence is
+over a set somebody chose, and here the chooser picked the boot chain
+while the consumer sat one directory away in `tools/`.
+
+It was found by `claims` reviewing the PROSE that cited the omission as
+settled reasoning, not by anything that runs. Nothing in `make test`
+builds, stages or executes `mkboot.sh`, and the one `stage-layers` call
+inside that script runs against the bake directory where all three
+files exist, so it cannot reach the branch. The gap is real and stays:
+no test in this tree exercises a burned slot.

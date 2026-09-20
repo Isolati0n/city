@@ -425,3 +425,46 @@ unpaired-absence	tests/run.py	expect(not halts, f"halted at rlimit {need}: {halt
 # assertion -- there is no test and nothing to pair. The matcher's
 # known false-positive class on prose files.
 unpaired-absence	.claude/rules/plan.md	change, not in a paragraph attached to a format bump.
+
+# docs/relayed/*, twenty entries below. These are documents committed
+# UNCHANGED, byte-identical to what was relayed, and editing one to
+# satisfy a heuristic would destroy the record item 8 exists to keep.
+# The counts prereport finds in them are other people's prose about
+# other trees; the absences are their own third-line status labels
+# ("Not in the tree"), which is the labelling CLAUDE.md asks for, read
+# by a matcher built for test assertions. Not fixable here and not
+# defects. An ack is a claim that someone looked, and I read each hit.
+#
+# The shape worth noticing rather than acking: prereport reported CLEAN
+# on this diff before these files were committed and 21 after, because
+# untracked files are not in the diff it scans. So item 8's own
+# pre-commit gate result was about a tree state that was not the one
+# being committed -- the same family as HISTORY 83 and 84, in the tool
+# bought to catch that family. Recorded here because it is the only
+# place a future reader of these acks will look.
+prose-count	docs/relayed/NW-BOOT-RECORD.md	**`reason` and `err` are two fields, not one.** The first draft merged
+prose-count	docs/relayed/NW-FROM-SCRATCH-RECORD.md	### 4.1 The mechanism rule
+prose-count	docs/relayed/NW-FROM-SCRATCH-RECORD.md	**Why clause 4 earns its place.** An audit proposed exempting *numbers
+prose-count	docs/relayed/NW-SOLVENT.md	### PID 1 becomes fifty lines
+prose-count	docs/relayed/NW-VM-AS-HOUSE-RECORD.md	**Capabilities, not paths.** Already argued in `blob.h` for one field: the
+prose-count	docs/relayed/NW-VM-AS-HOUSE-RECORD.md	*cannot express* a traversal. `nwcheck.c:109` names the two fields that
+unpaired-absence	.claude/rules/plan.md	"Written 2026-09-14. Not in the tree", and the directory it sits in
+unpaired-absence	docs/relayed/NW-BAKE-LEDGER.md	Written 2026-09-14. Not in the tree. Entirely offline: no PID 1, no
+unpaired-absence	docs/relayed/NW-BAKE-LEDGER.md	One append-only file in the bakery, not on the machine and not in the
+unpaired-absence	docs/relayed/NW-BAKE-LEDGER.md	A refusal whose `detail` names a unit the source does not contain. Two
+unpaired-absence	docs/relayed/NW-BOOT-RECORD.md	Written 2026-09-14. Not in the tree.
+unpaired-absence	docs/relayed/NW-BOOT-RECORD.md	over a bounded record must report **not in the retained volume** rather
+unpaired-absence	docs/relayed/NW-BOOT-RECORD.md	that change is not in the tree, so nobody has run the count against a tree
+unpaired-absence	docs/relayed/NW-BOOT-RECORD.md	oldest `boot` in the ring is not 1, and must render that as **not in the
+unpaired-absence	docs/relayed/NW-FIRST-FIRMWARE-BOOT.md	Measured 2026-09-14. Not in the tree when written. `NEXUSWEAVE.md` §11 lists
+unpaired-absence	docs/relayed/NW-FROM-SCRATCH-RECORD.md	Two of the most expensive errors were not in any design. A specification
+unpaired-absence	docs/relayed/NW-FROM-SCRATCH-RECORD.md	than format properties, stale reads reported as *not in the retained
+unpaired-absence	docs/relayed/NW-MEASUREMENTS-0914.md	Not in the tree. Every number below was produced by running something on
+unpaired-absence	docs/relayed/NW-UNCONSTRAINED-ADDENDUM-7.md	does not contain `lid_brick`. Same privilege, less code. Smaller than the
+unpaired-absence	docs/relayed/NW-UNCONSTRAINED-ADDENDUM-7.md	`brickcatalogue.py` is not in the worktree and has no object anywhere in
+unpaired-absence	docs/relayed/NW-VIRTIO-STATUS.md	Measured 2026-09-14. Not in the tree when written. Answers the one item
+
+# .claude/rules/plan.md: the line QUOTES NW-BOOT-RECORD.md's own status
+# line in order to say the document is not scheduled. A quotation of a
+# label, not an assertion about the tree.
+unpaired-absence	.claude/rules/plan.md	"Written 2026-09-14. Not in the tree", and the directory it sits in

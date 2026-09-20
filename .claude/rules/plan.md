@@ -139,12 +139,18 @@ The boundary that does matter here is not between files, it is **trust**:
   when a layer sidecar is present and the hash sidecar beside it is not,
   because then nothing says the layer list describes this blob. The
   baker writes an empty-but-EXISTING `.layers` for a brickless city, so
-  that refusal fires on the common case, not only on a city with bricks.
+  that refusal was reachable on the common case, not only on a city
+  with bricks.
 
-  That was the state of the burned image until 2026-09-20, and the
-  reasoning is worth keeping because it looked sound: `.sha256` was left
-  off on the grounds that nothing on the BOOT PATH reads it, which is
-  true and was the wrong test. The reader that matters is the recovery
+  The burned image was in that state for part of one day — the
+  `.layers` copy landed and the hash copy followed it a few commits
+  later — and before that it carried NEITHER sidecar and the recovery
+  failed earlier, for the reason `HISTORY.md` §74 records. Nobody is
+  known to have run the recovery on a burned slot in the window, so
+  the refusal was reachable rather than observed. The reasoning is
+  worth keeping because it looked sound: `.sha256` was left off on the
+  grounds that nothing on the BOOT PATH reads it, which is true and was
+  the wrong test. The reader that matters is the recovery
   tool the `.layers` copy exists to feed. Reproduced against the exact
   file set the script copied — `plan.blob` and an empty
   `plan.blob.layers` — `stage-layers` exits 1 naming the missing hash.
@@ -320,13 +326,20 @@ material — the resource block's "Nothing writes them yet", and the CPU
 mask whose out-of-range case nothing refuses — so this section is
 somewhere to move such items TO, not a boundary the file already keeps.
 Claiming it kept one would have been an assertion about editorial
-practice contradicted seventy lines up, which is the defect this
-section exists to record. `claims` caught that sentence.
+practice contradicted by the two items named above, which is the defect
+this section exists to record. `claims` caught that sentence, and then
+caught the distance-in-lines the first correction reached for.
 
 - **A plan hash in `struct nw_hdr` waits for a reader that holds the blob
   WITHOUT the file beside it.** Proposed 2026-09-20 as half of a magic
-  increment and deferred, for a reason that is not the
-  migration cost.
+  increment and deferred, for a reason that is not the migration cost.
+
+  The magic itself is not spelled here, and that is
+  `install-agents.sh --check` refusing it rather than taste: a brief
+  holding a copy of a literal that lives in the code is one more place
+  to drift, and the first draft of this bullet spelled both the old
+  value and the new one inside a section arguing that a second copy is
+  the drift class. `NW_MAGIC` is in `blob.h`; read it there.
 
   **The plan's identity already exists, and it is recomputed rather
   than trusted.** The baker writes `<blob>.sha256` beside the blob;
@@ -339,16 +352,18 @@ section exists to record. `claims` caught that sentence.
   paragraph named only `tools/stage-candidate.py`, and the one it left
   out is precisely the one the burned-image defect above turns on.
   Naming it would have surfaced that defect while writing this
-  sentence. Read the calls rather than a line number — this file still
-  quotes line numbers into the specs that no longer point at what they
-  claim, which the spec section below now says instead of pretending
-  it is past.
+  sentence. Read the calls rather than a line number: this file quoted
+  a pair into the specs and they had drifted to unrelated prose by the
+  time anyone looked. The spec section below names them now, and says
+  so rather than describing the drift as something that happened
+  elsewhere.
 
   So a header field would be a SECOND copy of an identity that exists,
   and the two could not be reconciled: the proposal hashes the blob with
   the hash field zeroed, the sidecar hashes the blob, and neither is
   derivable from the other without running the algorithm. That is
-  invariant 3's drift class pointed at an identity instead of a limit. It
+  invariant 3's drift class pointed at an identity instead of a limit.
+
   `tools/mkboot.sh` is NOT evidence for this, and an earlier draft of
   this bullet cited it as though it were. It omitted `.sha256` from the
   ESP reasoning that nothing on the boot path reads it — an omission
@@ -364,11 +379,24 @@ section exists to record. `claims` caught that sentence.
   **The trigger, which is the whole point of this entry: the day
   something reads the plan's name without the file beside it.** That is
   PID 1, recording the identity of what it booted. No such consumer
-  exists in this tree and no document here designs one — the nearest is
-  `docs/NW-EXPECTATIONS-UNANCHORED.md`, whose own third line says it is
-  not a design and not a queue, so the decision does not live there
-  either. That is the honest state: the trigger is named and its home
-  is not, and whoever builds the consumer picks it.
+  exists in this tree — no code reads a plan hash, because there is no
+  plan hash to read.
+
+  **Its SPECIFICATION does exist**, and this bullet said otherwise for
+  the few commits between being written and being read.
+  `docs/relayed/NW-BOOT-RECORD.md` designs the boot record, gives it a
+  `BOOT_OPEN` record per boot carrying the plan hash as 32 raw bytes,
+  and names the header field a bump would add. Its own third line is
+  "Written 2026-09-14. Not in the tree", and the directory it sits in
+  says on its first line that none of those documents is in the tree,
+  scheduled, or decided.
+
+  That STRENGTHENS the deferral rather than weakening it, which is why
+  it is written out rather than patched over. The trigger asks for the
+  field to arrive with its reader; the reader's design is now in the
+  tree with a status line on it, so the pairing is a thing someone can
+  pick up rather than invent. What is still missing is the code and the
+  decision to build it, and neither is here.
 
   On that day the header field is right, the SIDECAR becomes the
   redundant copy, and the bump should carry that consumer with it so
@@ -379,9 +407,9 @@ section exists to record. `claims` caught that sentence.
   `nwcheck.c` stay the safety property, and the threat model stays
   corruption rather than tampering. Calling CRC32 "the integrity
   mechanism" stood here for one round and promoted it to the role both
-  `CLAUDE.md` and this file's own Hard rules deny it — three lines from
-  where that rule says not to argue for SHA-256 on integrity grounds it
-  does not provide. A header hash that `nwcheck`
+  `CLAUDE.md` and this file's own Hard rules deny it, in a paragraph
+  about a SHA-256 header field, while the Hard rules bullet says not to
+  argue for SHA-256 on integrity grounds it does not provide. A header hash that `nwcheck`
   VERIFIES is a different proposal: it rewrites that claim and brings bug
   1 — the seal must be verified, not merely read — to bear on a new
   field. Whoever wants that should want it on its own terms, not inside a
