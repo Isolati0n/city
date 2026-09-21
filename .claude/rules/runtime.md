@@ -492,10 +492,19 @@ cost is that a city which boots on one machine refuses to boot on a
 kernel without the controller, which is the intended reading and is the
 opposite of what a container runtime usually does.
 
-**THIS MACHINE CANNOT EXERCISE ANY OF IT**, so do not write a test here
-that reads green. cgroup v2 is mounted with `hugetlb` as its only
-controller — `cpu`, `memory` and `io` are on v1 hierarchies — and
-project quota is off on the root device (`quotactl` answers `ESRCH`).
+**THIS MACHINE CANNOT EXERCISE THE CGROUP-BACKED FIELDS**, so do not
+write a test on them here that reads green. cgroup v2 is mounted with
+`hugetlb` as its only controller — `cpu`, `memory` and `io` are on v1
+hierarchies — and project quota is off on the root device (`quotactl`
+answers `ESRCH` for `/dev/vda`). That covers `mem_high`, `mem_max`,
+`io_rbps`, `io_wbps` and the layer capacity.
+
+**It does NOT cover the whole block, and this said "any of it" until
+`claims` ran the rest.** `cpu_mask`, `sched_policy` and `nice` are
+`sched_setaffinity`, `sched_setscheduler` and `setpriority` —
+syscalls, not cgroup files — and all three succeed here. A measurement
+over cgroup controllers does not establish a claim over the block, and
+`tools/HANDOFF-resources.md`'s table is what distinguishes them.
 A test on such a machine takes the unavailable branch, which is
 `lid-landlock`'s entire life. `skip()` with a named reason, and put the
 guard in the helper the way `make_brick()` does, not at each call site.

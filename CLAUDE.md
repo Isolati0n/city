@@ -594,7 +594,19 @@ make proof      # the CBMC proofs of the validator, and their controls
 ```
 
 `tests/run.py` boots via `unshare --pid --fork --mount-proc` so `nw-root` is
-genuine PID 1 and orphan reaping is actually exercised.
+genuine PID 1 and orphan reaping is actually exercised. It also takes
+`--only <name>[,<name>...]` for a named subset in seconds, which refuses
+an unknown name rather than running nothing and exiting 0; **a subset is
+not a gate and the target is still the only green that counts before a
+push.**
+
+**`docs/ENVIRONMENT.md` records what this container cannot do**, each
+entry with the command that measured it — ref deletion answering 403 and
+the pipe that turns that into an exit 0, no FAT driver beside an
+installed `mkfs.vfat`, cgroup v2 carrying only `hugetlb`, and which of
+those are pointers rather than measurements. Read it before concluding
+that a failure is a code defect, and add to it when you lose a cycle to
+something this box does not do.
 
 `make proof` needs `cbmc` and is **tens of minutes**, dominated by
 `leaf_name_dup`, so it is not part of `make test`. Do not budget for it
