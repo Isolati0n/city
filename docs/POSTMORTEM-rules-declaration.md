@@ -1,17 +1,24 @@
 # Post-mortem: five attempts to write down who owns which file
 
 **Status: history, not instructions.** Nothing below is a task. The work it
-describes is on `origin/rules-declaration`, which was never merged and is
-deleted; the decision that replaced it is in `CLAUDE.md`'s "Who owns which
-file" and the mechanism is `tools/rules-hook.sh --check`. The findings are
+describes was on `origin/rules-declaration`, which was never merged and was
+deleted in the push that landed this document; the decision that replaced it
+is in `CLAUDE.md`'s "Who owns which file" and the mechanism is
+`tools/rules-hook.sh --check`.
+
+**The hashes in the next section no longer resolve**, and that is a cost of
+the deletion rather than an oversight. They were all verified against the
+ref before it went — `claims` re-checked the parent chain, the contents of
+each commit, and that `e62c6a6` was reachable from no ref — so they are kept
+as names for what happened, not as things a reader can `git show`. The findings are
 kept because they are the only record of how five attempts at one small
 thing went wrong, and because the way they were found is worth more than
 what they found.
 
 ## The branch
 
-Three commits, based on `bd49568`, pushed to `origin/rules-declaration` and
-deleted after this document landed on `main`.
+Based on `bd49568`, pushed to `origin/rules-declaration` and deleted in the
+push that landed this document on `main`.
 
 | commit | held |
 |---|---|
@@ -44,10 +51,14 @@ and no comparator.**
 Comparing prose to a map means parsing prose, which is attempt 3. And a
 second list earns a comparator only when the two lists have *different edit
 paths* — otherwise the comparator is checking that one edit was made twice.
-These do not: of the five commits that had touched `tools/rules-hook.sh`,
-four also touched `.claude/rules/`, and the fifth (`a65286e`) only rewrapped
-`MAP`'s whitespace and left its membership unchanged. Two lists would have
-been one list written twice.
+These do not: `a65286e` rewrapped `MAP`'s whitespace and left its membership
+unchanged, and the commits that changed its membership mostly changed the
+rules files too. Mostly, not always, and the exception matters: the commit
+that first wrote this argument down changed `MAP` and touched no rules file.
+So the historical claim is weaker than it was stated as, and the argument
+that survives is structural — a second list here would exist only to be
+compared, so it would be maintained by the comparator rather than by anyone
+needing it. Two lists would be one list written twice.
 
 What replaces the comparison is an **absence check against reality**:
 enumerate the tracked code files and assert every one is accounted for. Its

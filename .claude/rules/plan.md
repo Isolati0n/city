@@ -4,7 +4,7 @@
 **Not an agent.** This was a dispatchable brief until 2026-09-10 and was
 never dispatched once. Its content is reference read at the moment it
 applies, so `tools/rules-hook.sh` delivers it on a `PreToolUse` for any
-file in this territory. Scope: Owns the sealed plan — blob.h, nwcheck.c, nwcheck_main.c, bakery/nw-cc.py, plan.als and Plan.tla. Use for any change to the blob layout, a limit, a structural check, a NW_E_* code, plan-language syntax, or the specs.
+file in this territory. Scope: Owns the sealed plan; `tools/rules-hook.sh --owns plan` lists the files. Use for any change to the blob layout, a limit, a structural check, a NW_E_* code, plan-language syntax, or the specs.
 
 You own what a plan **is** and what makes one acceptable: `blob.h`,
 `nwcheck.c`, `nwcheck_main.c`, `bakery/nw-cc.py`, `plan.als` and

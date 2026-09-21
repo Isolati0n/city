@@ -506,3 +506,27 @@ prose-count	.gitignore	# built that way came up one code file short.
 # cwd under the same settings.json command, so a hook that had gone
 # silent fails there first.
 unpaired-absence	tests/run.py	expect(fire(foreign, os.path.join(ROOT, unowned)) is None,
+
+# The multi-owner round, 2026-09-21. English in every case: "two rules
+# files", "the two cases", "two sets of rules" and "ten files" are the
+# claims themselves, not tallies of anything that can grow. "one this
+# case wants" is the matcher reading the word one out of a sentence.
+prose-count	tests/run.py	# TWO OWNERS GET TWO RULES FILES, in a stable order. Leaving such a
+prose-count	tools/rules-hook.sh	# --check refuses it, naming both. The two cases are indistinguishable
+prose-count	tools/rules-hook.sh	# its rules should arrive, and a file governed by two sets of rules
+prose-count	tools/rules-hook.sh	# Once per rules file until that file changes, so touching ten files in one
+
+# Three --check branches, not test assertions. The matcher is looking
+# for an unpaired absence in a test and finding the classification and
+# validation logic of the tool. Each is paired in the sense that
+# matters -- test_every_code_file_is_accounted_for exercises the
+# refusals these produce, and controls D2, D3 and D4 turn each of them
+# red on its own.
+unpaired-absence	tools/rules-hook.sh	if dec is None:
+unpaired-absence	tools/rules-hook.sh	elif p not in tracked:
+unpaired-absence	tools/rules-hook.sh	unknown = [x for x in terrs if x not in territories()]
+
+# Re-keyed after the sentence above it was rewritten: same false
+# positive, the matcher reading the word "one" out of "the one this
+# case wants".
+prose-count	tests/run.py	# that looks like the one this case wants.

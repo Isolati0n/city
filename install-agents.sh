@@ -78,7 +78,11 @@ RULES=$(sh tools/rules-hook.sh --territories)
 # Briefs superseded on 2026-09-10. Their content migrated into plan.md and
 # runtime.md; --check fails if one reappears, because two agents claiming the
 # same file is worse than either alone.
-SUPERSEDED='pid1 validator supervisor baker spec electrician repro plan runtime harness'
+# The territory names are appended from $RULES rather than spelled again:
+# they are in this list because each was once a dispatchable agent, and a
+# fourth territory must land here too. `claims` found them written out a
+# third time, just below a comment saying the names live once.
+SUPERSEDED="pid1 validator supervisor baker spec electrician repro $RULES"
 
 MODE=install
 if [ $# -gt 0 ]; then
@@ -121,6 +125,13 @@ if [ "$MODE" = list ]; then
         ds=$(sed -n 's/.*Scope: *//p' "$f" | head -1)
         printf '  %-12s %s\n' "$nm" "$ds" | fold -s -w 78 |
             sed '2,$s/^/               /'
+        # FROM MAP, not from the sentence above. The Scope prose is a
+        # one-line human description and nothing derives ownership from
+        # it; printing only that left the sole visible enumeration
+        # stale -- runtime's named a subset of what MAP held.
+        printf '               owns: %s\n' \
+            "$(sh tools/rules-hook.sh --owns "$nm")" | fold -s -w 78 |
+            sed '2,$s/^/                     /'
     done
     echo
     echo "WHEN TO DISPATCH — the table in CLAUDE.md is the authority."

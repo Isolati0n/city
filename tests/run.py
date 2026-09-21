@@ -1652,6 +1652,50 @@ def test_rules_hook_delivers_from_any_cwd():
         # runtime for everything.
         expect(fire(foreign, os.path.join(ROOT, unowned)) is None,
                f"the hook delivered for {unowned}, which no territory owns")
+
+        # TWO OWNERS GET TWO RULES FILES, in a stable order. Leaving such a
+        # file unowned silences BOTH, and first-match silences one of them
+        # invisibly -- MAP order decides which, so the same file would have
+        # got plan from an Edit and never runtime, with nothing saying a
+        # rule was missing. The order asserted here is MAP's, and it is
+        # asserted rather than described because "stable" is exactly the
+        # kind of claim that holds until someone reorders a loop.
+        shared = "tools/stage-layers.py"
+        ctx = fire(foreign, os.path.join(ROOT, shared))
+        got = re.findall(r"Rules for the (\w+) territory", ctx or "")
+        expect(got == ["runtime", "plan"],
+               f"{shared} is owned by two territories and delivered {got}; "
+               f"both, in MAP order, or the second owner's rules never "
+               f"arrive and nothing says so")
+        for t in ("runtime", "plan"):
+            expect(os.path.isfile(os.path.join(stamps, ".rules." + t)),
+                   f"no {t} stamp after a two-owner delivery")
+
+        # SUPPRESSION IS PER TERRITORY, which is what makes two owners
+        # safe. Stamp runtime by itself, then the same two-owner file must
+        # come back with plan ALONE -- not both (no suppression) and not
+        # nothing (suppression keyed on the file instead of the rules).
+        for st in glob.glob(os.path.join(stamps, ".rules.*")):
+            os.unlink(st)
+        env = dict(os.environ, CLAUDE_PROJECT_DIR=ROOT)
+
+        def fire_keep(rel):
+            ev = {"tool_input": {"file_path": os.path.join(ROOT, rel)}}
+            q = subprocess.run(["sh", "-c", command],
+                               input=json.dumps(ev).encode(),
+                               capture_output=True, cwd=foreign, env=env)
+            o = (q.stdout or b"").decode()
+            if not o.strip():
+                return []
+            c = json.loads(o)["hookSpecificOutput"]["additionalContext"]
+            return re.findall(r"Rules for the (\w+) territory", c)
+
+        expect(fire_keep("pid1.c") == ["runtime"],
+               "pid1.c did not deliver runtime on a clean stamp dir")
+        expect(fire_keep(shared) == ["plan"],
+               f"with runtime already stamped, {shared} must deliver plan "
+               f"alone; got something else, so suppression is not per "
+               f"territory")
     finally:
         shutil.rmtree(foreign, ignore_errors=True)
         for st in glob.glob(os.path.join(stamps, ".rules.*")):
@@ -1659,7 +1703,9 @@ def test_rules_hook_delivers_from_any_cwd():
 
     print(f"ok rules-hook-cwd (settings.json's own command, run from a "
           f"foreign cwd, delivers the runtime body and stamps the repo not "
-          f"the cwd; {unowned} silent from the same cwd, paired)")
+          f"the cwd; {unowned} silent from the same cwd, paired; a "
+          f"two-owner file delivers both in MAP order and suppression "
+          f"stays per territory)")
 
 
 def test_every_code_file_is_accounted_for():
@@ -1685,31 +1731,70 @@ def test_every_code_file_is_accounted_for():
     expect("code files" in p.out,
            f"--check passed without saying what it counted:\n{p.out}")
 
+    # A FULL COPY, not a two-file stub. The hook roots at its own location
+    # and falls back to the cwd when that location holds no
+    # .claude/rules -- so a stub repo made the copied hook check the REAL
+    # tree and report it clean, which read as "the planted file was
+    # accepted". The fixture has to be a tree the hook would actually
+    # serve, or the negative is about somewhere else.
     t = tempfile.mkdtemp(prefix="nw-hook-check-")
     try:
-        os.makedirs(os.path.join(t, "tools"))
-        shutil.copy2(hook, os.path.join(t, "tools", "rules-hook.sh"))
-        open(os.path.join(t, "brand-new-thing.c"), "w").write("int main(){}\n")
+        fake = os.path.join(t, "repo")
+        shutil.copytree(ROOT, fake, symlinks=True,
+                        ignore=shutil.ignore_patterns(
+                            ".git", "__pycache__", "boot-out", ".reviews"))
+        planted = "brand-new-thing.c"
+        open(os.path.join(fake, planted), "w").write("int main(){}\n")
         for a in (["init", "-q"], ["add", "-A"]):
-            subprocess.run(["git"] + a, cwd=t, capture_output=True, check=True)
-        # FIXTURE FIRST. If the copy or the add silently did nothing, the
-        # refusal below would be absent for a reason that is not the one it
-        # names.
-        expect(os.path.isfile(os.path.join(t, "tools", "rules-hook.sh")),
-               "the temp repo has no hook copy, so its result is about "
-               "nothing")
-        listed = subprocess.run(["git", "ls-files"], cwd=t,
+            subprocess.run(["git"] + a, cwd=fake, capture_output=True,
+                           check=True)
+        # FIXTURE FIRST. Each assertion below names a different broken
+        # fixture -- no hook, no rules dir, nothing planted, too few
+        # tracked files -- and every one of them would produce a refusal
+        # that looks like the one this case wants.
+        expect(os.path.isfile(os.path.join(fake, "tools", "rules-hook.sh")),
+               "the copy has no hook, so its result is about nothing")
+        expect(os.path.isdir(os.path.join(fake, ".claude", "rules")),
+               "the copy has no rules dir, so the hook would root at the "
+               "cwd and check a different tree")
+        listed = subprocess.run(["git", "ls-files"], cwd=fake,
                                 capture_output=True, text=True).stdout.split()
-        expect("brand-new-thing.c" in listed,
-               f"the planted file is not tracked in the temp repo: {listed}")
+        expect(planted in listed,
+               f"the planted file is not tracked in the copy")
+        expect(len(listed) > 40,
+               f"the copy tracks only {len(listed)} files, so --check's "
+               f"floor would fire and the refusal would be about that")
 
-        q = run(["sh", os.path.join(t, "tools", "rules-hook.sh"), "--check"])
+        q = run(["sh", os.path.join(fake, "tools", "rules-hook.sh"), "--check"])
         expect(q.returncode != 0,
                f"a code file no territory owns and UNOWNED does not mention "
                f"was accepted:\n{q.out}{q.err}")
-        expect("brand-new-thing.c" in (q.out + q.err),
+        expect(planted in (q.out + q.err),
                f"--check refused without naming the file, which is the whole "
                f"value of it:\n{q.out}{q.err}")
+        # AND ONLY THAT FILE. Without this the case passes on a copy that
+        # is broken in some other way as well, and a refusal naming ten
+        # things is not evidence that the planted one was noticed.
+        unaccounted = [l for l in (q.out + q.err).splitlines()
+                       if "no territory owns" in l]
+        expect(len(unaccounted) == 1 and planted in unaccounted[0],
+               f"expected exactly one unaccounted file, the planted one:\n"
+               + "\n".join(unaccounted))
+
+        # AND THE WIRING, not just the check. `make test` never runs
+        # --check directly; it runs install-agents.sh, which calls it.
+        # Deleting that call left the whole target green -- measured --
+        # which is post-mortem finding 5 reproduced in its replacement,
+        # so the call is pinned here rather than trusted. Run in the
+        # copy, where the planted file gives it something to refuse.
+        g = run(["sh", "install-agents.sh", "--check"], cwd=fake)
+        expect(g.returncode != 0,
+               f"install-agents.sh --check accepted a tree with an "
+               f"unaccounted code file, so the census is not wired into "
+               f"the target:\n{g.out}{g.err}")
+        expect(planted in (g.out + g.err),
+               f"install-agents.sh --check failed without the census "
+               f"reason, so something else refused:\n{g.out}{g.err}")
     finally:
         shutil.rmtree(t, ignore_errors=True)
 

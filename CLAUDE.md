@@ -668,21 +668,26 @@ remains outstanding. That is the form that has now been wrong twice.*
 ### Who owns which file
 
 **`MAP` in `tools/rules-hook.sh` is the map. Do not write a second one
-anywhere.** Three attempts wrote one here: the first contradicted the rules
-files' scopes, so did its replacement, and so did the tool written to derive
-one from the other, which reported files as owned by substring-matching
-their names against a prose line and silently un-owned the boot chain when
-that line was rewrapped. A fourth put a machine-readable declaration in each
-rules file with a gate comparing it to the prose; it reproduced two of those
-bugs and was dropped. `docs/POSTMORTEM-rules-declaration.md` carries all
-five and the branch they are on.
+anywhere.** Attempts to keep one here are named and dated in
+`docs/POSTMORTEM-rules-declaration.md`, which is where the tally belongs;
+the ones worth knowing by name are `1ac0235`, the tool that derived
+ownership by substring-matching filenames out of a `Scope:` line and
+un-owned the whole boot chain when that line was rewrapped, and `e62c6a6`,
+which put a machine-readable declaration in each rules file with a gate
+comparing it to the prose and reproduced two of `1ac0235`'s bugs.
 
-**No comparator, because a second list earns one only when the two lists
-have different edit paths, and these would not.** Of the commits that have
-touched `tools/rules-hook.sh`, all but one also touched `.claude/rules/`,
-and that one rewrapped `MAP`'s whitespace without changing its membership.
-Comparing a map to prose means parsing prose, which is what the derivation
-tool did.
+**No comparator, and the argument does not rest on counting commits.**
+Comparing a map to prose means parsing prose, which is what `1ac0235` did.
+And a comparator earns its place by catching a divergence between two lists
+somebody maintains for their own reasons — a second list here would exist
+only to be compared, so it would be maintained by the comparator's
+complaints rather than by anyone needing it. That is one list written
+twice, plus a gate that makes you write it twice.
+
+*An earlier version of this paragraph argued the same point from a commit
+count, and `claims` disproved it: the count was wrong, and the commit that
+introduced the sentence changed `MAP` without touching `.claude/rules/`, so
+the claim's own commit was its counterexample.*
 
 **What replaces the comparison is an absence check against reality.**
 `sh tools/rules-hook.sh --check` enumerates the tracked code files and
@@ -706,12 +711,22 @@ says OK because ownership is all it asks about. The residue is a
 documentation gap, and **nothing checks prose** — deliberately, because
 checking prose is what attempt three did.
 
-Two further limits, stated rather than discovered. The census cannot see a
-file that has not been `git add`ed, because its input is `git ls-files`. And
-measuring "undescribed" by whether a rules file names the basename
-over-reports: every `houses/*.c` fixture comes back undescribed, and
-`harness.md` says in as many words to read `houses/` rather than any list
-written down in it. That is a deliberate non-description, not a gap.
+Further limits, stated rather than discovered. The census cannot see a file
+that has not been `git add`ed, because its input is `git ls-files`.
+`attic/` is skipped, which is a second exemption channel beside `UNOWNED`
+and carries its reason where the skip happens. And measuring "undescribed"
+by whether a rules file names the basename over-reports: every `houses/*.c`
+fixture comes back undescribed, and `harness.md` says in as many words to
+read `houses/` rather than any list written down in it. That is a
+deliberate non-description, not a gap.
+
+**A file may be owned by two territories**, declared in `SHARED` beside
+`MAP`, and the hook then delivers both rules files with suppression still
+keyed per territory. `tools/stage-layers.py` is the case: `plan.md`'s
+sidecar rules and `runtime.md`'s THE RECOVERY are both statements about it.
+Leaving such a file unowned silences both, and first-match silences one
+invisibly, so two owners has to be declarable — and declared, because
+`--check` refuses a name in two sets that `SHARED` does not name.
 
 What the map does not settle, because it is not a map question:
 
