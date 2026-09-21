@@ -518,12 +518,17 @@ prose-count	tools/rules-hook.sh	# Once per rules file until that file changes, s
 
 # Three --check branches, not test assertions. The matcher is looking
 # for an unpaired absence in a test and finding the classification and
-# validation logic of the tool. Each is paired in the sense that
-# matters -- test_every_code_file_is_accounted_for exercises the
-# refusals these produce, and controls D2, D3 and D4 turn each of them
-# red on its own.
+# validation logic of the tool.
+#
+# The reason here used to say the census test exercised the refusals
+# these produce. It did not -- it planted only unaccounted files, so
+# each of these branches was deletable green, and "a control turns it
+# red" meant planting the DATA, which shows the mechanism works rather
+# than pinning it. `control` called that an ack asserting a pairing
+# that does not exist, and it was right. The test now plants a
+# condition per refusal and requires each by its own message, so
+# removing any of them turns it red; the ack stands on that.
 unpaired-absence	tools/rules-hook.sh	if dec is None:
-unpaired-absence	tools/rules-hook.sh	elif p not in tracked:
 unpaired-absence	tools/rules-hook.sh	unknown = [x for x in terrs if x not in territories()]
 
 # Re-keyed after the sentence above it was rewritten: same false
@@ -588,3 +593,26 @@ unpaired-absence	tools/rules-hook.sh	if b not in bases:
 # on. Twenty-fifth row of the round and the clearest single argument for
 # the narrowing the note describes.
 unpaired-absence	CLAUDE.md	— `--check`'s classification and validation branches, whose `is None` and
+
+# The sweep round, 2026-09-21.
+
+# Three tool-presence hits, all the matcher reading English. Two are the
+# hook's and the test's wrong-checkout diagnostic -- "installed in or
+# linked from a different checkout" is where the hook IS, not a claim
+# that some tool exists. The third is the phrase "Who owns which file"
+# wrapping across a line in the sweep's docstring.
+tool-presence	tests/run.py	f"is installed in or linked from a different checkout, and its "
+tool-presence	tools/rules-hook.sh	f"its own location. It is installed in, or linked from, a "
+tool-presence	tools/mutation-sweep.py	which file" carries the reasoning. Survivors are listed in RESIDUE below
+
+# Four absences. Three are paired inside their own case: the wrong-tree
+# diagnostic's "## Liveness" is paired with the assertion that the
+# refusal is present and names both trees; the gate's "OK" absence is
+# paired with the assertions that it refused and gave the census
+# reason; the anchor-count line is a fixture guard whose whole job is
+# to abort when a mutation target moved. The fourth is the sweep's
+# stale-residue loop -- tool code, not a test.
+unpaired-absence	tests/run.py	expect("## Liveness" not in d,
+unpaired-absence	tests/run.py	expect("install-agents: OK" not in (g.out + g.err),
+unpaired-absence	tests/run.py	f"{label}: the anchor {o!r} is not in the hook exactly "
+unpaired-absence	tools/mutation-sweep.py	if k not in survivors:

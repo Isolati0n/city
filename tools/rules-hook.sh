@@ -193,6 +193,11 @@ UNOWNED = [
      "this caller and says so -- and no territory owns it. The rule "
      "that governs it is a numbered invariant in CLAUDE.md, which every "
      "agent already has, so delivery would add nothing."),
+    ("tools/mutation-sweep.py",
+     "enumerates the refusals in this file and install-agents.sh and "
+     "reports the ones nothing pins. Gate tooling, and pointedly not "
+     "owned by harness: it is not the put-together suite, it is a thing "
+     "you run at the hook."),
     ("tools/prereport.py",
      "the pre-push heuristics. Gate tooling."),
     ("tools/review-gate.sh",
@@ -408,7 +413,7 @@ def check():
     for b in bad:
         print("rules-hook --check: " + b)
     if not bad:
-        print(f"rules-hook: {len(files)} code files, "
+        print(f"rules-hook: {root}: {len(files)} code files, "
               f"{sum(1 for f in files if classify(f))} owned "
               f"({len(SHARED)} by two territories), "
               f"{len(UNOWNED)} unowned entries each with a reason")
@@ -441,12 +446,25 @@ if path:
     # that is supposed to work from anywhere.
     where = os.path.relpath(path, root) if os.path.isabs(path) else path
     if where.startswith(".."):
+        # OUTSIDE THE TREE WE ROOTED IN, and this branch is the only
+        # place that knows. realpath was added so a symlinked $0 finds
+        # the real file; point that symlink at a SECOND checkout and the
+        # hook serves the other tree's rules for this tree's file, with
+        # the stamp landing over there too. It told "no repository" from
+        # "a repository" and not "this one" from "some other one".
+        # Silently absolutising `where` discarded the one signal that
+        # separates them. `control` built the two-checkout case.
+        outside = True
         where = path
+    else:
+        outside = False
 elif cmd:
     names = classify_cmd(cmd)
     where = "a Bash command naming a file in it"
+    outside = False
 else:
     names = []
+    outside = False
 
 if not names:
     raise SystemExit(0)
@@ -474,6 +492,18 @@ if not rooted:
             f"location and found no {rules_dir} (resolved from "
             f"{os.path.realpath(self)}). The hook is installed outside the "
             f"repository it is meant to serve; no rules were delivered."}}
+    print(json.dumps(out))
+    raise SystemExit(0)
+
+if outside:
+    out = {"hookSpecificOutput": {
+        "hookEventName": "PreToolUse",
+        "additionalContext":
+            f"rules-hook: refusing to deliver. The file is {path}, which "
+            f"is not under {root} -- the tree this hook resolved to from "
+            f"its own location. It is installed in, or linked from, a "
+            f"different checkout, so its rules are not the rules for "
+            f"that file."}}
     print(json.dumps(out))
     raise SystemExit(0)
 

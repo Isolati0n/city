@@ -670,11 +670,14 @@ remains outstanding. That is the form that has now been wrong twice.*
 **`MAP` in `tools/rules-hook.sh` is the map. Do not write a second one
 anywhere.** Attempts to keep one here are named and dated in
 `docs/POSTMORTEM-rules-declaration.md`, which is where the tally belongs;
-the ones worth knowing by name are `1ac0235`, the tool that derived
-ownership by substring-matching filenames out of a `Scope:` line and
-un-owned the whole boot chain when that line was rewrapped, and `e62c6a6`,
-which put a machine-readable declaration in each rules file with a gate
-comparing it to the prose and reproduced two of `1ac0235`'s bugs.
+the ones worth knowing by name are `1ac0235`, the commit that DELETED
+`tools/ownership.sh` and recorded what it had cost — the tool derived
+ownership by substring-matching filenames out of a `Scope:` line, so
+rewrapping that line to 72 columns un-owned the whole boot chain at exit
+0 — and `e62c6a6`, which put a machine-readable declaration in each rules
+file with a gate comparing it to the prose, and brought back two of the
+things `1ac0235` records: the bare substring match, and a parse failure
+widened from one territory to all of them.
 
 **No comparator, and the argument does not rest on counting commits.**
 Comparing a map to prose means parsing prose, which is what `1ac0235` did.
@@ -737,7 +740,21 @@ checking prose is what attempt three did.
 Further limits, stated rather than discovered. The census cannot see a file
 that has not been `git add`ed, because its input is `git ls-files`.
 `attic/` is skipped, which is a second exemption channel beside `UNOWNED`
-and carries its reason where the skip happens. And measuring "undescribed"
+and carries its reason where the skip happens.
+
+**"Code file" means an extension tuple in the hook, and that is a third
+exemption channel — the only one with nothing written down about what it
+leaves out.** `Makefile` is the live instance: tracked, edited most
+rounds, owned by nobody, in no `UNOWNED` row and invisible to the census.
+So is `.claude/settings.json`, which is half of the hook's own invocation
+contract, and so is anything extensionless — a shell tool in `tools/`
+with no suffix walks straight through. The test's independent sweep
+copies the same tuple, so the count comparison cannot see the boundary
+either; what it pins is the tuple's contents, not its shape.
+
+`MAP` also matches by basename with no directory, so a new file anywhere
+whose basename collides with a declared one is auto-owned and passes. And
+measuring "undescribed"
 by whether a rules file names the basename over-reports: every `houses/*.c`
 fixture comes back undescribed, and `harness.md` says in as many words to
 read `houses/` rather than any list written down in it. That is a

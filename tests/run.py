@@ -1602,6 +1602,21 @@ def test_rules_hook_delivers_from_any_cwd():
 
     stamps = os.path.join(ROOT, ".reviews")
 
+    def blocks(ctx):
+        """Every delivered block as (territory, source path, body).
+
+        Split on the header line, not on a blank line: a rules file is
+        full of blank lines and "\n\n".join means the naive split hands
+        back the first paragraph of the first file.
+        """
+        out = []
+        for chunk in re.split(r"(?m)^(?=Rules for the \w+ territory)", ctx):
+            m = re.match(r"Rules for the (\w+) territory[^\n]*?"
+                         r"Source: (\S+)\n\n(.*)$", chunk, re.S)
+            if m:
+                out.append((m.group(1), m.group(2), m.group(3)))
+        return out
+
     def fire(cwd, path):
         for st in glob.glob(os.path.join(stamps, ".rules.*")):
             os.unlink(st)
@@ -1633,21 +1648,31 @@ def test_rules_hook_delivers_from_any_cwd():
                "uses must hang off the script location.")
         expect(ctx.startswith("Rules for the runtime territory"),
                f"wrong territory from a foreign cwd: {ctx[:60]!r}")
+        # THE PATH IT NAMES, repo-relative. It was
+        # `path.split("/city/")[-1]` -- the checkout's own folder name
+        # baked into a tool meant to work from anywhere -- and reverting
+        # it was green, because the assertion above stops at the
+        # parenthesis.
+        expect("(you are touching nwsup.c)" in ctx,
+               f"the announcement does not name the file repo-relative: "
+               f"{ctx[:90]!r}")
         # THE BODY, not the announcement. Delivering a header with an empty
         # rules file under it is the failure the announcement cannot see,
         # and putting the text in front of an agent is the whole purpose.
-        body = ctx.split("\n\n", 1)[1] if "\n\n" in ctx else ""
-        want = open(os.path.join(ROOT, ".claude", "rules", "runtime.md")).read()
-        # THE WHOLE FILE, byte for byte. Heading anchors pin a PREFIX:
-        # `control` truncated the delivery at the `## Liveness` heading --
-        # dropping the Liveness reasoning, the fd preflight, the resource
-        # block and Definition of done -- and both anchors survived,
-        # because both sit near the front. Equality is the only form no
-        # prefix and no other file can satisfy.
-        expect(body.rstrip("\n") == want.rstrip("\n"),
-               f"the delivered body is not runtime.md: {len(body)} bytes "
-               f"delivered against {len(want)} in the file. A prefix, or "
-               f"another territory's text, reads as a delivery too.")
+        got = blocks(ctx)
+        expect(len(got) == 1, f"expected one block, got {len(got)}")
+        # THE WHOLE FILE, byte for byte, AND the file it names. Heading
+        # anchors pin a PREFIX: `control` truncated the delivery at the
+        # `## Liveness` heading -- dropping the Liveness reasoning, the fd
+        # preflight, the resource block and Definition of done -- and both
+        # anchors survived, because both sit near the front.
+        for terr_name, source, body in got:
+            want = open(os.path.join(ROOT, source)).read()
+            expect(body.rstrip("\n") == want.rstrip("\n"),
+                   f"the {terr_name} block does not carry {source}: "
+                   f"{len(body)} bytes delivered against {len(want)} in the "
+                   f"file. A prefix, or another territory's text, reads as "
+                   f"a delivery too.")
         expect(os.path.isfile(os.path.join(stamps, ".rules.runtime")),
                "no stamp under the repo's .reviews after a delivery, so the "
                "once-per-territory suppression is writing somewhere else or "
@@ -1677,6 +1702,26 @@ def test_rules_hook_delivers_from_any_cwd():
                "a Bash command naming nwsup.c did not deliver runtime")
         for st in glob.glob(os.path.join(stamps, ".rules.*")):
             os.unlink(st)
+        for st in glob.glob(os.path.join(stamps, ".rules.*")):
+            os.unlink(st)
+        cmd_ev = {"tool_input": {"command": "gcc -c houses/orphan.c"}}
+        q = subprocess.run(["sh", "-c", command],
+                           input=json.dumps(cmd_ev).encode(),
+                           capture_output=True, cwd=foreign,
+                           env=dict(os.environ, CLAUDE_PROJECT_DIR=ROOT))
+        o = (q.stdout or b"").decode()
+        # THE DIRECTORY RULE ON THE BASH BRANCH. Every other probe names
+        # a file MAP lists by basename, so deleting the PATH_RULES arm
+        # from classify_cmd was green -- the whole fixture-house
+        # territory could vanish from the branch this project says fires
+        # most often. --check never calls classify_cmd, so it cannot
+        # cover this either.
+        expect(o.strip() and "Rules for the harness territory" in
+               json.loads(o)["hookSpecificOutput"]["additionalContext"],
+               "a Bash command naming a file under houses/ did not "
+               "deliver harness")
+        for st in glob.glob(os.path.join(stamps, ".rules.*")):
+            os.unlink(st)
         cmd_ev = {"tool_input": {"command": f"sh {unowned} --check"}}
         q = subprocess.run(["sh", "-c", command],
                            input=json.dumps(cmd_ev).encode(),
@@ -1694,11 +1739,25 @@ def test_rules_hook_delivers_from_any_cwd():
         # kind of claim that holds until someone reorders a loop.
         shared = "tools/stage-layers.py"
         ctx = fire(foreign, os.path.join(ROOT, shared))
-        got = re.findall(r"Rules for the (\w+) territory", ctx or "")
-        expect(got == ["runtime", "plan"],
-               f"{shared} is owned by two territories and delivered {got}; "
-               f"both, in MAP order, or the second owner's rules never "
-               f"arrive and nothing says so")
+        got = blocks(ctx or "")
+        expect([t for t, _, _ in got] == ["runtime", "plan"],
+               f"{shared} is owned by two territories and delivered "
+               f"{[t for t, _, _ in got]}; both, in MAP order, or the "
+               f"second owner's rules never arrive and nothing says so")
+        # EACH BLOCK AGAINST ITS OWN FILE. Announcements alone were
+        # satisfied by a hook resolving every source to names[0]: the
+        # plan block announced plan, named plan.md, and carried runtime's
+        # text. `control`. Assert on the effect, not the announcement --
+        # the single-owner case had that and the path added beside it
+        # did not.
+        for terr_name, source, body in got:
+            expect(source.endswith(terr_name + ".md"),
+                   f"the {terr_name} block names {source} as its source")
+            want = open(os.path.join(ROOT, source)).read()
+            expect(body.rstrip("\n") == want.rstrip("\n"),
+                   f"the {terr_name} block announces {terr_name} and names "
+                   f"{source}, and its body is neither: {len(body)} bytes "
+                   f"against {len(want)}")
         for t in ("runtime", "plan"):
             expect(os.path.isfile(os.path.join(stamps, ".rules." + t)),
                    f"no {t} stamp after a two-owner delivery")
@@ -1760,6 +1819,14 @@ def test_rules_hook_refuses_a_tree_it_cannot_root_in():
     hook = os.path.join(ROOT, "tools", "rules-hook.sh")
     ev = json.dumps({"tool_input":
                      {"file_path": os.path.join(ROOT, "nwsup.c")}}).encode()
+    # OWN PRECONDITION. The stamp assertion below reads .rules.runtime and
+    # nothing here used to clear it -- it passed because the delivery test
+    # runs first and clears in its finally. `control` found a live repo
+    # with all three stamps present, where this test fails accusing the
+    # hook of writing one it never wrote. A test that needs a clean state
+    # establishes it.
+    for st in glob.glob(os.path.join(ROOT, ".reviews", ".rules.*")):
+        os.unlink(st)
     t = tempfile.mkdtemp(prefix="nw-hook-root-")
     try:
         # A STUB: the hook and nothing else. Restored deliberately as a
@@ -1802,6 +1869,52 @@ def test_rules_hook_refuses_a_tree_it_cannot_root_in():
                                                ".rules.runtime")),
                "a hook that could not read its rules stamped the real repo "
                "anyway, so the next real delivery would be suppressed")
+
+        # ROOTED, BUT A RULES FILE IS MISSING: the other half of "a
+        # machine must not hide a problem it handled", and deletable
+        # green because only the unrooted diagnostic was pinned.
+        moved = os.path.join(ROOT, ".claude", "rules", "runtime.md")
+        held = open(moved, "rb").read()
+        try:
+            os.unlink(moved)
+            for st in glob.glob(os.path.join(ROOT, ".reviews", ".rules.*")):
+                os.unlink(st)
+            q = subprocess.run(["sh", hook], input=ev, capture_output=True,
+                               cwd=ROOT)
+            o = (q.stdout or b"").decode()
+            expect(o.strip(),
+                   "a rules file that is missing produced silence, which "
+                   "is what an unowned file produces")
+            d = json.loads(o)["hookSpecificOutput"]["additionalContext"]
+            expect("could not read" in d and "runtime.md" in d,
+                   f"the diagnostic does not name the file it could not "
+                   f"read: {d[:160]!r}")
+        finally:
+            open(moved, "wb").write(held)
+
+        # A FILE OUTSIDE THE RESOLVED ROOT. The rooting told "no
+        # repository" from "a repository", not "this one" from "some
+        # other one": with tools/rules-hook.sh symlinked into a SECOND
+        # checkout, the hook served that tree's rules for this tree's
+        # file and stamped over there. The branch that knows is the one
+        # computing the repo-relative name, which used to absolutise and
+        # carry on. `control` built the two-checkout case; this is the
+        # same condition reached with one.
+        for st in glob.glob(os.path.join(ROOT, ".reviews", ".rules.*")):
+            os.unlink(st)
+        out_ev = json.dumps({"tool_input":
+                             {"file_path": os.path.join(t, "nwsup.c")}
+                             }).encode()
+        q = subprocess.run(["sh", hook], input=out_ev, capture_output=True,
+                           cwd=ROOT)
+        o = (q.stdout or b"").decode()
+        expect(o.strip(), "a file outside the hook's own tree produced "
+                          "silence rather than a refusal")
+        d = json.loads(o)["hookSpecificOutput"]["additionalContext"]
+        expect("refusing to deliver" in d and t in d and ROOT in d,
+               f"the refusal does not name both trees: {d[:160]!r}")
+        expect("## Liveness" not in d,
+               "the hook delivered this tree's rules for a file in another")
 
         # AND A SYMLINK FROM OUTSIDE STILL WORKS, which is the paired
         # positive: without it, a hook that refused everything would pass
@@ -1863,11 +1976,15 @@ def test_every_code_file_is_accounted_for():
                              capture_output=True, text=True).stdout.split()
     mine = [f for f in tracked if not f.startswith("attic/")
             and f.endswith((".c", ".h", ".py", ".sh", ".als", ".tla"))]
-    m = re.search(r"^rules-hook: (\d+) code files", p.out, re.M)
+    m = re.search(r"^rules-hook: (\S+): (\d+) code files", p.out, re.M)
     expect(m is not None,
            f"--check passed without saying what it counted:\n{p.out}")
-    expect(int(m.group(1)) == len(mine),
-           f"--check enumerated {m.group(1)} code files; an independent "
+    expect(m.group(1) == ROOT,
+           f"--check says it audited {m.group(1)}, not {ROOT} -- the hook "
+           f"is installed in or linked from a different checkout, and its "
+           f"answer is about that one")
+    expect(int(m.group(2)) == len(mine),
+           f"--check enumerated {m.group(2)} code files; an independent "
            f"sweep of the same tree finds {len(mine)}. Its extension list "
            f"or its exclusions are not what they are documented to be.")
     expect(len(mine) > 40,
@@ -1951,6 +2068,12 @@ def test_every_code_file_is_accounted_for():
         expect(planted in (g.out + g.err),
                f"install-agents.sh --check failed without the census "
                f"reason, so something else refused:\n{g.out}{g.err}")
+        # AND IT MUST NOT ALSO SAY OK. Deleting the rc propagation left
+        # the exit status right and the output reading as a success --
+        # the refusal, then `install-agents: OK 6 briefs`. Status is what
+        # make reads; the line is what a person reads.
+        expect("install-agents: OK" not in (g.out + g.err),
+               f"the gate refused and printed OK as well:\n{g.out}{g.err}")
 
         # AND AN EMPTY $RULES IS NOT A RESULT. install-agents.sh drives
         # three per-territory loops from `--territories`; an empty answer
@@ -1971,8 +2094,68 @@ def test_every_code_file_is_accounted_for():
         expect("printed nothing" in (e.out + e.err),
                f"it refused, but not for the empty list:\n{e.out}{e.err}")
         open(fh, "w").write(src)
+
+        # --check's OWN REFUSALS, each given something to refuse. They
+        # were correct when exercised by hand and nothing exercised them
+        # -- the post-mortem's finding 5, reproduced in its replacement
+        # and found a third time by `control`. Each case plants the
+        # condition in the copy and requires that refusal BY ITS OWN
+        # MESSAGE, so deleting the refusal turns this red rather than
+        # leaving the gate green on a planted fault.
+        #
+        # Anchors are short and unique on purpose: a multi-line anchor in
+        # a table of mutations is a second copy of the tool's source and
+        # goes stale the first time someone rewraps a line.
+        for label, o, n, want in (
+            ("a name in two MAP sets, undeclared",
+             '"scale-probe.py"}, "harness"),',
+             '"scale-probe.py", "dawn.c"}, "harness"),',
+             "sets of MAP and SHARED does not declare it"),
+            ("a blank UNOWNED reason",
+             '"the pre-push heuristics. Gate tooling."', '""',
+             "has no reason"),
+            ("an UNOWNED row for a file that never existed",
+             "UNOWNED = [", 'UNOWNED = [\n    ("tools/ghost.py", "why"),',
+             "is not a tracked code file"),
+            ("a SHARED entry naming a territory MAP lacks",
+             '("plan", "runtime"),', '("plan", "ghosts"),',
+             "which MAP\n                       f\"does not define"
+             .replace("\n                       f\"", " ")),
+            ("a PATH_RULES prefix nothing is under",
+             '[("houses/", "harness")]', '[("houses/", "harness"), '
+             '("mansions/", "harness")]',
+             "no tracked code file is under it"),
+            ("a MAP name for a file that does not exist",
+             '"unit_probe.c", "scale-probe.py"}',
+             '"unit_probe.c", "scale-probe.py", "vanished.c"}',
+             "no tracked code file is called that"),
+        ):
+            expect(src.count(o) == 1,
+                   f"{label}: the anchor {o!r} is not in the hook exactly "
+                   f"once, so this case is about nothing")
+            open(fh, "w").write(src.replace(o, n))
+            r = run(["sh", "install-agents.sh", "--check"], cwd=fake)
+            expect(r.returncode != 0 and want in (r.out + r.err),
+                   f"{label}: planted, and the gate said:\n{r.out}{r.err}")
+            open(fh, "w").write(src)
     finally:
         shutil.rmtree(t, ignore_errors=True)
+
+    # --owns, which make test never runs: install-agents.sh --list uses
+    # it and the target only runs --check. Gutting owns() to return []
+    # left every test green while three briefs said it lists their files.
+    for t_name in ("runtime", "plan", "harness"):
+        o = run(["sh", hook, "--owns", t_name])
+        expect(o.returncode == 0 and o.out.split(),
+               f"--owns {t_name} printed nothing, and three rules files "
+               f"tell a reader to run it")
+    oh = run(["sh", hook, "--owns", "harness"]).out.split()
+    expect("houses/" in oh and "run.py" in oh,
+           f"--owns harness must list the directory rule as well as the "
+           f"named files, or the listing is short by every fixture "
+           f"house: {oh}")
+    expect(run(["sh", hook, "--owns", "nosuch"]).out.strip() == "",
+           "--owns for a territory that does not exist printed something")
 
     terr = run(["sh", hook, "--territories"])
     expect(terr.returncode == 0 and terr.out.split() == ["runtime", "plan",

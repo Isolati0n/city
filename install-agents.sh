@@ -161,6 +161,16 @@ into plan.md/runtime.md; two owners for one file)"
 
     for n in $RULES; do
         [ -e "$RULEDIR/$n.md" ] || fail "$RULEDIR/$n.md missing (territory rules)"
+        # EXISTS IS NOT ENOUGH. An emptied rules file made the hook emit a
+        # header naming it and nothing underneath, and the whole target
+        # stayed green -- a delivery that looks like a delivery and
+        # carries no rules. `control`. The heading is the cheapest thing
+        # that is present in a real one and absent from a truncated or
+        # emptied one.
+        grep -q "^# $n — territory rules" "$RULEDIR/$n.md" 2>/dev/null ||
+            fail "$RULEDIR/$n.md does not open with its own \`# $n — \
+territory rules\` heading, so it is empty, truncated, or some other \
+territory's file"
         if [ -e "$DIR/$n.md" ]; then
             fail "$n.md is in $DIR: it is territory rules, not an agent"
         fi
@@ -285,8 +295,28 @@ take it from the code at run time instead"
         # delivery cannot disagree about what is owned. It lives there and
         # is called here because the event path exits 0 always and cannot
         # refuse anything.
-        if ! sh tools/rules-hook.sh --check; then
+        # AND IT MUST HAVE AUDITED THIS TREE. The hook roots at its own
+        # resolved location, so a tools/rules-hook.sh symlinked into a
+        # SECOND checkout audits that one and reports it clean -- this
+        # tree's unaccounted files never seen, and the gate saying OK.
+        # `control` built the two-checkout case. --check names the root
+        # it enumerated precisely so this comparison is possible.
+        # `crc=0` first and `|| crc=$?` on the assignment: under set -e a
+        # bare `co=$(cmd); crc=$?` never reaches the second statement,
+        # so a refusing --check killed the gate silently at exit 1 with
+        # no output at all. Found by running it, not by reading it.
+        crc=0
+        co=$(sh tools/rules-hook.sh --check 2>&1) || crc=$?
+        printf '%s\n' "$co"
+        if [ "$crc" -ne 0 ]; then
             fail "tools/rules-hook.sh --check"
+        else
+            case "$co" in
+                "rules-hook: $PWD: "*) ;;
+                *) fail "tools/rules-hook.sh --check audited some other \
+tree -- it reports its root and that root is not $PWD, so this hook is \
+installed in or linked from a different checkout" ;;
+            esac
         fi
         [ "$rc" -eq 0 ] || exit "$rc"
         echo "install-agents: OK $(ls "$DIR" | wc -l | tr -d ' ') briefs"
