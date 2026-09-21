@@ -8234,6 +8234,39 @@ def _fold_house_body(made):
             f"id {nid}; live slot and current untouched; candidate in {slot})")
 
 
+def subset_close(requested, passed, skipped):
+    """The lines a `--only` run ends with, and its exit status.
+
+    A FUNCTION RATHER THAN INLINE PRINTS so it can be pinned. The defect
+    it exists to prevent was inline and therefore untestable on this
+    machine: the summary joined the REQUESTED list, so a subset whose
+    test skipped printed `SUBSET RUN PASSED -- <name>` and exited 0 for
+    a test that never ran -- "a skipped test is not a passing test"
+    broken in the one path `--only` added, which is the class the flag
+    is named for. `control` forced a skip and quoted it; no test in this
+    suite skips fully on this machine, so the control could not be
+    written against the inline version at all.
+    """
+    out, missing = [], [n for n in requested if n not in passed]
+    if skipped:
+        out.append("SUBSET RUN -- skipped:")
+        out += [f"  {name}: {why}" for name, why in skipped]
+    if missing:
+        out.append("SUBSET RUN DID NOT PASS -- requested "
+                   + ", ".join(requested) + "; did not pass: "
+                   + ", ".join(missing))
+        out.append("This is not a gate. A skipped test is not a passing "
+                   "test; run `make test`.")
+        return out, 1
+    out.append("SUBSET RUN PASSED -- " + ", ".join(passed))
+    out.append("This is not a gate and no coverage record was written. "
+               "Run `make test` before reporting or pushing.")
+    out.append("NOTE: this leaves work/*.blob in the stage, which satisfies "
+               "tools/coverage-tcb.sh's corpus guard while covering almost "
+               "nothing -- do not run that script against a --only stage.")
+    return out, 0
+
+
 def test_subset_run_is_not_a_gate():
     """`--only` refuses what it cannot run, and cannot be mistaken for a gate.
 
@@ -8247,9 +8280,29 @@ def test_subset_run_is_not_a_gate():
     Controls, each run: delete the `bad` check in _select and case A
     goes green having run nothing; return the matched subset instead of
     refusing and case B runs `hash-pin` and exits 0 under a request
-    naming a test that does not exist; drop the `subset is not None`
-    guard before `write_coverage` and case D sees the tracked coverage
-    record replaced by a one-test list.
+    naming a test that does not exist; make the no-flag path return []
+    instead of None and case G goes red -- without it, a bare
+    `python3 tests/run.py`, which is what `make test` runs, reports
+    SUBSET RUN PASSED having run nothing.
+
+    THE ISOLATING CONTROL FOR THE COVERAGE GUARD is to KEEP the early
+    `return` and add `write_coverage(passed)` above it. Deleting the
+    `return` instead -- which this docstring used to name -- is red on
+    case E's `ALL TESTS PASSED` absence, because falling through reaches
+    that print first, so case D's comparison is never evaluated. A
+    control that goes red on the wrong assertion is not a control for
+    the mechanism it names. `control`.
+
+    WHY CASE D NEEDS ITS PRECONDITION, now explained rather than open.
+    Without it the coverage control OSCILLATES with period two, and the
+    green destroys the state that produced it -- which is why it read as
+    unreproducible. A red run dies inside this function, so the outer
+    process never reaches its own write_coverage, and what survives is
+    the CHILD `--only hash-pin` record. That is exactly the value the
+    next run's child writes, so the next run sees before == after and
+    goes green; and because that run completes, the outer process then
+    writes its own name into the record and un-blinds the run after it.
+    `control` reproduced the cycle eight times running.
 
     The absences here are paired by case E, which requires the same
     runner to produce every string the refusals must not.
@@ -8339,6 +8392,76 @@ def test_subset_run_is_not_a_gate():
            "a subset run wrote a coverage record; that file is tracked and "
            "coverage-merge.sh reads it, so a short list would replace a "
            "full run's")
+
+    # F. THE BANNER'S BODY, not only its first thirty characters.
+    #    `startswith` pins the opening line and nothing after it, so every
+    #    line that carries the actual warning -- what ran, that make test
+    #    is the only green that counts, that no coverage record was
+    #    written -- was deletable with this test green. `control`.
+    for must in ("--only ran: hash-pin",
+                 "`make test` is the only green that counts",
+                 "no coverage record"):
+        expect(must in out, f"the banner no longer says {must!r}, which is "
+                            f"the warning it exists to deliver:\n{out[:400]}")
+    expect("SUBSET RUN PASSED -- hash-pin" in out,
+           f"the closing line does not name what passed:\n{out[-300:]}")
+
+    # G. THE NO-FLAG PATH, which is what `make test` runs and which every
+    #    case above misses because they all pass --only. `_select` returning
+    #    [] instead of None makes a bare `python3 tests/run.py` run ZERO
+    #    tests and exit 0 under a line reading SUBSET RUN PASSED -- the
+    #    exact defect this test is named for, arriving through the flag's
+    #    own default. Asserted in-process because the alternative is a
+    #    forty-minute run. `control` found it.
+    expect(_select([], [test_hash_pin]) is None,
+           "_select returns something other than None with no arguments, so "
+           "a bare `python3 tests/run.py` takes the subset path")
+    expect(_select(["--only", "hash-pin"], [test_hash_pin]) == [test_hash_pin],
+           "_select does not select with the flag present, so the None above "
+           "is satisfied by a function that returns None for everything")
+
+    # H. NAME NORMALISATION, both halves, entirely unpinned before: every
+    #    other name here is already canonical, so reducing norm() to the
+    #    identity was green while `--only test_hash_pin` and `--only
+    #    hash_pin` both started refusing. `control`.
+    for spelling in ("test_hash_pin", "hash_pin"):
+        rc, o = run_only("--only", spelling)
+        expect(rc == 0 and "ok hash-pin" in o,
+               f"--only {spelling} did not resolve to hash-pin:\n{o[:300]}")
+
+    # I. THE --only=<list> FORM AND THE MISSING-VALUE GUARD. The first was
+    #    deletable green (it falls through to the unknown-argument
+    #    refusal); the second turned a bare trailing --only into an
+    #    IndexError traceback instead of a refusal.
+    rc, o = run_only("--only=hash-pin")
+    expect(rc == 0 and "ok hash-pin" in o,
+           f"the --only=<list> form does not work:\n{o[:300]}")
+    rc, o = run_only("--only")
+    expect(rc != 0 and "needs a comma-separated list" in o,
+           f"a trailing --only with no value did not refuse by its own "
+           f"message:\n{o[:300]}")
+    expect("Traceback" not in o,
+           f"a trailing --only raised instead of refusing:\n{o[:300]}")
+
+    # J. A REQUESTED TEST THAT SKIPS IS NOT A PASS. No test in this suite
+    #    skips fully on this machine, so this cannot be reached by running
+    #    the runner -- which is why the logic was extracted from main()
+    #    into subset_close() and is asserted directly here. The input IS
+    #    the subject: a requested name absent from `passed`.
+    lines, code = subset_close(["a-test"], [], [("a-test", "no capability")])
+    expect(code == 1,
+           f"a subset whose test skipped exited {code}; a skipped test is "
+           f"not a passing test")
+    joined = "\n".join(lines)
+    expect("DID NOT PASS" in joined and "a-test" in joined,
+           f"the close does not say the requested test did not pass:\n"
+           f"{joined}")
+    expect("SUBSET RUN PASSED" not in joined,
+           f"a skipped test was reported as passed:\n{joined}")
+    #    Paired: the same function on a test that really passed.
+    lines, code = subset_close(["a-test"], ["a-test"], [])
+    expect(code == 0 and "SUBSET RUN PASSED -- a-test" in "\n".join(lines),
+           f"a passing subset does not report as passing:\n{lines}")
 
     print("ok subset-run-is-not-a-gate (a misspelled name, a partial match, "
           "an empty selection and an unknown flag are each fatal and run "
@@ -8550,14 +8673,13 @@ def main():
     # would report tests as uncovered on a machine that covers them. The
     # damage outlives the run and nothing would say so.
     if subset is not None:
-        if SKIPPED:
-            print("SUBSET RUN -- skipped:")
-            for name, why in SKIPPED:
-                print(f"  {name}: {why}")
-        print("SUBSET RUN PASSED -- " + ", ".join(
-            t.__name__[len("test_"):].replace("_", "-") for t in tests))
-        print("This is not a gate and no coverage record was written. "
-              "Run `make test` before reporting or pushing.")
+        lines, code = subset_close(
+            [t.__name__[len("test_"):].replace("_", "-") for t in tests],
+            passed, SKIPPED)
+        for ln in lines:
+            print(ln)
+        if code:
+            raise SystemExit(code)
         return
 
     rec = write_coverage(passed)

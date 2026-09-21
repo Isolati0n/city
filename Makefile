@@ -184,7 +184,29 @@ test: stage
 # buys is that the file still compiles; what it does NOT buy is that the
 # initrd works, which needs a boot and is the operator's.
 	gcc -c -O2 -std=gnu11 -Wall -Wextra -Werror -o /dev/null tools/initrd-init.c
-	NW_STAGE=$(STAGE) python3 tests/run.py
+# THE SUITE MUST PROVE IT RAN, the same rule as the fold suite below and
+# for a sharper reason since --only landed: tests/run.py now has a code
+# path that runs a NAMED SUBSET, and a defect in the flag's no-argument
+# branch makes a bare invocation run ZERO tests and exit 0 under a line
+# reading `SUBSET RUN PASSED`. Measured: `return []` in place of `return
+# None` does exactly that. The target then failed further down, in
+# coverage-tcb.sh, with a message about the CORPUS -- a true message
+# naming the wrong cause, which is this project's characteristic shape
+# arriving through a gate. `control` found it.
+#
+# Grepping the suite's own terminal line subsumes the exit status: main()
+# raises out of expect() on a failure and never reaches the print, so the
+# line cannot appear on a red run. The `ok` floor is what a terminal line
+# alone does not give -- SUBSET RUN PASSED is a different string, but a
+# subset containing a real test would print a terminal line and an ok.
+# Same
+# shape as --check's file floor, and like it, it is a number a run prints
+# beside itself.
+	NW_STAGE=$(STAGE) python3 tests/run.py 2>&1 | tee $(STAGE)/suite.log; \
+	  grep -qE '^(ALL TESTS PASSED|PASSED, WITH SKIPS)' $(STAGE)/suite.log && \
+	  [ "$$(grep -c '^ok ' $(STAGE)/suite.log)" -ge 40 ] || \
+	  { echo "make: the suite did not prove it ran -- no terminal line, or" \
+	         "fewer than 40 ok lines. A zero-test run exits 0." >&2; exit 1; }
 # The fold's own suite. It runs HERE rather than beside the tarball it
 # arrived in, because a suite outside the tree is a suite nobody runs --
 # the same rule proofs/ exists to enforce. Exit 2 is "some check skipped

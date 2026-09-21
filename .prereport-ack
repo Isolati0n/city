@@ -696,3 +696,49 @@ unpaired-absence	tests/run.py	expect("ALL TESTS PASSED" not in out,
 # and requires that nothing ran.
 unpaired-absence	tests/run.py	bad = [r.strip() for r in req if r.strip() and norm(r) not in known]
 
+# The environment-file round, 2026-09-21.
+
+# The contrast IS the sentence: the tool is installed and the kernel
+# cannot mount it, which is harness.md's detect-the-capability rule with
+# its worked example. The matcher reads "is installed" and cannot see
+# that the clause after it says the capability is absent.
+tool-presence	docs/ENVIRONMENT.md	- **No FAT driver, while `mkfs.vfat` is installed.** `grep -c vfat
+
+# A tool-presence sentence whose CODE UNDER TEST asks the same
+# tool-presence question: proofs/run.sh guards on `command -v cbmc` and
+# exits 3 when it is absent, so "cbmc is installed, therefore run.sh
+# takes its real path" is the guard's own condition rather than an
+# inference from it. The sentence names the guard, which is what turns
+# this from an ack into an argument. `claims` checked run.sh.
+tool-presence	docs/ENVIRONMENT.md	build section, not a measurement taken here. `cbmc` itself IS installed
+
+# The --only fix-forward round, 2026-09-21.
+
+# "exit 0" is a status, not a tally -- the matcher reads the 0. Both
+# sentences are about a run that exits successfully having done nothing,
+# which is the defect these lines exist to describe.
+prose-count	Makefile	# branch makes a bare invocation run ZERO tests and exit 0 under a line
+prose-count	tests/run.py	#    tests and exit 0 under a line reading SUBSET RUN PASSED -- the
+
+# subset_close's own membership test, not a test assertion: the function
+# deciding which requested names did not pass, so there is nothing to
+# pair. Case J is what pins it, in both directions -- a skip must exit 1
+# and say DID NOT PASS, a real pass must exit 0 and say PASSED.
+unpaired-absence	tests/run.py	out, missing = [], [n for n in requested if n not in passed]
+
+# Paired on the line directly below it: _select with the flag present
+# must return the selected list, so "returns None with no arguments" is
+# not satisfied by a function returning None for everything. Control:
+# `return []` in the no-flag branch turns it red.
+unpaired-absence	tests/run.py	expect(_select([], [test_hash_pin]) is None,
+
+# Paired with the assertion above it, which requires the refusal BY ITS
+# OWN MESSAGE. Together they say the guard refused rather than raised;
+# either alone is satisfied by the other outcome.
+unpaired-absence	tests/run.py	expect("Traceback" not in o,
+
+# Paired by the case immediately below, which requires the same function
+# to print SUBSET RUN PASSED for a test that really passed. Without that
+# pair, a function that never prints it would satisfy this.
+unpaired-absence	tests/run.py	expect("SUBSET RUN PASSED" not in joined,
+
