@@ -478,3 +478,193 @@ unpaired-absence	.claude/rules/plan.md	"Written 2026-09-14. Not in the tree", an
 # ("which is yours") is the same sentence.
 tool-presence	.claude/rules/runtime.md	signals are not blocked at that point and no handler is installed, so
 unpaired-absence	.claude/rules/runtime.md	machine. **Plus `rescue.c`, which is yours and is NOT in that chain** —
+
+# The ownership census and the cwd delivery test, 2026-09-21.
+
+# Paired by the assertion on the line above it, which requires the stamp to
+# be present under the REPO's .reviews. Together they say the stamp went to
+# one specific place; either alone is satisfied by a hook that writes no
+# stamp at all, which is the silent-no-op this pair exists to catch.
+unpaired-absence	tests/run.py	expect(not os.path.exists(os.path.join(foreign, ".reviews")),
+
+
+# Not a test assertion -- this is --check's own classification branch, the
+# line that decides a file is unaccounted for. The matcher is looking for
+# an unpaired absence in a test and found an `is None` in a tool.
+unpaired-absence	tools/rules-hook.sh	elif not t and why is None:
+
+# The finding is the discrepancy, so the number IS the claim and cannot
+# age: the fixture came up short by one against whatever the tree held
+# that day. The absolute counts that would age were removed from this
+# comment in the same edit.
+prose-count	.gitignore	# built that way came up one code file short.
+
+# Re-keyed: the unowned probe moved from tools/mkboot.sh to
+# tools/review-gate.sh when mkboot.sh was given to runtime, so the old
+# ack's text no longer matches. Same pairing as before -- the delivery
+# assertions above it fire the hook successfully from the same foreign
+# cwd under the same settings.json command, so a hook that had gone
+# silent fails there first.
+unpaired-absence	tests/run.py	expect(fire(foreign, os.path.join(ROOT, unowned)) is None,
+
+# The multi-owner round, 2026-09-21. English in every case: "two rules
+# files", "the two cases", "two sets of rules" and "ten files" are the
+# claims themselves, not tallies of anything that can grow. "one this
+# case wants" is the matcher reading the word one out of a sentence.
+prose-count	tests/run.py	# TWO OWNERS GET TWO RULES FILES, in a stable order. Leaving such a
+prose-count	tools/rules-hook.sh	# --check refuses it, naming both. The two cases are indistinguishable
+prose-count	tools/rules-hook.sh	# its rules should arrive, and a file governed by two sets of rules
+prose-count	tools/rules-hook.sh	# Once per rules file until that file changes, so touching ten files in one
+
+# Three --check branches, not test assertions. The matcher is looking
+# for an unpaired absence in a test and finding the classification and
+# validation logic of the tool.
+#
+# The reason here used to say the census test exercised the refusals
+# these produce. It did not -- it planted only unaccounted files, so
+# each of these branches was deletable green, and "a control turns it
+# red" meant planting the DATA, which shows the mechanism works rather
+# than pinning it. `control` called that an ack asserting a pairing
+# that does not exist, and it was right. The test now plants a
+# condition per refusal and requires each by its own message, so
+# removing any of them turns it red; the ack stands on that.
+unpaired-absence	tools/rules-hook.sh	if dec is None:
+unpaired-absence	tools/rules-hook.sh	unknown = [x for x in terrs if x not in territories()]
+
+# Re-keyed after the sentence above it was rewritten: same false
+# positive, the matcher reading the word "one" out of "the one this
+# case wants".
+prose-count	tests/run.py	# that looks like the one this case wants.
+
+# The rooting round, 2026-09-21. Every entry below is either English or a
+# negative paired inside its own test; listed one by one because an ack
+# saying "all of these are fine" is an instance-count wearing a reason.
+
+# "the one case that must never happen quietly" -- English, and the
+# sentence is the claim rather than a tally.
+prose-count	tools/rules-hook.sh	# tree's rules is worse than either -- so the one case that must never
+
+# The matcher hunts the mkfs-vfat shape, "tool X is installed therefore
+# feature X works". This is the hook's own diagnostic telling a reader
+# it was installed outside the repository it serves.
+tool-presence	tools/rules-hook.sh	f"{os.path.realpath(self)}). The hook is installed outside the "
+
+# Six negatives in the two hook tests, each paired inside its own test:
+#   - the Bash unowned case, paired by the Bash positive just above it
+#     that delivers runtime for a command naming nwsup.c;
+#   - the stub's "no rules dir", a fixture assertion whose positive is
+#     the symlink case at the end of the same test, which shows the hook
+#     delivering when it CAN root;
+#   - "code files" absent from the stub's refusal, paired with the
+#     assertions that it refused and named the path it tried;
+#   - "## Liveness" absent from the stub's diagnostic, paired with the
+#     assertion that the diagnostic is present and names the path;
+#   - no stamp in the real repo after a misinstalled call, paired by the
+#     stamp assertions in the delivery test;
+#   - "enumerated" absent from the census refusal, paired with the two
+#     assertions naming the planted files.
+unpaired-absence	tests/run.py	expect(not (q.stdout or b"").decode().strip(),
+unpaired-absence	tests/run.py	expect(not os.path.isdir(os.path.join(t, ".claude", "rules")),
+unpaired-absence	tests/run.py	expect("code files" not in (c.out + c.err),
+unpaired-absence	tests/run.py	expect("## Liveness" not in ctx,
+unpaired-absence	tests/run.py	expect(not os.path.isfile(os.path.join(ROOT, ".reviews",
+unpaired-absence	tests/run.py	expect("enumerated" not in (q.out + q.err),
+
+# --check's own refusal text, not a test assertion. The stub case in
+# test_rules_hook_refuses_a_tree_it_cannot_root_in turns it red: a hook
+# copied where there is no .claude/rules must refuse and name the path
+# it tried.
+unpaired-absence	tools/rules-hook.sh	print(f"rules-hook --check: not in a checkout -- no {rules_dir} "
+
+# The stale-exemption branch in --check, not a test assertion. The gate
+# case "an UNOWNED row for a file that never existed" in
+# test_every_code_file_is_accounted_for turns it red, by its own message
+# ("is not a tracked code file").
+unpaired-absence	tools/rules-hook.sh	if p not in tracked:
+
+# The final round, 2026-09-21.
+
+# "make test is not one step" -- English, and the sentence immediately
+# after it now says to read the target rather than giving a number.
+prose-count	.claude/rules/harness.md	**The partial-gate trap.** `make test` is not one step. **Read the target
+
+# The reverse MAP loop's own branch -- a declared name matching no
+# tracked file -- not a test assertion. The gate case "a MAP name for a
+# file that does not exist" turns it red, by its own message ("no
+# tracked code file is called that").
+unpaired-absence	tools/rules-hook.sh	if b not in bases:
+
+# The follow-up note about unpaired-absence firing on non-test code,
+# flagged by unpaired-absence, on the line quoting the tokens it fires
+# on. Twenty-fifth row of the round and the clearest single argument for
+# the narrowing the note describes.
+unpaired-absence	CLAUDE.md	— `--check`'s classification and validation branches, whose `is None` and
+
+# The sweep round, 2026-09-21.
+
+# The hook's and the test's wrong-checkout diagnostic, both the matcher
+# reading English -- "installed in or linked from a different checkout"
+# is where the hook IS, not a claim that some tool exists.
+tool-presence	tests/run.py	f"is installed in or linked from a different checkout, and its "
+tool-presence	tools/rules-hook.sh	f"its own location. It is installed in, or linked from, a "
+
+# Absences, each paired inside its own case: the wrong-tree
+# diagnostic's "## Liveness" is paired with the assertion that the
+# refusal is present and names both trees; the gate's "OK" absence is
+# paired with the assertions that it refused and gave the census
+# reason; the anchor line is a fixture guard whose whole job is to
+# abort when a plant target moved.
+unpaired-absence	tests/run.py	expect("## Liveness" not in d,
+unpaired-absence	tests/run.py	expect("install-agents: OK" not in (g.out + g.err),
+unpaired-absence	tests/run.py	f"{label}: the anchor {o!r} is not in the hook exactly "
+
+# The triage round, 2026-09-21.
+
+# Two in the gate-refusal table's own scaffolding, not assertions about
+# the tree: `held is None` is the restore helper deciding whether the
+# file existed before the plant, and the "not in the copy" line is a
+# fixture guard that aborts when a plant target is absent. Both are the
+# machinery that makes the planted cases mean something.
+unpaired-absence	tests/run.py	if held is None:
+unpaired-absence	tests/run.py	f"{label}: {rel} is not in the copy, so removing "
+
+# The hand-pin round, 2026-09-21. Every entry below is English, a
+# fixture guard, or a negative paired inside its own case -- and each
+# of the pinned cases was shown red under the mutation it exists for
+# before this file was touched.
+
+# The heredoc loop's `[ -e "$f" ] || continue`. The sentence names a
+# mechanism and the case directly beneath it is the check: with the
+# line deleted, a missing brief is also reported as diverged and the
+# "must be absent" field turns it red. Run.
+mechanism-claim	tests/run.py	# in the heredoc loop is what stops a brief that is not there
+
+# `head -1` is a command's flag, not a tally -- the matcher read "1
+# check" out of the name of the check being discussed.
+prose-count	tests/run.py	# satisfies all of them; deleting the head -1 check left the
+
+# English: the sentence quotes the tokens prereport itself fires on,
+# which is a hit for its own vocabulary, in the paragraph measuring
+# that vocabulary.
+unpaired-absence	CLAUDE.md	`--check`'s classification and validation branches, whose `is None` and
+
+# The malformed-event case, paired twice over: the two assertions
+# immediately above it require exit 0 and empty stdout on the SAME
+# event, and the well-formed deliveries earlier in the test are the
+# positive that the hook runs at all. stderr is the assertion here
+# because the shell wrapper exits 0 on the event path regardless --
+# deleting the try/except leaves status and stdout right and turns
+# only this one red. Run.
+unpaired-absence	tests/run.py	expect(b"Traceback" not in (q.stderr or b""),
+
+# A fixture guard, not a claim about the tree: it aborts if the
+# rooted-but-not-a-checkout fixture somehow has a .git, which would
+# make the refusal below about something else.
+unpaired-absence	tests/run.py	expect(not os.path.exists(os.path.join(nogit, ".git")),
+
+# Paired on the line above it, which requires the wanted message. The
+# pair IS the assertion: a refusal naming the right fault and a wrong
+# one beside it satisfies `want in output` on its own, which is how
+# the missing-brief case stayed green with the heredoc loop's guard
+# deleted.
+unpaired-absence	tests/run.py	expect(unwanted not in (r.out + r.err),

@@ -4,7 +4,7 @@
 **Not an agent.** This was a dispatchable brief until 2026-09-10 and was
 never dispatched once. Its content is reference read at the moment it
 applies, so `tools/rules-hook.sh` delivers it on a `PreToolUse` for any
-file in this territory. Scope: Owns tests/run.py and the fixture houses (unit_probe.c, houses/*.c). Use for adding or repairing tests, scale runs, fuzzing, difftests, and for proving that a new test can actually fail.
+file in this territory. Scope: Owns the put-together suite and the fixture houses; `tools/rules-hook.sh --owns harness` lists the files. Use for adding or repairing tests, scale runs, fuzzing, difftests, and for proving that a new test can actually fail.
 
 <!-- nw-init:absent-ok wire_order.py -->
 
@@ -50,14 +50,17 @@ should copy it with `__pycache__` excluded. Do not rely on changing the
 file's length to dodge it; that is a property of your edit, not of the
 mechanism.
 
-**The partial-gate trap.** `make test` is not one step. It stages, runs
-`install-agents.sh --check`, runs `nw-check`, runs `tests/run.py`, runs
-`bakery/test_fold.py`, and runs `tools/coverage-tcb.sh`, in that order —
+**The partial-gate trap.** `make test` is not one step. **Read the target
+for the list** — every attempt to write the steps out here has been short by
+one. It was short by the fold suite from the day that landed until `claims`
+grepped the Makefile; the replacement enumeration was short by the
+`tools/initrd-init.c` compile, which sits between `nw-check` and the suite,
+and `claims` found that too. What matters is the shape, not the list:
+the gate runs FIRST and the suite is not the target —
 and **the suite is what the target runs, not its middle step.** (The
 fold suite was missing from this enumeration from the day it landed
 until `claims` grepped the Makefile. An enumeration inside the warning
-about running steps individually, short by the step most recently added
-— read the target.) On 2026-09-12 a commit was
+about running steps individually.) On 2026-09-12 a commit was
 reported as done on the evidence of `make stage` followed by `python3
 tests/run.py`; the brief gate, which runs *before* the suite, was red
 and had been made red by that same commit. Both `tcb-review` and

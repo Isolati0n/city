@@ -667,13 +667,184 @@ remains outstanding. That is the form that has now been wrong twice.*
 
 ### Who owns which file
 
-**`.claude/rules/{plan,runtime,harness}.md` are the map. Do not write a
-second one here.** One was written on 2026-09-11 and contradicted the
-scopes; so did its replacement; so did the tool written to derive the
-replacement, which reported files as owned by substring-matching their
-names against a prose line and silently un-owned the boot chain when that
-line was rewrapped. Each was found by `claims`. The map is in one place
-and this file points at it.
+**`MAP` in `tools/rules-hook.sh` is the map. Do not write a second one
+anywhere.** Attempts to keep one here are named and dated in
+`docs/POSTMORTEM-rules-declaration.md`, which is where the tally belongs;
+the ones worth knowing by name are `1ac0235`, the commit that DELETED
+`tools/ownership.sh` and recorded what it had cost — the tool derived
+ownership by substring-matching filenames out of a `Scope:` line, so
+rewrapping that line to 72 columns un-owned the whole boot chain at exit
+0 — and `e62c6a6`, which put a machine-readable declaration in each rules
+file with a gate comparing it to the prose, and brought back two of the
+things `1ac0235` records: the bare substring match, and a parse failure
+widened from one territory to all of them.
+
+**No comparator, and the argument does not rest on counting commits.**
+Comparing a map to prose means parsing prose, which is what `1ac0235` did.
+And a comparator earns its place by catching a divergence between two lists
+somebody maintains for their own reasons — a second list here would exist
+only to be compared, so it would be maintained by the comparator's
+complaints rather than by anyone needing it. That is one list written
+twice, plus a gate that makes you write it twice.
+
+*An earlier version of this paragraph argued the same point from a commit
+count, and `claims` disproved it: the count was wrong, and the commit that
+introduced the sentence changed `MAP` without touching `.claude/rules/`, so
+the claim's own commit was its counterexample.*
+
+**What replaces the comparison is an absence check against reality.**
+`sh tools/rules-hook.sh --check` enumerates the tracked code files and
+requires each one to be classified into a territory or listed in `UNOWNED`
+with a reason; a blank reason is refused. It runs inside
+`install-agents.sh --check`, which `make test` runs before the suite,
+because the hook's event path exits 0 always and cannot refuse anything.
+The check and the delivery share one `classify()` — a check that re-read
+the map from outside would be the dropped attempt's own title, "the hook
+never read the map it claimed to", with the parties swapped.
+
+**It DOWNGRADES the failure rather than removing it, and that is the honest
+claim.** What it catches is a code file nobody has thought about: added,
+tracked, owned by no territory and named in no exemption.
+
+**It does not catch a file owned by the WRONG territory, and no check can
+without becoming the thing this decision refuses.** `control` moved most of
+`MAP`'s members to another territory one at a time and the target stayed
+green for most of them — an agent editing `dawn.c` would be handed
+`plan.md`, and both the gate and the suite print OK. The fix that
+suggests itself is an assertion listing where each file belongs, and a
+fifty-row version of that is a second copy of `MAP`: the two-lists
+problem, arriving as a test. Checking an assignment needs a second
+opinion about the assignment, and a second opinion is a second list.
+
+**Which ones the target DOES disagree with is larger than the anchors,
+and saying "the few the anchors pin" was wrong.** Whatever any test
+fires the hook on is pinned incidentally, by the delivery path rather
+than by the census: `nwsup.c` is in no anchor and moving it to
+`harness` turns two of the three tests red, and the `houses/` prefix is
+pinned by the Bash-branch case. Read it as *anchors plus whatever the
+delivery tests happen to name*, which is not a designed set and should
+not be relied on as one. `claims` measured it.
+
+**The anchors ARE a second list, and saying otherwise was the dishonest
+part.** Hand-written `(path, expected-territories)` rows in `--check`,
+one of them the two-territory row for `tools/stage-layers.py`, so the
+shared case is anchored as well as the single one. The rule for growing
+the list is to add a row when a specific assignment becomes
+load-bearing, not to mirror the map.
+
+**Say what the census catches and what the anchors catch, because they
+do not overlap.** The
+floor and the anchors together catch a classifier that has stopped
+working — an enumeration returning nothing, a `classify()` returning
+`[]` or the same constant for everything — and those are the failures
+that would otherwise make every answer beneath them read as success.
+What the anchors are FOR is a **plausible but wrong** assignment:
+`classify("pid1.c")` answering `["plan"]` is a working classifier
+giving a wrong answer, and the census cannot see it, because an owned
+file is accounted for whoever owns it. They are not the only thing that
+would catch that one — `claims` deleted the anchor loop and moved
+`pid1.c` to `plan`, and the delivery test still went red on
+`pid1.c did not deliver runtime` — which is the paragraph below.
+
+That paragraph was false when it was first written, because the anchors
+were themselves deletable green — `control` found it, and a paragraph
+explaining why something cannot be checked, resting on a detector
+nothing checked, is this project's characteristic failure at one
+remove. `tests/run.py` now plants an anchor that disagrees with `MAP`
+and requires `--check` to refuse, so the sentence is true as of the
+commit that says it.
+
+**And the anchors were not the only one.** The refusals and early
+exits in the census code — `tools/rules-hook.sh` and the `--check`
+block of `install-agents.sh` — were deleted or weakened one at a time,
+by hand, each followed by a run of the three tests below. Most turned
+them red; the ones that did not are pinned now, each shown red under
+the mutation that had survived it and each failing by its own message.
+Read them off the tests rather than a list here:
+`test_rules_hook_delivers_from_any_cwd`,
+`test_rules_hook_refuses_a_tree_it_cannot_root_in` and
+`test_every_code_file_is_accounted_for`, whose comments each name the
+mutation the case exists for.
+
+**Say what that enumeration was over, because an unscoped one reads as
+a proof.** It deleted or negated conditionals, refusals and early
+exits in those two files, and its subjects were chosen by reading
+them — so it is evidence about the lines somebody looked at, not a
+statement that none was missed. It did not touch `MAP`, `SHARED`,
+`UNOWNED`, `PATH_RULES` or the anchors' expected territories, so it
+says a refusal is watched, not that the thing the refusal checks is
+right. One mutation went outside that: `unowned_reason`'s `rel == p`
+weakened to `rel.startswith(p)`, which is a comparison operator rather
+than an entry in any of those lists — the `UNOWNED` data is untouched,
+and it is the test case that plants a data mutation (a row shortened to
+a prefix) in order to detect the code one. It was worth the exception
+because `unowned_reason`'s own docstring had recorded that weakening as
+green and nothing in the tree disagreed.
+
+**One survivor is left standing and it is benign, which is why it is
+written down rather than pinned.** Keeping the `git ls-files` handler's
+message and replacing only its `return 1` with an empty file list stays
+green, because the floor refuses an empty enumeration and the message
+prints either way. That is the `O_CLOEXEC` case from *The
+characteristic failure*: two guards either of which suffices, where
+inventing an assertion to separate them would be the thing this file
+tells you to refuse. `tests/run.py` says so where the case is.
+
+What it also does not catch is a file that is owned and *undescribed*, and
+there is more than one. Read them off the tree rather than a list here:
+
+    for t in $(sh tools/rules-hook.sh --territories); do
+      for f in $(sh tools/rules-hook.sh --owns $t); do
+        grep -qF -- "$f" .claude/rules/$t.md || echo "$t: $f"
+      done
+    done
+
+`lids.h` is the oldest and the one `1ac0235`'s message flagged when it said
+"the whole boot chain" was false because `lids.h` was claimed by no scope.
+Most of the rest were added to the map by the change that wrote this
+paragraph, which is why the singular it first claimed was wrong on the day
+it landed. The rules are delivered for every one of them and the prose is
+silent about them, and the census says OK because ownership is all it asks
+about. The residue is a
+documentation gap, and **nothing checks prose** — deliberately, because
+checking prose is what attempt three did.
+
+Further limits, stated rather than discovered. The census cannot see a file
+that has not been `git add`ed, because its input is `git ls-files`.
+`attic/` is skipped, which is a second exemption channel beside `UNOWNED`
+and carries its reason where the skip happens.
+
+**"Code file" means an extension tuple in the hook, and that is a third
+exemption channel — the only one with nothing written down about what it
+leaves out.** `Makefile` is the live instance: tracked, edited most
+rounds, owned by nobody, in no `UNOWNED` row and invisible to the census.
+So is `.claude/settings.json`, which is half of the hook's own invocation
+contract, and so is anything extensionless — a shell tool in `tools/`
+with no suffix walks straight through. The test's independent sweep
+copies the same tuple, so the count comparison cannot see the boundary
+either; what it pins is the tuple's contents, not its shape.
+
+`MAP` also matches by basename with no directory, so a new file anywhere
+whose basename collides with a declared one is auto-owned and passes.
+
+**And the loop above measures what `--owns` RETURNS, which for `harness`
+is the `houses/` prefix and not the files under it.** The prefix is in
+`harness.md`, so the whole fixture directory is reported as described
+and no `houses/*.c` appears in the output at all. That is the right
+answer for the wrong reason: `harness.md` says in as many words to read
+`houses/` rather than any list written down in it, so a deliberate
+non-description happens to score as described. A per-file version of the
+same measurement would report most of them, and `lastwords.c` and
+`orphan.c` not, because the log-chunk section names those two as worked
+examples. `claims` ran both.
+
+**A file may be owned by two territories**, declared in `SHARED` beside
+`MAP`, and the hook then delivers both rules files with suppression still
+keyed per territory. `tools/stage-layers.py` is the case: `plan.md`'s
+sidecar rules and `runtime.md`'s THE RECOVERY are both statements about it.
+Leaving such a file unowned silences both, and first-match silences one
+invisibly, so two owners has to be declarable — and declared, because
+`--check` refuses a name in two sets that `SHARED` does not name.
 
 What the map does not settle, because it is not a map question:
 
@@ -792,6 +963,53 @@ marker anywhere. Most of this file is ordinary wrapped prose and is
 never examined; the measured proportion is in `HISTORY.md` §63, not
 here. Whether a count in a brief is caught depends on where the line
 wraps.
+
+**AND A THIRD, MEASURED ON THIS ROUND'S OWN ACK FILE, WHICH IS AN
+ARGUMENT ABOUT SCOPE RATHER THAN VOCABULARY.** Re-measure it rather
+than reading the figures off this line, because the ack file grows
+every round:
+
+    git diff bd49568 -- .prereport-ack | grep '^+[^+#]' \
+      | grep -P '^\+\S+\t' | sed 's/^+//' \
+      | awk -F'\t' '{print $1"\t"$2}' | sort | uniq -c | sort -rn
+
+**The figures below are a count kept on purpose, and the command above
+is what earns it** — the same exemption the `prereport` calibration
+has, and for the same reason: a run prints them beside the sentence, so
+being wrong here is falsifiable rather than silent. Written without the
+command they would be an instance-count, which this file forbids.
+
+At the commit that wrote this it returns 37 rows, and only a minority
+are findings a reader would call findings. 24 are `unpaired-absence`,
+which splits three ways: 16 in `tests/run.py` on genuine test
+negatives, every one of them paired, because this suite's tests are
+mostly paired negatives by construction and `harness.md` requires them
+to be; 6 in `tools/rules-hook.sh` on code that is not a test at all —
+`--check`'s classification and validation branches, whose `is None` and
+`not in` are the tool deciding something, with nothing to pair because
+they are not assertions; and 2 on prose in this file. 9 are
+`prose-count` on English — "two rules files", "the one case that must
+never happen" — where the sentence is the claim, plus `head -1` read as
+a tally. 3 are `tool-presence` on the wrong-checkout diagnostic, which
+says where the hook IS rather than that some tool exists, and 1 is a
+`mechanism-claim` whose mechanism is pinned by the case beneath it.
+
+So the shape fires hardest on the thing the rules mandate, and the ack
+file grows fastest when the tests are most correct. **Not narrowed here.**
+Restricting `unpaired-absence` to test functions, or teaching it that an
+`expect(` on the following lines is the pairing, is a matcher change and
+is its own change with its own controls — the same reasoning as the
+vocabulary above, and the same trap: a matcher edit made in passing is
+how the `which`-matches-English false positive shipped.
+
+The sequence, when someone takes it: narrow the shape, re-measure with the
+target, write the new calibration down, dispatch a reviewer. Watch the
+trend rather than the number.
+
+**Note what would NOT settle it — counting how many acks were "fixed"
+instead.** A fix count measures what the author chose to rewrite, not
+whether the acks were right, and reaching for it is how a heuristic's
+own quality gets argued from the wrong number.
 
 **There is a further blindness beside the gate, and widening the gate
 does not touch it.** `COUNTED` is a vocabulary, so a count of a noun it does not list
