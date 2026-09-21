@@ -120,7 +120,7 @@ echo "Every finding must carry the command that shows it and that command's"
 echo "verbatim output, or be labelled HYPOTHESIS."
 echo
 echo "\`make prereport\` runs the shape checker over this same diff. It is a"
-echo "heuristic and exits 0 always; its output is a list of questions, not"
+echo "heuristic and its shapes exit 0 always; the output is questions, not"
 echo "findings. Acknowledged items are in \`.prereport-ack\` with a reason"
 echo "each -- an ack is a claim that someone looked, not that it was fixed,"
 echo "so an ack you disagree with is itself worth reporting."

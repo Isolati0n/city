@@ -246,9 +246,11 @@ test: stage
 # the same default tools/review-pack.sh uses, so the two see one change.
 #
 # Not part of `test`, and not because it is slow -- it is instant. It
-# EXITS 0 ALWAYS, deliberately: a heuristic wired into a build gets routed
-# around within a week, and then the signal is gone rather than merely
-# ignored. There IS a target so that it is discoverable and so the answer
+# THIS TARGET EXITS 0 ALWAYS, deliberately: a heuristic wired into a build
+# gets routed around within a week, and then the signal is gone rather
+# than merely ignored. The DEAD-ACK check is not a heuristic and does
+# refuse -- from install-agents.sh --check, which make test runs, not
+# from here. There IS a target so that it is discoverable and so the answer
 # to "when did it last fire" is not "never" -- which is the finding
 # `tcb-review` raised against it arriving wired to nothing at all.
 PREREPORT_BASE ?= $(shell git rev-parse --verify --quiet '@{u}'                     || git rev-parse --verify --quiet origin/main                     || echo HEAD)

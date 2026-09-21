@@ -732,8 +732,8 @@ opinion about the assignment, and a second opinion is a second list.
 and saying "the few the anchors pin" was wrong.** Whatever any test
 fires the hook on is pinned incidentally, by the delivery path rather
 than by the census: `nwsup.c` is in no anchor and moving it to
-`harness` turns two of the three tests red, and the `houses/` prefix is
-pinned by the Bash-branch case. Read it as *anchors plus whatever the
+`harness` reddens both the delivery test and the rooting test, and the
+`houses/` prefix is pinned by the Bash-branch case. Read it as *anchors plus whatever the
 delivery tests happen to name*, which is not a designed set and should
 not be relied on as one. `claims` measured it.
 
@@ -769,7 +769,7 @@ commit that says it.
 **And the anchors were not the only one.** The refusals and early
 exits in the census code — `tools/rules-hook.sh` and the `--check`
 block of `install-agents.sh` — were deleted or weakened one at a time,
-by hand, each followed by a run of the three tests below. Most turned
+by hand, each followed by a run of the ownership tests named below. Most turned
 them red; the ones that did not are pinned now, each shown red under
 the mutation that had survived it and each failing by its own message.
 Read them off the tests rather than a list here:
@@ -942,8 +942,14 @@ count. Record a completed review with `--record <agent>`.
 | any diff, before the first push | `make prereport` | not an agent; five shapes that have each cost a round |
 | a numbered invariant here changed | `make checkbrief` | not an agent; verifies the annotations, and exits 1 when the tree contradicts one |
 
-**`make prereport`'s calibration number: four, on `4e22204`'s diff.** Keep
-a number here and change it when the patterns change. A heuristic tool
+**`make prereport`'s calibration number: two, on `4e22204`'s diff**, and
+both are real — the new test with no control language beside it, and
+`expect(not missing,`. It was four until the matcher round narrowed
+`unpaired-absence` to assertions; the two that went were `if v is None:`
+in a helper and a list comprehension building `missing`, neither of them
+asserting anything. A calibration that falls because the misfires went is
+the number improving, not decaying, which is why the reason is recorded
+beside it. Keep a number here and change it when the patterns change. A heuristic tool
 without a stated expectation is unfalsifiable in use — you cannot tell a
 clean run from a broken matcher. The `which`-matches-English false
 positive that shipped in the first version was found *only* because the
@@ -959,7 +965,11 @@ it.
 
     make prereport PREREPORT_BASE="4e22204^ 4e22204"
 
-which reproduces `4`. Two rounds got this wrong the same way — first
+which reproduces `2`. **It said `4` for the length of one round**, because
+the matcher round updated the number where the calibration is STATED and not
+this sentence, which is the one telling a reader how to check it — inside
+the paragraph arguing that a calibration is worth its hostage ONLY because a
+run prints the number beside it. `claims` ran it. Two rounds got this wrong the same way — first
 "`4e22204` predates the target so the number cannot be re-measured",
 then "the target diffs the working tree so it cannot address a
 historical commit, but the script can". `PREREPORT_BASE` is `?=` and
@@ -967,14 +977,25 @@ substituted unquoted, so it takes a range. The second version diagnosed
 the first as reasoning about a target without running it, and then
 reasoned about the target without running it. `HISTORY.md` §63.
 
-**`prose-count` is nearly blind on markdown, and the missing word is
-not why.** Adding `hit` to `COUNTED` changes nothing — control run.
-The gate is `_is_comment()`, which passes only lines whose first
-non-space character is `#` or `*`, plus anything containing a C comment
-marker anywhere. Most of this file is ordinary wrapped prose and is
-never examined; the measured proportion is in `HISTORY.md` §63, not
-here. Whether a count in a brief is caught depends on where the line
-wraps.
+**`prose-count` READS ORDINARY PROSE IN A PROSE FILE, as of the matcher
+round.** It was gated on `_is_comment()`, which passes only lines whose
+first non-space character is `#` or `*` — a heading or a bullet in
+markdown — so most of this file, and every rules file, was never
+examined. The rule the shape enforces is written in those paragraphs and
+the tool was reading the headings above them. In a `.md`, `.txt`, `.rst`
+or `.adoc` file every line is now examined; elsewhere the comment gate
+still applies, because a count inside code is a comment or it is data.
+
+**It added false positives and that was the trade, measured rather than
+discovered.** Over `bd49568..HEAD` the widening raised `prose-count`
+from 11 to 28, and reading all seventeen new ones found two genuine —
+both "the three tests", which goes stale the moment a fourth ownership
+test lands, and both fixed rather than acked. The rest are a dated
+record's counts, numbers tied to the command that produced them
+(`tail -3` keeping three lines), things enumerated in the same clause,
+and plain English. They are acked one at a time with those reasons.
+`HISTORY.md` §63 has the older measurement, taken before the gate
+moved.
 
 **AND A THIRD, MEASURED ON THIS ROUND'S OWN ACK FILE, WHICH IS AN
 ARGUMENT ABOUT SCOPE RATHER THAN VOCABULARY.** Re-measure it rather
@@ -1006,17 +1027,48 @@ a tally. 3 are `tool-presence` on the wrong-checkout diagnostic, which
 says where the hook IS rather than that some tool exists, and 1 is a
 `mechanism-claim` whose mechanism is pinned by the case beneath it.
 
-So the shape fires hardest on the thing the rules mandate, and the ack
-file grows fastest when the tests are most correct. **Not narrowed here.**
-Restricting `unpaired-absence` to test functions, or teaching it that an
-`expect(` on the following lines is the pairing, is a matcher change and
-is its own change with its own controls — the same reasoning as the
-vocabulary above, and the same trap: a matcher edit made in passing is
-how the `which`-matches-English false positive shipped.
+So the shape fired hardest on the thing the rules mandate, and the ack
+file grew fastest when the tests were most correct. **Narrowed in the
+matcher round**, and the narrowing is syntactic: the shape fires only on
+a line that is also an ASSERTION — `expect(`, `assert`, an `assert*`
+method. The question it asks has no meaning for a line that asserts
+nothing, and every ack written for one of those said exactly that:
+*not a test assertion, the tool deciding something, with nothing to
+pair*.
 
-The sequence, when someone takes it: narrow the shape, re-measure with the
-target, write the new calibration down, dispatch a reviewer. Watch the
-trend rather than the number.
+**Syntactic because it has to be.** A diff supplies added lines and not
+the function containing them, so "is this inside a test?" is not
+answerable from the tool's input; "is this an assertion?" is.
+
+**Measured over the committed range `bd49568 HEAD`, excluding
+`.prereport-ack` and with `--ack-file /dev/null`: 36 down to 22, and
+nothing genuine lost.** Both of those qualifiers are load-bearing and
+neither was stated at first: the tool skips its own ack file, so leaving
+it in the diff doubles the count, and without the empty ack file the
+figures are the live remainder rather than the raw ones. Run against the
+working tree instead of `HEAD` the before-figure is 39, so **this
+sentence is true of the range it names and becomes false the moment
+someone reads `HEAD` as "now"**. `claims` measured every reading. All fourteen dropped were misfires, read
+individually: six in `tools/rules-hook.sh` — five classification or
+validation conditionals and one `print()` inside its not-rooted refusal
+— two prose lines in this file, one more in
+`docs/POSTMORTEM-rules-declaration.md`, and inside the suite two
+FAILURE-MESSAGE STRINGS the matcher was reading English out of plus
+three pieces of ordinary logic. *The first version of this list summed
+to thirteen and called itself fourteen, which is this file's own "a
+claim with parts is covered when every part is, and reads as covered
+when one is".* The gap it does open is an absence
+on a continuation line under an `expect(` carrying no absence of its
+own. **That shape occurs five times here and not one is a genuine
+absence assertion** — every one is a failure-message string, English
+inside an `expect()`'s second argument. The single real continuation
+absence in the tree opens with `expect(not …`, which carries its own
+absence, so the assertion is still reported. `claims` enumerated all
+five and checked `bakery/test_fold.py` too, which this round had not.
+
+*"Occurs nowhere in this tree" stood here and in the matcher's own
+comment. The shape occurs; a genuine instance does not, and collapsing
+those two is the entire content of the claim.*
 
 **Note what would NOT settle it — counting how many acks were "fixed"
 instead.** A fix count measures what the author chose to rewrite, not
@@ -1033,10 +1085,46 @@ says a count is not there in a shape it knows, and nothing more — the
 gate decides which lines are read and the vocabulary decides which
 counts exist. Not fixed here, for the reason the next paragraph gives.
 
-A mechanism reading as working, in the tool bought to catch those. Not
-fixed in the round that found it — a matcher change is its own change.
-The sequence: widen the gate, re-measure with the command above, write
-the new number down, dispatch a reviewer.
+A mechanism reading as working, in the tool bought to catch those. The
+GATE moved in the matcher round; the VOCABULARY did not, so this
+blindness is exactly as wide as it was — `two constants` and `three
+greps` are still invisible on a line the gate now reads. Widening
+`COUNTED` is the next matcher change and carries the same obligation:
+re-measure with the command above, write the number down, dispatch a
+reviewer.
+
+**AND A DEAD ACK IS REFUSED NOW — IN THE GATE, NOT IN THE TARGET.** An
+ack keying text that is no longer in the file it names silences nothing
+and its reason is attached to nothing, and rewriting a line re-keys its
+ack silently, which is how they are made. `make prereport` LISTS them
+and still exits 0; `install-agents.sh --check` runs
+`prereport.py --check-acks`, which exits 1, and that is what `make test`
+sees.
+
+**The split is not a compromise, it is the rule read properly.** *Exits
+0 always* is argued behaviourally, not epistemically — "a heuristic
+wired into a build gets routed around within a week" — and the first
+version of this check returned 1 from the default path, so a clean diff
+went red for a row somebody else left in a file it never touched.
+`claims` reproduced that on an EMPTY diff. An unscoped red target is
+precisely the stimulus the rationale names. A flag nothing calls would
+be the opposite failure, so the gate calls it.
+
+Nine existed when the check was written, one of them made by the round
+that counted them; seven were deleted because their finding was gone and
+two re-keyed against the rewritten line.
+
+**WHAT IT CANNOT SEE, and this round created thirty of them.** The check
+asks whether the ack's TEXT is still in the file. It cannot see an ack
+whose text is present but whose SHAPE can no longer fire there — and
+narrowing `unpaired-absence` off prose files made every prose ack of
+that shape permanently unfirable at a stroke. They were cleared by hand,
+because the mechanism added in the same round is blind to exactly the
+class that round produced. Two smaller blind spots, from reading rather
+than from an instance: the liveness test is `text in file` while the key
+is `(shape, file, text)`, so a row survives if its site moved and the
+text recurs elsewhere; and `--root` defaults to the cwd, so an
+invocation from anywhere else calls every row missing.
 
 **Run `make prereport` before the FIRST PUSH, not before the report.**
 That is a change from 2026-09-13 and it is the cheaper end of the same
@@ -1063,7 +1151,7 @@ It reads the diff and asks five questions that have each cost a
 review round here: a comment claiming a mechanism is load-bearing, an
 absence assertion with no paired positive, a count in prose, a capability
 inferred from an installed tool, and a new test with no control language
-beside it. It **exits 0 always** — a heuristic wired into a build gets
+beside it. Its SHAPES **exit 0 always** — a heuristic wired into a build gets
 routed around within a week, and then the signal is gone rather than
 merely ignored. Acks live in `.prereport-ack` with a reason each, and an
 ack is a claim that someone looked, not that anything was fixed.

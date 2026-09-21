@@ -25,9 +25,55 @@ ABSENCE=[re.compile(r"\bnot\s+in\s+\w+",re.I),re.compile(r"assert\s+\w+\s+not\s+
  re.compile(r"expect\s*\(\s*[^,]*\bnot\s+in\b"),re.compile(r"\bdoes\s+not\s+contain\b",re.I),
  re.compile(r"\.count\s*\([^)]*\)\s*==\s*0"),re.compile(r"assertNotIn\b"),
  re.compile(r"expect\s*\(\s*not\s+"),re.compile(r"==\s*\[\s*\]"),re.compile(r"is\s+None\b")]
+# AN ABSENCE IS ONLY THIS SHAPE WHEN IT IS AN ASSERTION. The question the
+# shape asks -- "does the same test assert that the code which would have
+# produced it actually ran?" -- has no meaning for a line that is not
+# asserting anything. Ordinary program logic deciding something (`if p not
+# in tracked:`, `out, missing = [], [n for n in requested if n not in
+# passed]`) has nothing to pair with, and every ack written for one of
+# those said so in the same words: "not a test assertion -- the tool
+# deciding something, with nothing to pair".
+#
+# The narrowing is SYNTACTIC, on the line itself. A hunk header DOES carry
+# a function name -- `@@ -1557,6 +1559,968 @@ def test_term_signal():` --
+# but it names the function at the hunk's START, and a hunk that long spans
+# many, so it is not reliably the one containing a given added line;
+# parse_diff takes the line number and drops the rest. So "is this in a
+# test?" is not answerable from the input the tool has, and "is this an
+# assertion?" is. (This said a diff does not supply the function at all,
+# which the format contradicts. `claims`.)
+#
+# WHAT IT COSTS, measured rather than assumed. The gap is an absence on a
+# CONTINUATION line under an `expect(` that carries no absence of its own:
+# synthetic `expect(` / `"x" not in out,` is reported by neither line. That
+# gap is REAL and DOES NOT OCCUR in this tree -- of the continuation-line
+# absences in tests/run.py, all but one are failure-message strings, which
+# this narrowing is right to drop, and the remaining one opens with
+# `expect(not ...` so the assertion is still reported on its first line.
+#
+# Both halves were run. The first draft of this comment asserted the cost
+# without checking whether it lands anywhere, which is the entry in
+# CLAUDE.md this whole round is downstream of.
+# require*( is in this list because tools here refuse that way --
+# require_closed() in tools/fold-house.py is the live one -- and a refusal
+# helper is an assertion by another name.
+ASSERTION=[re.compile(r"\bexpect\s*\("),re.compile(r"\bassert\b"),
+ re.compile(r"\bassert(?:Not)?(?:In|Equal|Is|None|True|False)\b"),
+ re.compile(r"\bself\.assert\w*\("),re.compile(r"\brequire\w*\s*\(")]
 @shape("unpaired-absence","Does the same test assert that the code which would have produced it actually ran?")
 def _s2(line,path=None):
+    # A CODE SHAPE, split by kind the way tool-presence already is. A
+    # markdown file has no assertions, so every hit in one is prose quoting
+    # code or plain English -- "not in the tree", "not in the working
+    # tree", a sentence naming the tokens this matcher fires on. Measured
+    # before the split: eighteen such rows were acked across CLAUDE.md, the
+    # post-mortem and docs/relayed/, and NOT ONE was a genuine absence
+    # assertion. The widening of prose-count is what made this worth
+    # fixing rather than tolerating -- it put more prose in front of the
+    # scanner, and this shape's prose hits are noise by construction.
+    if bool(path) and os.path.splitext(path)[1].lower() in PROSE_EXT: return None
     if _is_comment(line): return None
+    if not any(rx.search(line) for rx in ASSERTION): return None
     for rx in ABSENCE:
         m=rx.search(line)
         if m: return f"asserts an absence: {m.group(0)!r}"
@@ -35,9 +81,26 @@ def _s2(line,path=None):
 COUNT_WORDS=r"(?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|twenty|\d+)"
 COUNTED=r"(?:check|test|case|input|rule|invariant|item|entry|line|step|assertion|control|instance|place|file|syscall|field)s?"
 COUNT_RE=re.compile(rf"\b(?:the\s+)?{COUNT_WORDS}\s+(?:\w+\s+){{0,2}}{COUNTED}\b",re.I)
+# IN A PROSE FILE, EVERY LINE IS PROSE. `_is_comment()` passes only lines
+# whose first non-space character is `#` or `*`, which in markdown means a
+# heading or a bullet -- so ordinary wrapped paragraphs, which is most of
+# CLAUDE.md and every rules file, were never examined at all. The rule the
+# shape enforces is written in those paragraphs; the tool was reading the
+# headings above them.
+#
+# Measured on the round that found it: two counts went into one paragraph
+# of CLAUDE.md, `prereport` returned `no shapes matched`, and `claims`
+# found them by reading. The gate decided which lines were read.
+#
+# THIS ADDS FALSE POSITIVES AND THAT IS THE TRADE, not a surprise to be
+# acked away later: English says "one of them" and "the two files" for
+# reasons that have nothing to do with counting the tree. The before and
+# after numbers are in the commit message, and the ones that survive are
+# acked one at a time with a reason, which is what an ack is for.
 @shape("prose-count","Is this number asserted anywhere, or will it age silently?")
 def _s3(line,path=None):
-    if not _is_comment(line): return None
+    prose = bool(path) and os.path.splitext(path)[1].lower() in PROSE_EXT
+    if not prose and not _is_comment(line): return None
     if re.search(r"\bbugs?\s+[\d/,\s]+\b",line,re.I): return None
     m=COUNT_RE.search(line)
     if m: return f"a count in prose: {m.group(0).strip()!r}"
@@ -162,6 +225,43 @@ def load_acks(p):
             parts=line.split("\t")
             if len(parts)>=3: acks.add((parts[0],parts[1],parts[2]))
     return acks
+
+
+def dead_acks(p,root="."):
+    """Acks whose keyed text is no longer in the file they name.
+
+    A DEAD ACK IS AN ACK NOBODY WILL EVER RE-EXAMINE. It silences a key
+    that cannot occur, so it is not suppressing anything; and because the
+    finding it was written for has moved or gone, the reason beside it is
+    now attached to nothing. Rewriting a line re-keys its ack silently --
+    that is how most of these are made, including by the round that first
+    counted them.
+
+    NOT A HEURISTIC, which is why this one can refuse where the shapes
+    cannot. The shapes ask a question a human answers; this asks whether a
+    string is in a file. `exits 0 always` is a rule about heuristics being
+    routed around when they block, and it is kept for them.
+    """
+    out=[]
+    if not p or not os.path.exists(p): return out
+    cache={}
+    with open(p) as fh:
+        for n,line in enumerate(fh,1):
+            line=line.rstrip("\n")
+            if not line.strip() or line.startswith("#"): continue
+            parts=line.split("\t")
+            if len(parts)<3: continue
+            shape,f,text=parts[0],parts[1],"\t".join(parts[2:])
+            full=os.path.join(root,f)
+            if full not in cache:
+                try:
+                    cache[full]=open(full,encoding="utf-8",errors="replace").read()
+                except OSError:
+                    cache[full]=None
+            body=cache[full]
+            if body is None: out.append((n,shape,f,text,"no such file"))
+            elif text not in body: out.append((n,shape,f,text,"text not in file"))
+    return out
 def report(findings,acks,out,self_touched=None):
     if self_touched:
         for f,n in sorted(self_touched.items()):
@@ -191,6 +291,10 @@ def main(argv=None):
     ap=argparse.ArgumentParser(prog="prereport")
     ap.add_argument("--diff",default="-"); ap.add_argument("--ack-file",default=".prereport-ack")
     ap.add_argument("--list-shapes",action="store_true")
+    ap.add_argument("--root",default=".",
+                    help="tree the ack file's paths resolve against")
+    ap.add_argument("--check-acks",action="store_true",
+                    help="exit non-zero when an ack keys text that is gone")
     a=ap.parse_args(argv)
     if a.list_shapes:
         for n,q,_ in SHAPES: print(f"{n}\t{q}")
@@ -203,6 +307,31 @@ def main(argv=None):
     findings,self_touched=scan(added,self_path=os.path.abspath(__file__),
                                ack_path=a.ack_file)
     report(findings,load_acks(a.ack_file),sys.stdout,self_touched)
+    dead=dead_acks(a.ack_file,root=a.root)
+    if dead:
+        print(file=sys.stdout)
+        print(f"DEAD ACKS: {len(dead)} row(s) key text that is no longer in the "
+              f"file they name. Each one silences a finding that cannot occur, "
+              f"and its reason is attached to nothing.",file=sys.stdout)
+        for n,shape,f,t,why in dead:
+            print(f"  {a.ack_file}:{n}  {shape}  {f}  ({why})",file=sys.stdout)
+            print(f"    {t[:96]}",file=sys.stdout)
+        print("Re-key each against the line as it now reads, or delete it if the "
+              "finding is gone.",file=sys.stdout)
+    # LISTED ALWAYS, REFUSED ONLY WHEN ASKED, and the split is the whole of
+    # what keeps `exits 0 always` true of the TARGET. The first version
+    # returned 1 from the default path, which meant `make prereport` went red
+    # for a row somebody else left behind in a file the diff does not touch --
+    # and the recorded rationale for exiting 0 is behavioural, not epistemic:
+    # "a heuristic wired into a build gets routed around within a week". An
+    # unscoped red target is exactly that stimulus. `claims` reproduced it on
+    # an EMPTY diff.
+    #
+    # So the refusal lives behind --check-acks, which install-agents.sh
+    # --check passes. Refusals belong in the gate; the heuristic stays out of
+    # the build. A flag nothing calls would be the other failure this file
+    # names -- a mechanism whose answer to "when did it last fire" is never.
+    if dead and a.check_acks: return 1
     return 0
 
 

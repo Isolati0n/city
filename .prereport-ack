@@ -54,9 +54,7 @@ prose-count	tests/run.py	# loudly -- four tests red at once -- but every message
 # the three assertions beneath it ARE the check, and each is shown to matter by what satisfies the other two; they cannot be RUN here (no Landlock, the test skips by name) so this is a claim awaiting an environment rather than an unchecked one
 mechanism-claim	tests/run.py	# load-bearing:
 # false positive: describes the line beneath it, not a count that can age
-unpaired-absence	HISTORY.md	- **`mknod` is not in the seccomp allow-list**, so the probe killed the
 # false positive: describes the line beneath it, not a count that can age
-unpaired-absence	HISTORY.md	- **`unlink` is not in it either**, which killed the house that has binds
 # false positive: describes the line beneath it, not a count that can age
 prose-count	houses/brick.c	* so every write is one whole line and a bounded read can only return
 # false positive: describes the line beneath it, not a count that can age
@@ -66,7 +64,6 @@ unpaired-absence	tools/landlock-assertions-dryrun.py	boot output. NOT A TEST, an
 # the comment's own next clause says nothing pins it; that is the honest form
 mechanism-claim	houses/brick.c	* THE GATE IS LOAD-BEARING AND NOTHING PINS IT. `control` removed it
 # false positive: English prose in a record, not an assertion
-unpaired-absence	HISTORY.md	brief, not in the TCB, which is this repository's most common defect
 # paired: the same test then requires trunc_root/trunc_bind to hold specific
 # values, which only a probe that ran can produce. This rejects the fixture's
 # own "I could not probe" answer so it cannot read as either outcome.
@@ -75,12 +72,10 @@ unpaired-absence	tests/run.py	expect(not v.startswith("unprobed"),
 unpaired-absence	tools/landlock-assertions-dryrun.py	if n not in emits)
 # false positive: "not one step" is English, and the steps below it are
 # enumerated rather than counted -- adding a sixth ages nothing
-prose-count	.claude/rules/harness.md	**The partial-gate trap.** `make test` is not one step. It stages, runs
+prose-count	.claude/rules/harness.md	**The partial-gate trap.** `make test` is not one step. **Read the target
 # false positive: English prose reporting what a grep returned, not an assertion
-unpaired-absence	CLAUDE.md	invariant 6; `claims` grepped and the string is not in this file
 # false positive: prose naming a gap in prereport's own matcher; verified by
 # reading COUNTED in tools/prereport.py, which has no `hit`
-unpaired-absence	HISTORY.md	`make prereport` does not catch it — `hit` is not in its `COUNTED`
 # false positive: a synthetic probe string quoted as command output, not a claim
 prose-count	HISTORY.md	is_comment("- three files, see https://x/y"): True
 # HISTORY.md is exempt as a record, and the heading names a closed dated episode
@@ -89,10 +84,8 @@ prose-count	HISTORY.md	## 64. Closing the prose work: four lines, and why stoppi
 # this IS the pairing: absent before, present after, asserted a few lines down
 unpaired-absence	tests/run.py	expect(not os.path.exists(f"{_layer_dir()}/{lid}"),
 # paired by the staging assertions above it -- rc==0 and "slot B" in the output
-unpaired-absence	tests/run.py	expect(not [d for d in os.listdir(f"{slots}/B") if d.startswith(".")],
 # paired by expect("house=liveone" in out) on the line above: the boot ran and
 # produced houses, so "candone absent" is about the candidate and not the boot
-unpaired-absence	tests/run.py	expect("house=candone" not in out,
 # the comment itself says it is argued and not tested, and control ran it:
 # moving stage_layers after the renames leaves the suite green
 mechanism-claim	tools/stage-candidate.py	# BEFORE THE RENAMES, and that order matters as much as the one
@@ -102,13 +95,11 @@ prose-count	HISTORY.md	*(This said "exits in exactly three places". There are fi
 # after the baker, failed-validation and missing-nw-check refusals it follows
 # that refusal's reason assertion. NOT after every refusal -- control found
 # that overstatement, and found the one path that had no helper at all
-unpaired-absence	tests/run.py	expect(not left, f"{why}: scratch left in the candidate slot: {left}")
 # paired by expect("house=liveone" in out) above, and control measured that
 # the tag IS present when the candidate boots, so it can fail for its reason
 unpaired-absence	tests/run.py	expect("[candone]" not in out,
 # this is the pairing's own precondition: absent now, so a later assertion
 # about it means something
-unpaired-absence	tests/run.py	expect(not os.path.exists(f"{_layer_dir()}/l-cand-live"),
 # paired by the positive: the same id IS created under the --root prefix
 unpaired-absence	tests/run.py	expect(not os.path.exists(f"{_layer_dir()}/{rlid}"),
 # this IS the retraction: the sentence says the dot is NOT load-bearing for
@@ -158,7 +149,6 @@ unpaired-absence	bakery/test_fold.py	expect(not differ, f"folded image disagrees
 # Skip guards, not assertions: they choose whether the check runs and name
 # what goes untested when it does not. There is nothing to pair.
 unpaired-absence	bakery/test_fold.py	if "overlay" not in open("/proc/filesystems").read():
-unpaired-absence	bakery/test_fold.py	if err is None:
 # `_erofs_ok` asks BOTH questions -- the tool AND /proc/filesystems, on
 # the next line. The matcher sees only the first. This is the very
 # distinction harness.md draws (detect the capability, not a tool that
@@ -199,15 +189,13 @@ unpaired-absence	bakery/fold.py	if mode is None or not os.path.exists(path) or o
 # Prose in a dated record and in a docstring, quoting the wording being
 # retracted. Not counts and not assertions.
 prose-count	HISTORY.md	*This said "so there is one entry", which is wrong and wrong in the
-prose-count	HISTORY.md	**"There is no --force" was false, nine lines from `--no-opaque-check`.**
+prose-count	HISTORY.md	**"There is no --force" was false, in the same function as `--no-opaque-check`.**
 mechanism-claim	HISTORY.md	**The qualifier is load-bearing and was missing.** Identity is a
-unpaired-absence	HISTORY.md	not in stderr`, for a different input.
 unpaired-absence	bakery/test_fold.py	were not in it -- a claim of exhaustiveness standing beside the very
 # English, not counts -- except the fold.py one, which IS a count and is
 # permitted because the three are named in the two sentences above it.
 # The earlier reason here said "English" for all three, which is where
 # the next reader learns which shapes pass, so it mattered. `claims`.
-prose-count	Makefile	# running, one line of output scrolling past. Both controls that were run
 prose-count	bakery/fold.py	# all three, each one input away from the fixture.
 prose-count	bakery/test_fold.py	# left `make test` green at one check fewer, and the roster size is
 # Paired by the two assertions directly above it, which prove the probe
@@ -220,7 +208,6 @@ unpaired-absence	bakery/test_fold.py	expect(os.listdir(m) == [], f"the probe lef
 prose-count	HISTORY.md	**Round two's crash moved one step over rather than being fixed.** Step 3
 prose-count	Makefile	# green again, two echoed command lines with nothing between them, which is
 prose-count	bakery/test_fold.py	# the house copies `etc` up, so step 1 and step 4a each supply it
-unpaired-absence	HISTORY.md	not in the fold, because in the fold it would mean disagreeing with what
 # The escape check's absences are paired by the block after them, which
 # requires the merged tree to be RIGHT -- so "wrote nothing outside" cannot
 # be satisfied by a fold that did nothing. 1012/1016 are the empty-dir case
@@ -240,7 +227,6 @@ unpaired-absence	bakery/test_fold.py	expect(not os.path.lexists(os.path.join(t.m
 # this one was about.
 unpaired-absence	bakery/test_fold.py	expect("user.overlay.somethingelse" not in got,
 # Prose in a record, not an assertion in a test.
-unpaired-absence	HISTORY.md	different failures and are not in tension, so the answer to "a review is
 
 # --- 2026-09-13, the fold helper ---
 # The mechanism-claim IS the finding: `control` measured that removing a
@@ -295,7 +281,6 @@ unpaired-absence	tests/run.py	if leaked and sys.exc_info()[0] is None:
 unpaired-absence	tests/run.py	if sys.exc_info()[0] is None:
 # Quoting `make prereport`'s own output inside the record of the round it
 # fired in. Not an assertion.
-unpaired-absence	HISTORY.md	`make prereport` asked the question (`asserts an absence: 'is None'`)
 # Paired by the line above it, which requires the refusal to NAME move_lid.
 # Alone, "does not name keep_lid" is satisfied by a tool that refuses
 # nothing; together they mean the guard is keyed per id.
@@ -400,7 +385,6 @@ prose-count	pid1.c	/* 0 ok, -2 pointer file absent (unchosen), -1 present but un
 # HISTORY.md: prose about an arithmetic identity, not a test
 # assertion -- there is nothing to pair it with. The claim is
 # checked by reading 6 + n, which contains no 8.
-unpaired-absence	HISTORY.md	8; the counted `6 + n` does not contain it at all, which is
 # tests/run.py, all three: paired, and the docstring says so and
 # says which half is the pin. The positives are rc == 70, 'plan
 # sealed', 'HALT: fd ' and the three numbers; the absences only
@@ -408,7 +392,6 @@ unpaired-absence	HISTORY.md	8; the counted `6 + n` does not contain it at all, w
 # n=3 against three mutants: pre-flight deleted -> red, soft-raise
 # deleted -> red, -1 init deleted -> STILL GREEN and recorded in
 # the docstring as an uncovered gap rather than acked away.
-unpaired-absence	tests/run.py	expect("HALT: log pipe" not in out,
 unpaired-absence	tests/run.py	expect("city open" not in out,
 unpaired-absence	tests/run.py	expect("HALT: fd " not in out2, f"accepted plan still refused\n{out2}")
 
@@ -424,7 +407,6 @@ unpaired-absence	tests/run.py	expect(not halts, f"halted at rlimit {need}: {halt
 # paragraph attached to a format bump" is English, not an absence
 # assertion -- there is no test and nothing to pair. The matcher's
 # known false-positive class on prose files.
-unpaired-absence	.claude/rules/plan.md	change, not in a paragraph attached to a format bump.
 
 # docs/relayed/*, twenty entries below. These are documents committed
 # UNCHANGED, byte-identical to what was relayed, and editing one to
@@ -448,26 +430,10 @@ prose-count	docs/relayed/NW-FROM-SCRATCH-RECORD.md	**Why clause 4 earns its plac
 prose-count	docs/relayed/NW-SOLVENT.md	### PID 1 becomes fifty lines
 prose-count	docs/relayed/NW-VM-AS-HOUSE-RECORD.md	**Capabilities, not paths.** Already argued in `blob.h` for one field: the
 prose-count	docs/relayed/NW-VM-AS-HOUSE-RECORD.md	*cannot express* a traversal. `nwcheck.c:109` names the two fields that
-unpaired-absence	.claude/rules/plan.md	"Written 2026-09-14. Not in the tree", and the directory it sits in
-unpaired-absence	docs/relayed/NW-BAKE-LEDGER.md	Written 2026-09-14. Not in the tree. Entirely offline: no PID 1, no
-unpaired-absence	docs/relayed/NW-BAKE-LEDGER.md	One append-only file in the bakery, not on the machine and not in the
-unpaired-absence	docs/relayed/NW-BAKE-LEDGER.md	A refusal whose `detail` names a unit the source does not contain. Two
-unpaired-absence	docs/relayed/NW-BOOT-RECORD.md	Written 2026-09-14. Not in the tree.
-unpaired-absence	docs/relayed/NW-BOOT-RECORD.md	over a bounded record must report **not in the retained volume** rather
-unpaired-absence	docs/relayed/NW-BOOT-RECORD.md	that change is not in the tree, so nobody has run the count against a tree
-unpaired-absence	docs/relayed/NW-BOOT-RECORD.md	oldest `boot` in the ring is not 1, and must render that as **not in the
-unpaired-absence	docs/relayed/NW-FIRST-FIRMWARE-BOOT.md	Measured 2026-09-14. Not in the tree when written. `NEXUSWEAVE.md` §11 lists
-unpaired-absence	docs/relayed/NW-FROM-SCRATCH-RECORD.md	Two of the most expensive errors were not in any design. A specification
-unpaired-absence	docs/relayed/NW-FROM-SCRATCH-RECORD.md	than format properties, stale reads reported as *not in the retained
-unpaired-absence	docs/relayed/NW-MEASUREMENTS-0914.md	Not in the tree. Every number below was produced by running something on
-unpaired-absence	docs/relayed/NW-UNCONSTRAINED-ADDENDUM-7.md	does not contain `lid_brick`. Same privilege, less code. Smaller than the
-unpaired-absence	docs/relayed/NW-UNCONSTRAINED-ADDENDUM-7.md	`brickcatalogue.py` is not in the worktree and has no object anywhere in
-unpaired-absence	docs/relayed/NW-VIRTIO-STATUS.md	Measured 2026-09-14. Not in the tree when written. Answers the one item
 
 # .claude/rules/plan.md: the line QUOTES NW-BOOT-RECORD.md's own status
 # line in order to say the document is not scheduled. A quotation of a
 # label, not an assertion about the tree.
-unpaired-absence	.claude/rules/plan.md	"Written 2026-09-14. Not in the tree", and the directory it sits in
 
 # .claude/rules/runtime.md, the rescue section. Two English matches.
 # "no handler is installed" is about a signal handler in pid1.c, not a
@@ -477,7 +443,6 @@ unpaired-absence	.claude/rules/plan.md	"Written 2026-09-14. Not in the tree", an
 # assertion; there is nothing to pair it with, and the positive half
 # ("which is yours") is the same sentence.
 tool-presence	.claude/rules/runtime.md	signals are not blocked at that point and no handler is installed, so
-unpaired-absence	.claude/rules/runtime.md	machine. **Plus `rescue.c`, which is yours and is NOT in that chain** —
 
 # The ownership census and the cwd delivery test, 2026-09-21.
 
@@ -586,7 +551,6 @@ unpaired-absence	tools/rules-hook.sh	if p not in tracked:
 
 # "make test is not one step" -- English, and the sentence immediately
 # after it now says to read the target rather than giving a number.
-prose-count	.claude/rules/harness.md	**The partial-gate trap.** `make test` is not one step. **Read the target
 
 # The reverse MAP loop's own branch -- a declared name matching no
 # tracked file -- not a test assertion. The gate case "a MAP name for a
@@ -645,7 +609,6 @@ prose-count	tests/run.py	# satisfies all of them; deleting the head -1 check lef
 # English: the sentence quotes the tokens prereport itself fires on,
 # which is a hit for its own vocabulary, in the paragraph measuring
 # that vocabulary.
-unpaired-absence	CLAUDE.md	`--check`'s classification and validation branches, whose `is None` and
 
 # The malformed-event case, paired twice over: the two assertions
 # immediately above it require exit 0 and empty stdout on the SAME
@@ -675,8 +638,6 @@ unpaired-absence	tests/run.py	expect(unwanted not in (r.out + r.err),
 # It is quoted command output, not a claim this tree makes, and the two
 # sentences containing it are the worked instance of the section they
 # sit in: the string is real and is about something else.
-unpaired-absence	CLAUDE.md	or path not in the working tree`, and always would have. Both run.
-unpaired-absence	docs/POSTMORTEM-rules-declaration.md	`unknown revision or path not in the working tree` and always would have.
 
 # The --only round, 2026-09-21.
 
@@ -741,4 +702,55 @@ unpaired-absence	tests/run.py	expect("Traceback" not in o,
 # to print SUBSET RUN PASSED for a test that really passed. Without that
 # pair, a function that never prints it would satisfy this.
 unpaired-absence	tests/run.py	expect("SUBSET RUN PASSED" not in joined,
+
+# The matcher round, 2026-09-21.
+
+# WIDENING prose-count into ordinary markdown prose surfaced these, and
+# each was read. Named-in-the-sentence ("those two files" -- both named in
+# the same clause), the tool matching its OWN example of English, pure
+# English the vocabulary happens to span ("one does varies instance"),
+# counts of things enumerated beside them, and `three lines` tied to the
+# `tail -3` that produced them.
+prose-count	CLAUDE.md	exits in those two files, and its subjects were chosen by reading
+prose-count	CLAUDE.md	`prose-count` on English — "two rules files", "the one case that must
+prose-count	CLAUDE.md	MEASURED**, and whether one does varies instance by instance below.
+prose-count	CLAUDE.md	same way and never fired. Two inert lines, two unrelated reasons,
+prose-count	CLAUDE.md	this**: `$?` was `tail`'s, and `tail -3` kept the last three lines
+
+# `tail -3` and `the three lines kept` are the command's own argument, and
+# `the one thing this file's header` is English. The entry they sit in is
+# the one whose whole subject is that the pipe kept three lines and cut the
+# fourth, so the number is the finding rather than a tally about the tree.
+prose-count	docs/ENVIRONMENT.md	`git push … 2>&1 | tail -3`, `$?` is `tail`'s and the 403 line is cut
+prose-count	docs/ENVIRONMENT.md	above the three lines kept, so the failure reads as success. `git
+prose-count	docs/ENVIRONMENT.md	run, in the entry whose subject is the one thing this file's header
+
+# A DATED RECORD OF A CLOSED EPISODE, which CLAUDE.md exempts for
+# HISTORY.md by the same argument: these counts describe a past state that
+# cannot change, so they are not hostages to the next commit. The file's
+# status line says so -- "Status: history, not instructions".
+prose-count	docs/POSTMORTEM-rules-declaration.md	| `8bab9a5` | The first review round's fixes: the hook's root taken from `$1` passed by `.claude/settings.json`, the collapse case looped over every rules file, a `file_path` precedence probe, and the explanatory block consolidated out of three rules files. |
+prose-count	docs/POSTMORTEM-rules-declaration.md	Two prose assertions about what that file passes, no tool reading it. If
+prose-count	docs/POSTMORTEM-rules-declaration.md	three rules files.
+prose-count	docs/POSTMORTEM-rules-declaration.md	- The test docstring said the test wrote to one file in three cases; it
+prose-count	docs/POSTMORTEM-rules-declaration.md	wrote five cases over three tracked files, and the commit that wrote the
+prose-count	docs/POSTMORTEM-rules-declaration.md	exercised. The TCB completeness parse found 8 files in `CLAUDE.md`'s table
+prose-count	docs/POSTMORTEM-rules-declaration.md	- Of its four root assertions, three were load-bearing with a mutation that
+
+# The matcher round's own report, 2026-09-21.
+
+# THE NUMBER IS THE FINDING in all four, and that is the whole reason --
+# NOT the exemption this reason first claimed. It said they sit in one
+# paragraph that carries a command, so a run prints them; `claims` checked
+# and they are in two paragraphs, neither of which carries a command, and
+# the only command in the region counts ack ROWS, which is a measurement
+# of something else. So these are instance-counts under this file's own
+# rule and they are acked on their content instead: "the three tests" is
+# quoted as the hostage that was REMOVED, "three lines" is the argument to
+# `tail -3` that produced them, and the other two are the measured split
+# of what the narrowing dropped, each reproducible from the range named in
+# its own sentence.
+prose-count	CLAUDE.md	both "the three tests", which goes stale the moment a fourth ownership
+prose-count	CLAUDE.md	(`tail -3` keeping three lines), things enumerated in the same clause,
+prose-count	CLAUDE.md	— two prose lines in this file, one more in
 

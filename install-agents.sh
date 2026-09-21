@@ -322,6 +322,20 @@ tree -- it reports its root and that root is not $PWD, so this hook is \
 installed in or linked from a different checkout" ;;
             esac
         fi
+        # A DEAD ACK IS A FACT, NOT A HEURISTIC, which is why it refuses
+        # here and prereport's own shapes do not. An ack keying text that
+        # is no longer in the file it names silences nothing and its
+        # reason is attached to nothing; rewriting a line re-keys its ack
+        # silently, which is how they are made. `make prereport` lists
+        # them and still exits 0 -- the rationale for that is behavioural,
+        # that a heuristic wired into a build gets routed around -- so the
+        # refusal is here, where refusals live, rather than in the target.
+        acr=0
+        ao=$(python3 tools/prereport.py --diff /dev/null --check-acks 2>&1) || acr=$?
+        if [ "$acr" -ne 0 ]; then
+            printf '%s\n' "$ao"
+            fail "tools/prereport.py --check-acks"
+        fi
         [ "$rc" -eq 0 ] || exit "$rc"
         echo "install-agents: OK $(ls "$DIR" | wc -l | tr -d ' ') briefs"
     fi
