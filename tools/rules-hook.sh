@@ -63,30 +63,32 @@ set -eu
 
 MODE=${1:-}
 
-# THE ROOT COMES FROM $0, not from the cwd and not from the caller. The
-# python below runs from a `python3 - <<PY` heredoc, so `__file__` is
-# "<stdin>" and argv[0] is "-": nothing inside it can name this script, and
-# the obvious dirname-of-__file__ walk lands on the PARENT of the cwd, which
-# on this machine is a home directory. The shell does know, because $0 is
-# what the caller typed -- settings.json invokes an absolute path -- so the
-# shell computes the root and hands it over.
+# THE ROOT COMES FROM $0, RESOLVED, and there is no fallback. The python
+# below runs from a `python3 - <<PY` heredoc, so `__file__` is "<stdin>"
+# and argv[0] is "-": nothing inside it can name this script, and the
+# obvious dirname-of-__file__ walk lands on the PARENT of the cwd, which on
+# this machine is a home directory. The shell does know, because $0 is what
+# the caller typed, so it hands $0 over and python resolves it.
 #
-# Chosen over $CLAUDE_PROJECT_DIR passed as an argument, which was the other
-# candidate: that makes settings.json and this script a two-file contract
-# with nothing checking it, and if the argument were ever dropped the cwd
-# fallback would answer in the common case and hide the drift. $0 needs no
-# cooperation from the caller at all.
-ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." 2>/dev/null && pwd) || ROOT=
-# VERIFIED, not merely computed. `cd` succeeding says the directory
-# exists, not that it is this repository -- invoke the hook through a
-# symlink in ~/bin and $0 names the symlink, so the walk lands on that
-# directory's parent, `cd` succeeds, and the event path goes silent at
-# exit 0. Exactly the failure this rooting exists to remove, one
-# invocation shape over. `claims` found it. So the root has to contain
-# the thing we came for, and the cwd fallback is what fires when it does
-# not. "Needs no cooperation from the caller" was too strong: it needs
-# the caller to name the script by a path that is really in the tree.
-[ -n "$ROOT" ] && [ -d "$ROOT/.claude/rules" ] || ROOT=$(pwd)
+# RESOLVED THROUGH SYMLINKS, because $0 can name a symlink -- one in ~/bin,
+# say -- and then the walk lands on that directory's parent instead of the
+# repository. realpath finds the real file, so that shape works rather than
+# needing to be rescued.
+#
+# AND NO CWD FALLBACK, which is the part that took two rounds to get right.
+# A fallback was added when the symlink case surfaced, and it turned a
+# misinstalled hook into one that quietly served a DIFFERENT tree: the
+# census fixture was a stub with no .claude/rules, the hook fell back to
+# the cwd, checked the real repository, and reported it clean -- so a
+# planted unaccounted file read as accepted. The fixture was made a full
+# copy and the behaviour was left, which fixed the test and not the
+# mechanism. A tool that cannot find its own rules must say so.
+#
+# Chosen over $CLAUDE_PROJECT_DIR passed as an argument: that makes
+# settings.json and this script a two-file contract with nothing checking
+# it, and a dropped argument would have been answered by the very fallback
+# this comment is about.
+SELF=$0
 
 case "$MODE" in
   --check|--territories) IN='' ;;
@@ -95,10 +97,16 @@ case "$MODE" in
 esac
 
 rc=0
-python3 - "$MODE" "$ROOT" "$IN" <<'PY' || rc=$?
+python3 - "$MODE" "$SELF" "$IN" <<'PY' || rc=$?
 import json, os, re, subprocess, sys
 
-mode, root, raw = sys.argv[1], sys.argv[2], sys.argv[3]
+mode, self, raw = sys.argv[1], sys.argv[2], sys.argv[3]
+
+# realpath, then up one from tools/. If this is not a checkout of this
+# repository the hook says so; it never looks anywhere else.
+root = os.path.dirname(os.path.dirname(os.path.realpath(self)))
+rules_dir = os.path.join(root, ".claude", "rules")
+rooted = os.path.isdir(rules_dir)
 
 MAP = [
     ({"dawn.c", "pid1.c", "nwspawn.c", "nwsup.c", "lids.c", "lids.h",
@@ -136,8 +144,8 @@ SHARED = {
 # Tracked code files that no territory owns, each with the reason there is
 # none. A REASON IS REQUIRED: --check refuses an entry whose reason is empty,
 # because an exemption list with blank rows is how a green check ends up
-# certifying the blind spot instead of catching it. An entry ending in "/"
-# covers everything beneath it.
+# certifying the blind spot instead of catching it. Entries are exact
+# paths; see unowned_reason for why there is no directory form.
 #
 # These are a QUEUE, not a settled state. Several say "the rules file
 # describes this at length and does not own it", which is the gap worth
@@ -261,14 +269,33 @@ def owns(name):
 
 
 def unowned_reason(rel):
+    """Exact paths only. No prefix arm, deliberately.
+
+    There was one, for a `proofs/` entry, and splitting that entry into
+    files left the arm with no subjects -- `control` deleted it and the
+    suite stayed green, which is a mechanism that reads as working until
+    somebody reaches for it. Exact matching is also the safer rule: a
+    directory entry is a prefix exemption, so a new file beneath it
+    passes the census silently, which is the blind spot the census
+    exists to catch. Weakening this to `rel.startswith(p)` was green
+    too, and under it an entry written as `tools/stage` would have
+    exempted two unrelated tools.
+    """
     for p, why in UNOWNED:
-        if (rel == p) or (p.endswith("/") and rel.startswith(p)):
+        if rel == p:
             return why
     return None
 
 
 def check():
     bad = []
+    # NOT ROOTED, NOT A RESULT. Checking whatever tree the cwd happens to
+    # be is how a stub fixture got the real repository certified clean.
+    if not rooted:
+        print(f"rules-hook --check: not in a checkout -- no {rules_dir} "
+              f"(resolved from {os.path.realpath(self)}). Refusing rather "
+              f"than checking whatever tree the cwd is.")
+        return 1
     try:
         out = subprocess.run(["git", "ls-files"], cwd=root,
                              capture_output=True, text=True, check=True).stdout
@@ -340,10 +367,7 @@ def check():
     for p, why in UNOWNED:
         if not (why or "").strip():
             bad.append(f"UNOWNED entry {p!r} has no reason")
-        if p.endswith("/"):
-            if not any(f.startswith(p) for f in tracked):
-                bad.append(f"UNOWNED entry {p!r} covers no tracked code file")
-        elif p not in tracked:
+        if p not in tracked:
             bad.append(f"UNOWNED entry {p!r} is not a tracked code file")
     for base, (terrs, why) in SHARED.items():
         unknown = [x for x in terrs if x not in territories()]
@@ -409,10 +433,28 @@ if not names:
 # every invocation, which makes the suppression a silent no-op rather than
 # a visible failure -- and the try below swallows stamp errors by design,
 # so nothing would say so.
+# A HOOK THAT CANNOT FIND ITS RULES SAYS SO. Silence here is
+# indistinguishable from a file no territory owns, and serving another
+# tree's rules is worse than either -- so the one case that must never
+# happen quietly is the machine handling its own misinstallation.
+if not rooted:
+    out = {"hookSpecificOutput": {
+        "hookEventName": "PreToolUse",
+        "additionalContext":
+            f"rules-hook: {' and '.join(names)} rules apply to what you are "
+            f"touching, and the hook cannot read them. It roots at its own "
+            f"location and found no {rules_dir} (resolved from "
+            f"{os.path.realpath(self)}). The hook is installed outside the "
+            f"repository it is meant to serve; no rules were delivered."}}
+    print(json.dumps(out))
+    raise SystemExit(0)
+
 blocks = []
+missing = []
 for name in names:
-    src = os.path.join(root, ".claude", "rules", name + ".md")
+    src = os.path.join(rules_dir, name + ".md")
     if not os.path.isfile(src):
+        missing.append(src)
         continue
     stamp = os.path.join(root, ".reviews", ".rules." + name)
     fresh = True
@@ -432,6 +474,11 @@ for name in names:
     blocks.append(f"Rules for {owners} (you are touching {where}). "
                   f"Source: {os.path.relpath(src, root)}\n\n"
                   + open(src).read())
+
+if missing:
+    blocks.insert(0, "rules-hook: rooted at " + root + " but could not read "
+                  + ", ".join(missing) + ". Those territories' rules were "
+                  "not delivered.")
 
 if not blocks:
     raise SystemExit(0)

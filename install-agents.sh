@@ -75,6 +75,13 @@ RULEDIR=.claude/rules
 # the first one anybody forgot -- which is the whole subject of the
 # post-mortem in docs/POSTMORTEM-rules-declaration.md.
 RULES=$(sh tools/rules-hook.sh --territories)
+# EMPTY IS NOT A RESULT. $RULES drives three `for` loops; empty runs them
+# zero times and the gate prints OK with runtime.md deleted -- measured by
+# `control`. set -eu catches a --territories that FAILS; this catches one
+# that succeeds and says nothing.
+[ -n "$RULES" ] || { echo "install-agents: FAIL tools/rules-hook.sh \
+--territories printed nothing, so every per-territory check below would \
+run zero times" >&2; exit 1; }
 # Briefs superseded on 2026-09-10. Their content migrated into plan.md and
 # runtime.md; --check fails if one reappears, because two agents claiming the
 # same file is worse than either alone.

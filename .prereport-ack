@@ -530,3 +530,45 @@ unpaired-absence	tools/rules-hook.sh	unknown = [x for x in terrs if x not in ter
 # positive, the matcher reading the word "one" out of "the one this
 # case wants".
 prose-count	tests/run.py	# that looks like the one this case wants.
+
+# The rooting round, 2026-09-21. Every entry below is either English or a
+# negative paired inside its own test; listed one by one because an ack
+# saying "all of these are fine" is an instance-count wearing a reason.
+
+# "the one case that must never happen quietly" -- English, and the
+# sentence is the claim rather than a tally.
+prose-count	tools/rules-hook.sh	# tree's rules is worse than either -- so the one case that must never
+
+# The matcher hunts the mkfs-vfat shape, "tool X is installed therefore
+# feature X works". This is the hook's own diagnostic telling a reader
+# it was installed outside the repository it serves.
+tool-presence	tools/rules-hook.sh	f"{os.path.realpath(self)}). The hook is installed outside the "
+
+# Six negatives in the two hook tests, each paired inside its own test:
+#   - the Bash unowned case, paired by the Bash positive just above it
+#     that delivers runtime for a command naming nwsup.c;
+#   - the stub's "no rules dir", a fixture assertion whose positive is
+#     the symlink case at the end of the same test, which shows the hook
+#     delivering when it CAN root;
+#   - "code files" absent from the stub's refusal, paired with the
+#     assertions that it refused and named the path it tried;
+#   - "## Liveness" absent from the stub's diagnostic, paired with the
+#     assertion that the diagnostic is present and names the path;
+#   - no stamp in the real repo after a misinstalled call, paired by the
+#     stamp assertions in the delivery test;
+#   - "enumerated" absent from the census refusal, paired with the two
+#     assertions naming the planted files.
+unpaired-absence	tests/run.py	expect(not (q.stdout or b"").decode().strip(),
+unpaired-absence	tests/run.py	expect(not os.path.isdir(os.path.join(t, ".claude", "rules")),
+unpaired-absence	tests/run.py	expect("code files" not in (c.out + c.err),
+unpaired-absence	tests/run.py	expect("## Liveness" not in ctx,
+unpaired-absence	tests/run.py	expect(not os.path.isfile(os.path.join(ROOT, ".reviews",
+unpaired-absence	tests/run.py	expect("enumerated" not in (q.out + q.err),
+
+# --check's own refusal text and its classification branches, not test
+# assertions. Controls E1 and D4 turn each of them red on its own.
+unpaired-absence	tools/rules-hook.sh	print(f"rules-hook --check: not in a checkout -- no {rules_dir} "
+
+# The stale-exemption branch in --check, not a test assertion. Control D4
+# (an UNOWNED row naming a file that never existed) turns it red.
+unpaired-absence	tools/rules-hook.sh	if p not in tracked:

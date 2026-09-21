@@ -701,8 +701,21 @@ never read the map it claimed to", with the parties swapped.
 
 **It DOWNGRADES the failure rather than removing it, and that is the honest
 claim.** What it catches is a code file nobody has thought about: added,
-tracked, owned by no territory and named in no exemption. What it does not
-catch is a file that is owned and *undescribed*. The live instance is
+tracked, owned by no territory and named in no exemption.
+
+**It does not catch a file owned by the WRONG territory, and no check can
+without becoming the thing this decision refuses.** `control` moved most of
+`MAP`'s members to another territory one at a time and the target stayed
+green for all but the few the anchors pin — an agent editing `dawn.c` would
+be handed `plan.md`, and both the gate and the suite print OK. The fix that
+suggests itself is an assertion listing where each file belongs, and that
+assertion is a second copy of `MAP`: the two-lists problem, arriving as a
+test. Checking an assignment needs a second opinion about the assignment,
+and a second opinion is a second list. So this is residue, deliberately,
+and the anchors exist to catch a classifier that has stopped working rather
+than a map that is wrong.
+
+What it also does not catch is a file that is owned and *undescribed*. The live instance is
 `lids.h` — owned by `runtime`, and `runtime.md` does not name it anywhere,
 which is exactly what `1ac0235`'s commit message flagged when it said "the
 whole boot chain" was false because `lids.h` was claimed by no scope. The
