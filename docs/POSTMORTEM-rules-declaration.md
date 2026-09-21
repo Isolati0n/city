@@ -1,30 +1,44 @@
 # Post-mortem: five attempts to write down who owns which file
 
 **Status: history, not instructions.** Nothing below is a task. The work it
-describes was on `origin/rules-declaration`, which was never merged and was
-deleted in the push that landed this document; the decision that replaced it
-is in `CLAUDE.md`'s "Who owns which file" and the mechanism is
-`tools/rules-hook.sh --check`.
+describes was on `origin/rules-declaration`, which was never merged; the
+decision that replaced it is in `CLAUDE.md`'s "Who owns which file" and the
+mechanism is `tools/rules-hook.sh --check`.
 
-**The hashes in the next section are reachable from no ref**, and that is
-a cost of the deletion rather than an oversight. `git show` may still
-answer for them in a clone that had the branch — an unreachable object is
-not an unresolvable one, and `e62c6a6` demonstrated exactly that for the
-whole time this document described it as unreachable — but nothing keeps
-them, so treat them as names for what happened rather than as things a
-reader can count on fetching. They were all verified against the ref
-before it went: `claims` re-checked the parent chain, the contents of each
-commit, and that `e62c6a6` was reachable from no ref. (This paragraph said
-"no longer resolve", which is the wrong predicate and would have stayed
-wrong after the deletion. `claims` ran it.) The findings are kept because
-they are the only record of how five attempts at one small thing went
-wrong, and because the way they were found is worth more than what they
-found.
+**THE BRANCH IS STILL ON `origin` AND THIS ENVIRONMENT CANNOT DELETE IT.**
+The local ref is gone. The remote one is not, and the reason is worth
+writing down rather than retrying: `git push origin :refs/heads/rules-declaration`
+answers **HTTP 403 Forbidden** from the git proxy this session pushes
+through, four attempts, while an ordinary push to the same remote succeeds
+and the GitHub tools available here expose branch creation and listing but
+no deletion. Deleting it is one action for whoever has a shell without this
+proxy, or the button on the branch page.
+
+*This paragraph said the branch "was deleted in the push that landed this
+document" — written ahead of the action, landed, and false the moment it
+landed, because the push it named was refused. It is the characteristic
+failure inside the post-mortem about it, and the tell was that the failing
+command exited 0: `git push --delete` printed `send-pack: unexpected
+disconnect` and then `Everything up-to-date` and returned success.
+`git ls-remote --heads origin` is what showed it, and is what anyone should
+run before believing a deletion happened.*
+
+**The hashes in the next section are reachable while the branch is**, and
+stop being so on the day somebody deletes it. `e62c6a6` is the one that is
+already unreachable, and it shows what that does and does not mean: `git
+show` still answers for it, because an unreachable object is not an
+unresolvable one — it is just one nothing keeps. So after the deletion,
+treat all of them as names for what happened rather than as things a reader
+can count on fetching. They were verified while the ref was live: `claims`
+re-checked the parent chain, the contents of each commit, and that
+`e62c6a6` was reachable from no ref. The findings are kept because they are
+the only record of how five attempts at one small thing went wrong, and
+because the way they were found is worth more than what they found.
 
 ## The branch
 
-Based on `bd49568`, pushed to `origin/rules-declaration` and deleted in the
-push that landed this document on `main`.
+Based on `bd49568`, pushed to `origin/rules-declaration`. Still there —
+see the status note above.
 
 | commit | held |
 |---|---|
