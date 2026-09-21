@@ -697,12 +697,21 @@ never read the map it claimed to", with the parties swapped.
 **It DOWNGRADES the failure rather than removing it, and that is the honest
 claim.** What it catches is a code file nobody has thought about: added,
 tracked, owned by no territory and named in no exemption. What it does not
-catch is a file that is owned and *undescribed* — `tools/initrd-init.c`
-belongs to `runtime` now, and if `runtime.md` never mentioned it the rules
-would still be delivered for it and nothing would say the prose is silent.
-The residue is a documentation gap, and **nothing checks prose.** It also
-cannot see a file that has not been `git add`ed, because its input is
-`git ls-files`.
+catch is a file that is owned and *undescribed*. The live instance is
+`lids.h` — owned by `runtime`, and `runtime.md` does not name it anywhere,
+which is exactly what `1ac0235`'s commit message flagged when it said "the
+whole boot chain" was false because `lids.h` was claimed by no scope. The
+rules are delivered for it and the prose is silent about it, and the census
+says OK because ownership is all it asks about. The residue is a
+documentation gap, and **nothing checks prose** — deliberately, because
+checking prose is what attempt three did.
+
+Two further limits, stated rather than discovered. The census cannot see a
+file that has not been `git add`ed, because its input is `git ls-files`. And
+measuring "undescribed" by whether a rules file names the basename
+over-reports: every `houses/*.c` fixture comes back undescribed, and
+`harness.md` says in as many words to read `houses/` rather than any list
+written down in it. That is a deliberate non-description, not a gap.
 
 What the map does not settle, because it is not a map question:
 

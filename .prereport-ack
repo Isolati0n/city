@@ -487,11 +487,6 @@ unpaired-absence	.claude/rules/runtime.md	machine. **Plus `rescue.c`, which is y
 # stamp at all, which is the silent-no-op this pair exists to catch.
 unpaired-absence	tests/run.py	expect(not os.path.exists(os.path.join(foreign, ".reviews")),
 
-# The unowned-file negative, fired from the same foreign cwd as the
-# positive directly above it. A hook that had gone silent for cwd reasons
-# fails that positive first, which is what makes this line mean "no
-# territory owns tools/mkboot.sh" rather than "the hook is dead".
-unpaired-absence	tests/run.py	expect(fire(foreign, os.path.join(ROOT, "tools", "mkboot.sh")) is None,
 
 # Not a test assertion -- this is --check's own classification branch, the
 # line that decides a file is unaccounted for. The matcher is looking for
@@ -503,3 +498,11 @@ unpaired-absence	tools/rules-hook.sh	elif not t and why is None:
 # that day. The absolute counts that would age were removed from this
 # comment in the same edit.
 prose-count	.gitignore	# built that way came up one code file short.
+
+# Re-keyed: the unowned probe moved from tools/mkboot.sh to
+# tools/review-gate.sh when mkboot.sh was given to runtime, so the old
+# ack's text no longer matches. Same pairing as before -- the delivery
+# assertions above it fire the hook successfully from the same foreign
+# cwd under the same settings.json command, so a hook that had gone
+# silent fails there first.
+unpaired-absence	tests/run.py	expect(fire(foreign, os.path.join(ROOT, unowned)) is None,

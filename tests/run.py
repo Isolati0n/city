@@ -1560,35 +1560,55 @@ def test_term_signal():
 
 
 def test_rules_hook_delivers_from_any_cwd():
-    """The hook answers where settings.json actually calls it from.
+    """The hook answers where .claude/settings.json actually calls it from,
+    and the invocation under test is READ FROM settings.json.
 
-    .claude/settings.json runs `sh "$CLAUDE_PROJECT_DIR/tools/rules-hook.sh"`
-    and guarantees the SCRIPT PATH, not the working directory. Before the
-    root fix, `src` and the .reviews stamp were both cwd-relative, so a call
-    from anywhere but the repo root built a territory name and then failed to
-    open the file -- delivering nothing, at exit 0, indistinguishable from a
-    file no territory owns.
+    Copying the command string into this file would test a copy of the
+    contract. With the root taken from $0, the invocation IS the contract:
+    `sh "$CLAUDE_PROJECT_DIR/tools/rules-hook.sh"` makes $0 the script's own
+    absolute path, and any other shape -- piping the script into sh, say --
+    does not. So the test parses settings.json and runs whatever it finds.
 
-    WHETHER CLAUDE CODE ACTUALLY RUNS HOOKS FROM ELSEWHERE IS UNVERIFIED.
-    Nothing in this tree can establish it. The case is pinned anyway: the
-    cost of pinning it is this function, and the cost of not pinning it is a
-    rules mechanism that is silent in production and green in the lab, which
-    is the failure this whole area keeps producing.
+    Before the root fix, `src` and the .reviews stamp were cwd-relative, so
+    a call from anywhere but the repo root built a territory name and then
+    failed to open the file: nothing delivered, exit 0, indistinguishable
+    from a file no territory owns.
+
+    WHETHER CLAUDE CODE RUNS HOOKS FROM ELSEWHERE IS UNVERIFIED. Nothing in
+    this tree can establish it. Pinned anyway: the cost of pinning is this
+    function, and the cost of not pinning it is a rules mechanism that is
+    silent in production and green in the lab.
 
     The stamp half is not decoration. A stamp written relative to the cwd
-    lands somewhere new on every call, so the once-per-territory suppression
-    silently stops suppressing -- and the hook swallows stamp errors by
-    design, so nothing says so.
+    lands somewhere new on every call, so the once-per-territory
+    suppression silently stops suppressing -- and the hook swallows stamp
+    errors by design, so nothing says so.
     """
-    hook = os.path.join(ROOT, "tools", "rules-hook.sh")
+    settings = os.path.join(ROOT, ".claude", "settings.json")
+    cfg = json.load(open(settings))
+    cmds = [h.get("command", "")
+            for grp in cfg.get("hooks", {}).get("PreToolUse", [])
+            for h in grp.get("hooks", [])
+            if "rules-hook" in h.get("command", "")]
+    # FIXTURE FIRST, because every failure below is a silence and a
+    # settings.json this could not parse would produce the same one.
+    expect(len(cmds) == 1,
+           f"expected exactly one PreToolUse command naming rules-hook in "
+           f"{settings}, found {cmds!r}")
+    command = cmds[0]
+    expect("CLAUDE_PROJECT_DIR" in command,
+           f"the hook command does not mention CLAUDE_PROJECT_DIR, so "
+           f"substituting it below tests nothing: {command!r}")
+
     stamps = os.path.join(ROOT, ".reviews")
 
     def fire(cwd, path):
         for st in glob.glob(os.path.join(stamps, ".rules.*")):
             os.unlink(st)
+        env = dict(os.environ, CLAUDE_PROJECT_DIR=ROOT)
         ev = {"tool_input": {"file_path": path}}
-        p = subprocess.run(["sh", hook], input=json.dumps(ev).encode(),
-                           capture_output=True, cwd=cwd)
+        p = subprocess.run(["sh", "-c", command], input=json.dumps(ev).encode(),
+                           capture_output=True, cwd=cwd, env=env)
         expect(p.returncode == 0,
                f"the hook must always exit 0 on the event path, got "
                f"{p.returncode}")
@@ -1597,23 +1617,29 @@ def test_rules_hook_delivers_from_any_cwd():
             return None
         return json.loads(out)["hookSpecificOutput"]["additionalContext"]
 
+    # NOT OWNED, and picked to stay that way: gate tooling has no rules
+    # file. If it ever gains one this goes red naming the file, which reads
+    # correctly rather than as a hook fault.
+    unowned = "tools/review-gate.sh"
+    expect(os.path.isfile(os.path.join(ROOT, unowned)),
+           f"{unowned} must exist or the negative below proves nothing")
+
     foreign = tempfile.mkdtemp(prefix="nw-hook-cwd-")
     try:
         ctx = fire(foreign, os.path.join(ROOT, "nwsup.c"))
         expect(ctx is not None,
-               "the hook delivered nothing for nwsup.c when called the way "
-               "settings.json calls it: absolute file_path, cwd outside the "
-               "repo. Every path it uses must hang off the script location.")
+               "the hook delivered nothing for nwsup.c under settings.json's "
+               "own command with the cwd outside the repo. Every path it "
+               "uses must hang off the script location.")
         expect(ctx.startswith("Rules for the runtime territory"),
                f"wrong territory from a foreign cwd: {ctx[:60]!r}")
-        # THE BODY, not the announcement. Delivering the header with an
-        # empty rules file underneath is the failure mode the announcement
-        # cannot see, and putting the text in front of an agent is the
-        # entire purpose of this hook.
+        # THE BODY, not the announcement. Delivering a header with an empty
+        # rules file under it is the failure the announcement cannot see,
+        # and putting the text in front of an agent is the whole purpose.
         body = ctx.split("\n\n", 1)[1] if "\n\n" in ctx else ""
-        expect("# runtime — territory rules" in body,
-               f"delivered an announcement with no rules body under it "
-               f"({len(body)} bytes)")
+        expect("## Liveness" in body and "# runtime — territory rules" in body,
+               f"delivered an announcement with no runtime rules body under "
+               f"it ({len(body)} bytes)")
         expect(os.path.isfile(os.path.join(stamps, ".rules.runtime")),
                "no stamp under the repo's .reviews after a delivery, so the "
                "once-per-territory suppression is writing somewhere else or "
@@ -1621,20 +1647,19 @@ def test_rules_hook_delivers_from_any_cwd():
         expect(not os.path.exists(os.path.join(foreign, ".reviews")),
                "the hook wrote its stamp into the caller's cwd")
 
-        # Paired: the same foreign cwd, a file no territory owns. Without
-        # this the positive is satisfied by a hook that delivers runtime for
-        # everything.
-        expect(fire(foreign, os.path.join(ROOT, "tools", "mkboot.sh")) is None,
-               "the hook delivered for tools/mkboot.sh, which no territory "
-               "owns")
+        # Paired: same command, same foreign cwd, a file no territory owns.
+        # Without this the positive is satisfied by a hook that delivers
+        # runtime for everything.
+        expect(fire(foreign, os.path.join(ROOT, unowned)) is None,
+               f"the hook delivered for {unowned}, which no territory owns")
     finally:
         shutil.rmtree(foreign, ignore_errors=True)
         for st in glob.glob(os.path.join(stamps, ".rules.*")):
             os.unlink(st)
 
-    print("ok rules-hook-cwd (absolute file_path from a foreign cwd delivers "
-          "the runtime body and stamps the repo, not the cwd; an unowned "
-          "file is silent from the same cwd)")
+    print(f"ok rules-hook-cwd (settings.json's own command, run from a "
+          f"foreign cwd, delivers the runtime body and stamps the repo not "
+          f"the cwd; {unowned} silent from the same cwd, paired)")
 
 
 def test_every_code_file_is_accounted_for():

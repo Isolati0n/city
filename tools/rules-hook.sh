@@ -78,10 +78,13 @@ mode, root, raw = sys.argv[1], sys.argv[2], sys.argv[3]
 
 MAP = [
     ({"dawn.c", "pid1.c", "nwspawn.c", "nwsup.c", "lids.c", "lids.h",
-      "rescue.c", "initrd-init.c"}, "runtime"),
+      "rescue.c", "initrd-init.c", "mkboot.sh",
+      "landlock-assertions-dryrun.py"}, "runtime"),
     ({"blob.h", "nwcheck.c", "nwcheck_main.c", "nw-cc.py", "plan.als",
-      "Plan.tla"}, "plan"),
-    ({"run.py", "unit_probe.c"}, "harness"),
+      "Plan.tla", "stage-candidate.py", "gen-spec-limits.py",
+      "caller_nw_check.c", "leaf_name_dup.c", "leaf_name_ok.c",
+      "leaf_path_ok.c"}, "plan"),
+    ({"run.py", "unit_probe.c", "scale-probe.py"}, "harness"),
 ]
 
 # Tracked code files that no territory owns, each with the reason there is
@@ -108,12 +111,16 @@ UNOWNED = [
     ("install-agents.sh",
      "the brief gate, and the caller of this file's --check. No rules "
      "file describes the gate tooling."),
-    ("proofs/",
-     "the CBMC harnesses and their runner. plan.md owns nwcheck.c, but "
-     "the proofs are a separate discipline with their own README and "
-     "their own bound rules, governed by CLAUDE.md's build section. "
-     "Grouped as one entry because proofs/ is one thing; every other "
-     "entry here is a single file."),
+    ("proofs/mkcomp.py",
+     "assembles a proof's compilation unit. proofs/README.md governs it "
+     "and no rules file does. NOT a prefix entry for proofs/: the four "
+     "harnesses beneath it are plan's, and a directory exemption would "
+     "have let a new file under proofs/ through the census silently, "
+     "which is the blind spot the census exists to catch."),
+    ("proofs/run.sh",
+     "the proof runner -- bounds, timing, the SKIP-versus-FAIL exit "
+     "codes CLAUDE.md's build section is about. Same reasoning as "
+     "mkcomp.py; governed by prose that is not a rules file."),
     ("tools/checkbrief.py",
      "verifies CLAUDE.md's invariant annotations. Gate tooling, no "
      "rules file."),
@@ -125,16 +132,9 @@ UNOWNED = [
      "the coverage floor make test enforces. Gate tooling."),
     ("tools/fold-house.py",
      "CLAUDE.md invariant 9's actual subject -- the invariant is about "
-     "this caller and says so -- and no territory owns it."),
-    ("tools/gen-spec-limits.py",
-     "generates the spec limit files out of blob.h. Invariant 3 turns "
-     "on it and plan.md describes it; plan.md does not own it."),
-    ("tools/landlock-assertions-dryrun.py",
-     "a dry-run probe for the Landlock rights. runtime.md argues the "
-     "rights at length and does not own the probe."),
-    ("tools/mkboot.sh",
-     "burns the boot image. plan.md's sidecar bullet turns on which "
-     "files this copies into the ESP; it does not own the script."),
+     "this caller and says so -- and no territory owns it. The rule "
+     "that governs it is a numbered invariant in CLAUDE.md, which every "
+     "agent already has, so delivery would add nothing."),
     ("tools/prereport.py",
      "the pre-push heuristics. Gate tooling."),
     ("tools/review-gate.sh",
@@ -145,15 +145,14 @@ UNOWNED = [
      "this file. Delivery is not itself a territory, and no rules file "
      "states the hook's contract -- which is the gap, not the "
      "circularity."),
-    ("tools/scale-probe.py",
-     "the scale ladder. harness.md's Scale section is mostly about this "
-     "tool and does not own it."),
-    ("tools/stage-candidate.py",
-     "stages a candidate slot. plan.md's sidecar rules are statements "
-     "about this tool's refusals; it does not own it."),
     ("tools/stage-layers.py",
-     "runtime.md's THE RECOVERY is a two-line procedure whose second "
-     "line is this tool. Described as load-bearing, owned by nobody."),
+     "SPANS plan AND runtime, which is why it is here rather than in "
+     "either. plan.md's sidecar rules are statements about which files "
+     "it refuses and how it re-derives the blob hash; runtime.md's THE "
+     "RECOVERY is a two-line procedure whose second line is this tool, "
+     "and its \"nw-sup creates NEITHER\" rule is a statement about what "
+     "this tool must create. Editing it wants both, and the hook "
+     "delivers one. Assigning it to either would silence the other."),
 ]
 
 CODE = (".c", ".h", ".py", ".sh", ".als", ".tla")
