@@ -53,8 +53,9 @@ second list earns a comparator only when the two lists have *different edit
 paths* — otherwise the comparator is checking that one edit was made twice.
 These do not: `a65286e` rewrapped `MAP`'s whitespace and left its membership
 unchanged, and the commits that changed its membership mostly changed the
-rules files too. Mostly, not always, and the exception matters: the commit
-that first wrote this argument down changed `MAP` and touched no rules file.
+rules files too. Mostly, not always, and the exceptions matter: two
+commits in the series changed membership without touching a rules file, and
+the larger of them added six names.
 So the historical claim is weaker than it was stated as, and the argument
 that survives is structural — a second list here would exist only to be
 compared, so it would be maintained by the comparator rather than by anyone

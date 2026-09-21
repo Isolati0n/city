@@ -715,12 +715,22 @@ and a second opinion is a second list. So this is residue, deliberately,
 and the anchors exist to catch a classifier that has stopped working rather
 than a map that is wrong.
 
-What it also does not catch is a file that is owned and *undescribed*. The live instance is
-`lids.h` — owned by `runtime`, and `runtime.md` does not name it anywhere,
-which is exactly what `1ac0235`'s commit message flagged when it said "the
-whole boot chain" was false because `lids.h` was claimed by no scope. The
-rules are delivered for it and the prose is silent about it, and the census
-says OK because ownership is all it asks about. The residue is a
+What it also does not catch is a file that is owned and *undescribed*, and
+there is more than one. Read them off the tree rather than a list here:
+
+    for t in $(sh tools/rules-hook.sh --territories); do
+      for f in $(sh tools/rules-hook.sh --owns $t); do
+        grep -qF -- "$f" .claude/rules/$t.md || echo "$t: $f"
+      done
+    done
+
+`lids.h` is the oldest and the one `1ac0235`'s message flagged when it said
+"the whole boot chain" was false because `lids.h` was claimed by no scope.
+Most of the rest were added to the map by the change that wrote this
+paragraph, which is why the singular it first claimed was wrong on the day
+it landed. The rules are delivered for every one of them and the prose is
+silent about them, and the census says OK because ownership is all it asks
+about. The residue is a
 documentation gap, and **nothing checks prose** — deliberately, because
 checking prose is what attempt three did.
 

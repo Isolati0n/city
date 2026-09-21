@@ -134,8 +134,10 @@ MAP = [
 SHARED = {
     "stage-layers.py": (
         ("plan", "runtime"),
-        "plan.md's sidecar rules are statements about which lines this "
-        "tool refuses and how it re-derives the blob hash; runtime.md's "
+        "plan.md's sidecar rules are statements about this tool -- which "
+        "field of a .layers line it reads, that it refuses when the hash "
+        "sidecar is missing beside the layer one, and that it re-derives "
+        "the blob hash rather than trusting it; runtime.md's "
         "THE RECOVERY is a two-line procedure whose second line is this "
         "tool, and its \"nw-sup creates NEITHER\" rule says what it must "
         "create. Editing it wants both."),
@@ -204,6 +206,14 @@ UNOWNED = [
      "--check -- and that is the gap, not the circularity."),
 ]
 
+# Ownership by directory, for a territory whose members are not worth
+# naming one by one. IN THE DATA, not in classify()'s body: it used to be
+# an `if "houses/" in path` arm, so --owns could not see it and left every
+# fixture house out of the listing -- the stale-enumeration
+# defect this change exists to remove, one level down, in the display
+# that replaced the stale prose. `claims`.
+PATH_RULES = [("houses/", "harness")]
+
 CODE = (".c", ".h", ".py", ".sh", ".als", ".tla")
 
 
@@ -231,8 +241,8 @@ def classify(path):
     """
     base = os.path.basename(path)
     out = _match(lambda b: b == base)
-    if not out and "houses/" in path:
-        out = ["harness"]
+    if not out:
+        out = [n for pre, n in PATH_RULES if pre in path]
     return out
 
 
@@ -245,8 +255,9 @@ def classify_cmd(cmd):
     """
     out = _match(lambda b: re.search(r"(?<![\w/.-])" + re.escape(b)
                                      + r"(?![\w-])", cmd))
-    if not out and re.search(r"houses/\w", cmd):
-        out = ["harness"]
+    if not out:
+        out = [n for pre, n in PATH_RULES
+               if re.search(re.escape(pre) + r"\w", cmd)]
     return out
 
 
@@ -262,10 +273,11 @@ def owns(name):
     nothing checked. It goes stale the moment MAP moves, which `claims`
     found it had: the runtime scope named six files while MAP had more.
     """
+    out = [pre for pre, n in PATH_RULES if n == name]
     for names, n in MAP:
         if n == name:
-            return sorted(names)
-    return []
+            out += list(names)
+    return sorted(out)
 
 
 def unowned_reason(rel):
@@ -369,6 +381,22 @@ def check():
             bad.append(f"UNOWNED entry {p!r} has no reason")
         if p not in tracked:
             bad.append(f"UNOWNED entry {p!r} is not a tracked code file")
+    # A MAP NAME FOR A FILE THAT DOES NOT EXIST, which is this project's
+    # opening record -- a brief for a binary that had been deleted --
+    # representable in the map itself. The reverse loop was already
+    # written twice beside this one, for UNOWNED and SHARED, and not for
+    # MAP. `claims`.
+    bases = {os.path.basename(f) for f in tracked}
+    for names, n in MAP:
+        for b in sorted(names):
+            if b not in bases:
+                bad.append(f"MAP gives {n} the name {b!r} and no tracked "
+                           f"code file is called that")
+    for pre, n in PATH_RULES:
+        if not any(pre in f for f in tracked):
+            bad.append(f"PATH_RULES gives {n} the prefix {pre!r} and no "
+                       f"tracked code file is under it")
+
     for base, (terrs, why) in SHARED.items():
         unknown = [x for x in terrs if x not in territories()]
         if unknown:

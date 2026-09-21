@@ -572,3 +572,13 @@ unpaired-absence	tools/rules-hook.sh	print(f"rules-hook --check: not in a checko
 # The stale-exemption branch in --check, not a test assertion. Control D4
 # (an UNOWNED row naming a file that never existed) turns it red.
 unpaired-absence	tools/rules-hook.sh	if p not in tracked:
+
+# The final round, 2026-09-21.
+
+# "make test is not one step" -- English, and the sentence immediately
+# after it now says to read the target rather than giving a number.
+prose-count	.claude/rules/harness.md	**The partial-gate trap.** `make test` is not one step. **Read the target
+
+# The reverse MAP loop's own branch -- a declared name matching no
+# tracked file -- not a test assertion. Control G2 turns it red.
+unpaired-absence	tools/rules-hook.sh	if b not in bases:
