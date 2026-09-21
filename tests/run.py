@@ -8234,10 +8234,177 @@ def _fold_house_body(made):
             f"id {nid}; live slot and current untouched; candidate in {slot})")
 
 
+def test_subset_run_is_not_a_gate():
+    """`--only` refuses what it cannot run, and cannot be mistaken for a gate.
+
+    THE DEFECT THIS EXISTS TO PREVENT is a misspelled name running zero
+    tests and exiting 0. "Nothing failed" and "nothing ran" are the same
+    output, and the second reads as the first -- the absence shape, in
+    the runner that everything else in this file is reported through. A
+    subset that exits 0 having run nothing is worse than a broken flag,
+    because the report says the tests passed.
+
+    Controls, each run: delete the `bad` check in _select and case A
+    goes green having run nothing; return the matched subset instead of
+    refusing and case B runs `hash-pin` and exits 0 under a request
+    naming a test that does not exist; drop the `subset is not None`
+    guard before `write_coverage` and case D sees the tracked coverage
+    record replaced by a one-test list.
+
+    The absences here are paired by case E, which requires the same
+    runner to produce every string the refusals must not.
+    """
+    import subprocess as sp
+    env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
+
+    def run_only(*args):
+        r = sp.run([sys.executable, os.path.join(ROOT, "tests", "run.py")]
+                   + list(args), cwd=ROOT, env=env, capture_output=True,
+                   text=True)
+        return r.returncode, r.stdout + r.stderr
+
+    # A. A MISSPELLING IS FATAL AND SAYS SO, and names the valid set --
+    #    without that the message sends the reader to grep for names.
+    rc, out = run_only("--only", "hash-pinn")
+    expect(rc != 0, f"a misspelled --only name exited {rc}:\n{out}")
+    expect("names no such test" in out and "hash-pinn" in out,
+           f"the refusal does not name what it rejected:\n{out}")
+    expect("hash-pin\n" in out,
+           f"the refusal does not list the valid names, so a reader cannot "
+           f"see the one they meant:\n{out[:400]}")
+    expect("== city suite ==" not in out,
+           f"a misspelled name still started the suite:\n{out[:300]}")
+
+    # B. A PARTIAL MATCH DOES NOT RUN THE PART THAT MATCHED. Running the
+    #    names it recognised and dropping the rest is the worse answer:
+    #    the report then says the requested tests passed.
+    rc, out = run_only("--only", "hash-pin,nosuch")
+    expect(rc != 0, f"a partly-unknown --only exited {rc}:\n{out}")
+    expect("ok hash-pin" not in out,
+           f"it ran the half it recognised and refused the rest:\n{out}")
+
+    # C. AN EMPTY SELECTION AND AN UNKNOWN ARGUMENT ARE BOTH FATAL.
+    #    `--onyl hash-pin` silently running the whole suite would read as
+    #    having honoured the flag.
+    rc, out = run_only("--only", ",,")
+    expect(rc != 0 and "selected nothing" in out,
+           f"--only with no names exited {rc}:\n{out}")
+    rc, out = run_only("--onyl", "hash-pin")
+    expect(rc != 0 and "unknown argument" in out,
+           f"a misspelled FLAG was ignored and the run continued:\n{out}")
+
+    # D. THE TRACKED COVERAGE RECORD IS NOT TOUCHED. write_coverage
+    #    OVERWRITES coverage/<label>.json with `passed`, the file is in
+    #    git, and tools/coverage-merge.sh reads it -- so a subset run
+    #    without the guard replaces a full run's record with a short list
+    #    and the merge reports covered tests as uncovered. The damage
+    #    outlives the run.
+    cov = os.path.join(ROOT, "coverage")
+    before = {f: open(os.path.join(cov, f), "rb").read()
+              for f in sorted(os.listdir(cov))}
+    expect(before, "no coverage records exist, so case D proves nothing")
+    #    AND THE FIXTURE MUST NOT ALREADY HOLD WHAT THE MUTATION WOULD
+    #    WRITE. An unchanged-comparison is blinded when `before` is
+    #    already a subset artifact: the guard could be gone and the two
+    #    snapshots would still match. This is CLAUDE.md's blinded mode,
+    #    and a control harness that left a corrupted record behind is how
+    #    you meet it -- one such run here reported green and the cause was
+    #    never pinned down, so the precondition closes the class rather
+    #    than the instance.
+    import json as _json
+    for f, raw in before.items():
+        got = _json.loads(raw).get("passed")
+        expect(got != ["hash-pin"],
+               f"coverage/{f} already lists exactly the test case E runs, "
+               f"so comparing it before and after cannot see a write. "
+               f"Restore it with `git checkout -- coverage/` and re-run.")
+
+    # E. THE PAIRED POSITIVE: the same runner, a name that exists. Without
+    #    it every absence above is satisfied by a runner that refuses
+    #    everything.
+    rc, out = run_only("--only", "hash-pin")
+    expect(rc == 0, f"a valid --only run exited {rc}:\n{out}")
+    expect(out.startswith("== SUBSET RUN -- NOT A GATE =="),
+           f"the subset banner is not the first thing out, so a pasted "
+           f"result is indistinguishable from a suite result once the "
+           f"header scrolls off:\n{out[:200]!r}")
+    expect("== city suite ==" in out and "ok hash-pin" in out,
+           f"the valid subset did not run its test:\n{out}")
+    expect("ALL TESTS PASSED" not in out,
+           f"a subset printed the suite's own green line:\n{out}")
+
+    after = {f: open(os.path.join(cov, f), "rb").read()
+             for f in sorted(os.listdir(cov))}
+    expect(after == before,
+           "a subset run wrote a coverage record; that file is tracked and "
+           "coverage-merge.sh reads it, so a short list would replace a "
+           "full run's")
+
+    print("ok subset-run-is-not-a-gate (a misspelled name, a partial match, "
+          "an empty selection and an unknown flag are each fatal and run "
+          "nothing; a valid subset banners first, runs, and leaves the "
+          "tracked coverage record alone)")
+
+
+def _select(argv, tests):
+    """The `--only` subset, or None for a full run. Refuses rather than
+    narrowing silently.
+
+    THE FAILURE THIS EXISTS TO PREVENT is a misspelled name running zero
+    tests and exiting 0, which is the absence shape: "nothing failed" and
+    "nothing ran" are the same output, and the second reads as the first.
+    So an unknown name is fatal and names the valid ones, an empty
+    selection is fatal, and a partial match does NOT run the part that
+    matched -- running four of five requested tests green is a worse
+    answer than refusing, because the report says the suite passed.
+    """
+    known = {t.__name__[len("test_"):].replace("_", "-"): t for t in tests}
+
+    def norm(n):
+        n = n.strip()
+        for pre in ("test_", "test-"):
+            if n.startswith(pre):
+                n = n[len(pre):]
+        return n.replace("_", "-")
+
+    req, i, saw_flag = [], 0, False
+    while i < len(argv):
+        a = argv[i]
+        if a == "--only":
+            saw_flag = True
+            if i + 1 >= len(argv):
+                raise SystemExit("FAIL: --only needs a comma-separated list "
+                                 "of test names")
+            req += argv[i + 1].split(",")
+            i += 2
+        elif a.startswith("--only="):
+            saw_flag = True
+            req += a[len("--only="):].split(",")
+            i += 1
+        else:
+            # UNKNOWN ARGUMENT IS FATAL, not ignored. Ignoring it is how
+            # `--onyl hash-pin` runs the whole suite and reads as having
+            # honoured the flag.
+            raise SystemExit(f"FAIL: unknown argument {a!r}. The only option "
+                             f"is --only <name>[,<name>...]")
+    if not saw_flag:
+        return None
+
+    names = [norm(r) for r in req if r.strip()]
+    bad = [r.strip() for r in req if r.strip() and norm(r) not in known]
+    if bad:
+        raise SystemExit(
+            f"FAIL: --only names no such test: {', '.join(sorted(bad))}\n"
+            f"       valid names are:\n         "
+            + "\n         ".join(sorted(known)))
+    if not names:
+        raise SystemExit("FAIL: --only selected nothing. Give at least one "
+                         "test name, or drop the flag to run the suite.")
+    return [known[n] for n in dict.fromkeys(names)]
+
+
 def main():
     os.chdir(ROOT)
-    print_environment()
-    print("== city suite ==")
     tests = [
         test_build_is_reproducible, test_brick_image_reproducible,
         test_harness_runs_fresh_binaries, test_coverage_accounting,
@@ -8277,7 +8444,26 @@ def main():
         test_baker_writes_the_declared_layout,
         test_non_provision_at_max,
         test_landlock_confines,
+        test_subset_run_is_not_a_gate,
     ]
+
+    # THE BANNER IS THE FIRST THING OUT, before the environment block,
+    # because a subset result pasted into a report is indistinguishable
+    # from a suite result once the header scrolls off. `make test` stays
+    # the only green that counts before a push; this is for iterating.
+    subset = _select(sys.argv[1:], tests)
+    if subset is not None:
+        names = [t.__name__[len("test_"):].replace("_", "-") for t in subset]
+        print("== SUBSET RUN -- NOT A GATE ==")
+        print("   --only ran: " + ", ".join(names))
+        print("   `make test` is the only green that counts before a push. "
+               "Do not cite")
+        print("   this run as a suite result, and note that it writes no "
+               "coverage record.")
+        tests = subset
+
+    print_environment()
+    print("== city suite ==")
     passed = []
     for t in tests:
         before = len(SKIPPED)
@@ -8355,6 +8541,24 @@ def main():
         raise SystemExit(
             f"FAIL: skip name(s) {stray} match no test; a full skip must use "
             f"the test's own name or it will be counted as passed")
+
+    # A SUBSET RUN WRITES NO COVERAGE RECORD, and that is structural
+    # rather than remembered. write_coverage() OVERWRITES this machine's
+    # coverage/<label>.json with `passed`, and that file is tracked and
+    # read by tools/coverage-merge.sh -- so a subset run would quietly
+    # replace the record of a full run with a shorter list, and the merge
+    # would report tests as uncovered on a machine that covers them. The
+    # damage outlives the run and nothing would say so.
+    if subset is not None:
+        if SKIPPED:
+            print("SUBSET RUN -- skipped:")
+            for name, why in SKIPPED:
+                print(f"  {name}: {why}")
+        print("SUBSET RUN PASSED -- " + ", ".join(
+            t.__name__[len("test_"):].replace("_", "-") for t in tests))
+        print("This is not a gate and no coverage record was written. "
+              "Run `make test` before reporting or pushing.")
+        return
 
     rec = write_coverage(passed)
     if SKIPPED:

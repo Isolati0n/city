@@ -61,6 +61,7 @@
   "shutdown-does-not-restart",
   "slot-b",
   "specs-are-checked",
+  "subset-run-is-not-a-gate",
   "term-signal",
   "the-layer-reset-fires-once-per-run"
  ],
