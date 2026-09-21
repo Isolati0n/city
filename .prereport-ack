@@ -582,3 +582,9 @@ prose-count	.claude/rules/harness.md	**The partial-gate trap.** `make test` is n
 # The reverse MAP loop's own branch -- a declared name matching no
 # tracked file -- not a test assertion. Control G2 turns it red.
 unpaired-absence	tools/rules-hook.sh	if b not in bases:
+
+# The follow-up note about unpaired-absence firing on non-test code,
+# flagged by unpaired-absence, on the line quoting the tokens it fires
+# on. Twenty-fifth row of the round and the clearest single argument for
+# the narrowing the note describes.
+unpaired-absence	CLAUDE.md	— `--check`'s classification and validation branches, whose `is None` and

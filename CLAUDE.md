@@ -869,6 +869,33 @@ never examined; the measured proportion is in `HISTORY.md` §63, not
 here. Whether a count in a brief is caught depends on where the line
 wraps.
 
+**AND A THIRD, MEASURED ON THIS ROUND'S OWN ACK FILE, WHICH IS AN
+ARGUMENT ABOUT SCOPE RATHER THAN VOCABULARY.** The ownership round added
+24 ack rows, and only a minority are findings a reader would call
+findings. Seven are `unpaired-absence` on code that is not a test at all
+— `--check`'s classification and validation branches, whose `is None` and
+`not in` are the tool deciding something, with nothing to pair because
+they are not assertions. Eight more are that shape on genuine test
+negatives, every one of which is paired, because this suite's tests are
+mostly paired negatives by construction and `harness.md` requires them to
+be. Eight are `prose-count` on English — "two rules files", "the one case
+that must never happen" — where the sentence is the claim.
+
+So the shape fires hardest on the thing the rules mandate, and the ack
+file grows fastest when the tests are most correct. **Not narrowed here.**
+Restricting `unpaired-absence` to test functions, or teaching it that an
+`expect(` on the following lines is the pairing, is a matcher change and
+is its own change with its own controls — the same reasoning as the
+vocabulary above, and the same trap: a matcher edit made in passing is
+how the `which`-matches-English false positive shipped.
+
+The sequence, when someone takes it: narrow the shape, re-measure with the
+target, write the new calibration down, dispatch a reviewer. Note what
+would NOT settle it — counting how many acks were "fixed" instead. A fix
+count measures what the author chose to rewrite, not whether the acks were
+right, and reaching for it is how a heuristic's own quality gets argued
+from the wrong number.
+
 **There is a further blindness beside the gate, and widening the gate
 does not touch it.** `COUNTED` is a vocabulary, so a count of a noun it does not list
 is invisible even on a line the gate passes: `two checks` and `three
