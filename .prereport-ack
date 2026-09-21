@@ -478,3 +478,28 @@ unpaired-absence	.claude/rules/plan.md	"Written 2026-09-14. Not in the tree", an
 # ("which is yours") is the same sentence.
 tool-presence	.claude/rules/runtime.md	signals are not blocked at that point and no handler is installed, so
 unpaired-absence	.claude/rules/runtime.md	machine. **Plus `rescue.c`, which is yours and is NOT in that chain** —
+
+# The ownership census and the cwd delivery test, 2026-09-21.
+
+# Paired by the assertion on the line above it, which requires the stamp to
+# be present under the REPO's .reviews. Together they say the stamp went to
+# one specific place; either alone is satisfied by a hook that writes no
+# stamp at all, which is the silent-no-op this pair exists to catch.
+unpaired-absence	tests/run.py	expect(not os.path.exists(os.path.join(foreign, ".reviews")),
+
+# The unowned-file negative, fired from the same foreign cwd as the
+# positive directly above it. A hook that had gone silent for cwd reasons
+# fails that positive first, which is what makes this line mean "no
+# territory owns tools/mkboot.sh" rather than "the hook is dead".
+unpaired-absence	tests/run.py	expect(fire(foreign, os.path.join(ROOT, "tools", "mkboot.sh")) is None,
+
+# Not a test assertion -- this is --check's own classification branch, the
+# line that decides a file is unaccounted for. The matcher is looking for
+# an unpaired absence in a test and found an `is None` in a tool.
+unpaired-absence	tools/rules-hook.sh	elif not t and why is None:
+
+# The finding is the discrepancy, so the number IS the claim and cannot
+# age: the fixture came up short by one against whatever the tree held
+# that day. The absolute counts that would age were removed from this
+# comment in the same edit.
+prose-count	.gitignore	# built that way came up one code file short.

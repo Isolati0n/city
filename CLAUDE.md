@@ -667,13 +667,42 @@ remains outstanding. That is the form that has now been wrong twice.*
 
 ### Who owns which file
 
-**`.claude/rules/{plan,runtime,harness}.md` are the map. Do not write a
-second one here.** One was written on 2026-09-11 and contradicted the
-scopes; so did its replacement; so did the tool written to derive the
-replacement, which reported files as owned by substring-matching their
-names against a prose line and silently un-owned the boot chain when that
-line was rewrapped. Each was found by `claims`. The map is in one place
-and this file points at it.
+**`MAP` in `tools/rules-hook.sh` is the map. Do not write a second one
+anywhere.** Three attempts wrote one here: the first contradicted the rules
+files' scopes, so did its replacement, and so did the tool written to derive
+one from the other, which reported files as owned by substring-matching
+their names against a prose line and silently un-owned the boot chain when
+that line was rewrapped. A fourth put a machine-readable declaration in each
+rules file with a gate comparing it to the prose; it reproduced two of those
+bugs and was dropped. `docs/POSTMORTEM-rules-declaration.md` carries all
+five and the branch they are on.
+
+**No comparator, because a second list earns one only when the two lists
+have different edit paths, and these would not.** Of the commits that have
+touched `tools/rules-hook.sh`, all but one also touched `.claude/rules/`,
+and that one rewrapped `MAP`'s whitespace without changing its membership.
+Comparing a map to prose means parsing prose, which is what the derivation
+tool did.
+
+**What replaces the comparison is an absence check against reality.**
+`sh tools/rules-hook.sh --check` enumerates the tracked code files and
+requires each one to be classified into a territory or listed in `UNOWNED`
+with a reason; a blank reason is refused. It runs inside
+`install-agents.sh --check`, which `make test` runs before the suite,
+because the hook's event path exits 0 always and cannot refuse anything.
+The check and the delivery share one `classify()` — a check that re-read
+the map from outside would be the dropped attempt's own title, "the hook
+never read the map it claimed to", with the parties swapped.
+
+**It DOWNGRADES the failure rather than removing it, and that is the honest
+claim.** What it catches is a code file nobody has thought about: added,
+tracked, owned by no territory and named in no exemption. What it does not
+catch is a file that is owned and *undescribed* — `tools/initrd-init.c`
+belongs to `runtime` now, and if `runtime.md` never mentioned it the rules
+would still be delivered for it and nothing would say the prose is silent.
+The residue is a documentation gap, and **nothing checks prose.** It also
+cannot see a file that has not been `git add`ed, because its input is
+`git ls-files`.
 
 What the map does not settle, because it is not a map question:
 

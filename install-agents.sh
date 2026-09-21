@@ -70,7 +70,11 @@ KEPT='fd-auditor measurement'
 # carries no copy of their text, for the same reason it carries none of
 # fd-auditor's.
 RULEDIR=.claude/rules
-RULES='plan runtime harness'
+# NOT A THIRD COPY. The territory names live once, in tools/rules-hook.sh's
+# MAP, and it prints them. A list here would be a second place to edit and
+# the first one anybody forgot -- which is the whole subject of the
+# post-mortem in docs/POSTMORTEM-rules-declaration.md.
+RULES=$(sh tools/rules-hook.sh --territories)
 # Briefs superseded on 2026-09-10. Their content migrated into plan.md and
 # runtime.md; --check fails if one reappears, because two agents claiming the
 # same file is worse than either alone.
@@ -256,6 +260,17 @@ take it from the code at run time instead"
     done
 
     if [ $rc -eq 0 ]; then
+        # EVERY CODE FILE IS ACCOUNTED FOR, asked of the filesystem rather
+        # than of anything an author wrote. tools/rules-hook.sh --check
+        # enumerates the tracked tree and classifies each file through the
+        # SAME function the hook's event path uses, so the check and the
+        # delivery cannot disagree about what is owned. It lives there and
+        # is called here because the event path exits 0 always and cannot
+        # refuse anything.
+        if ! sh tools/rules-hook.sh --check; then
+            fail "tools/rules-hook.sh --check"
+        fi
+        [ "$rc" -eq 0 ] || exit "$rc"
         echo "install-agents: OK $(ls "$DIR" | wc -l | tr -d ' ') briefs"
     fi
     exit $rc

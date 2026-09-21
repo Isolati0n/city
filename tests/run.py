@@ -2,7 +2,9 @@
 """Put-together suite. Not in the TCB."""
 from __future__ import annotations
 
+import glob
 import hashlib
+import json
 import os
 import re
 import shutil
@@ -1555,6 +1557,146 @@ def test_term_signal():
     expect("exiting cleanly after TERM" in out, f"no clean exit\n{out}")
     expect("houses_reaped=1" in out, f"house was killed, not reaped\n{out}")
     print("ok term-signal")
+
+
+def test_rules_hook_delivers_from_any_cwd():
+    """The hook answers where settings.json actually calls it from.
+
+    .claude/settings.json runs `sh "$CLAUDE_PROJECT_DIR/tools/rules-hook.sh"`
+    and guarantees the SCRIPT PATH, not the working directory. Before the
+    root fix, `src` and the .reviews stamp were both cwd-relative, so a call
+    from anywhere but the repo root built a territory name and then failed to
+    open the file -- delivering nothing, at exit 0, indistinguishable from a
+    file no territory owns.
+
+    WHETHER CLAUDE CODE ACTUALLY RUNS HOOKS FROM ELSEWHERE IS UNVERIFIED.
+    Nothing in this tree can establish it. The case is pinned anyway: the
+    cost of pinning it is this function, and the cost of not pinning it is a
+    rules mechanism that is silent in production and green in the lab, which
+    is the failure this whole area keeps producing.
+
+    The stamp half is not decoration. A stamp written relative to the cwd
+    lands somewhere new on every call, so the once-per-territory suppression
+    silently stops suppressing -- and the hook swallows stamp errors by
+    design, so nothing says so.
+    """
+    hook = os.path.join(ROOT, "tools", "rules-hook.sh")
+    stamps = os.path.join(ROOT, ".reviews")
+
+    def fire(cwd, path):
+        for st in glob.glob(os.path.join(stamps, ".rules.*")):
+            os.unlink(st)
+        ev = {"tool_input": {"file_path": path}}
+        p = subprocess.run(["sh", hook], input=json.dumps(ev).encode(),
+                           capture_output=True, cwd=cwd)
+        expect(p.returncode == 0,
+               f"the hook must always exit 0 on the event path, got "
+               f"{p.returncode}")
+        out = (p.stdout or b"").decode()
+        if not out.strip():
+            return None
+        return json.loads(out)["hookSpecificOutput"]["additionalContext"]
+
+    foreign = tempfile.mkdtemp(prefix="nw-hook-cwd-")
+    try:
+        ctx = fire(foreign, os.path.join(ROOT, "nwsup.c"))
+        expect(ctx is not None,
+               "the hook delivered nothing for nwsup.c when called the way "
+               "settings.json calls it: absolute file_path, cwd outside the "
+               "repo. Every path it uses must hang off the script location.")
+        expect(ctx.startswith("Rules for the runtime territory"),
+               f"wrong territory from a foreign cwd: {ctx[:60]!r}")
+        # THE BODY, not the announcement. Delivering the header with an
+        # empty rules file underneath is the failure mode the announcement
+        # cannot see, and putting the text in front of an agent is the
+        # entire purpose of this hook.
+        body = ctx.split("\n\n", 1)[1] if "\n\n" in ctx else ""
+        expect("# runtime — territory rules" in body,
+               f"delivered an announcement with no rules body under it "
+               f"({len(body)} bytes)")
+        expect(os.path.isfile(os.path.join(stamps, ".rules.runtime")),
+               "no stamp under the repo's .reviews after a delivery, so the "
+               "once-per-territory suppression is writing somewhere else or "
+               "not at all -- which the hook swallows silently")
+        expect(not os.path.exists(os.path.join(foreign, ".reviews")),
+               "the hook wrote its stamp into the caller's cwd")
+
+        # Paired: the same foreign cwd, a file no territory owns. Without
+        # this the positive is satisfied by a hook that delivers runtime for
+        # everything.
+        expect(fire(foreign, os.path.join(ROOT, "tools", "mkboot.sh")) is None,
+               "the hook delivered for tools/mkboot.sh, which no territory "
+               "owns")
+    finally:
+        shutil.rmtree(foreign, ignore_errors=True)
+        for st in glob.glob(os.path.join(stamps, ".rules.*")):
+            os.unlink(st)
+
+    print("ok rules-hook-cwd (absolute file_path from a foreign cwd delivers "
+          "the runtime body and stamps the repo, not the cwd; an unowned "
+          "file is silent from the same cwd)")
+
+
+def test_every_code_file_is_accounted_for():
+    """`--check` asks the filesystem, and it can fail.
+
+    The map in tools/rules-hook.sh is the only list, so nothing compares it
+    against a second copy. What replaces that comparison is this: enumerate
+    the tracked code files and require each one to be classified into a
+    territory or listed in UNOWNED with a reason. It catches the author's
+    blind spot because its input is `git ls-files`, not anything the author
+    remembered to write down.
+
+    THE NEGATIVE RUNS IN A TEMP GIT REPO, and it has to. `git ls-files`
+    cannot see a file that has not been added, so planting one in this tree
+    would need `git add -N` on the real index. The fixture is asserted
+    well-formed before anything is read into its output -- a check that
+    cannot run and a check that finds nothing both print nothing, which is
+    the confusion this entire mechanism exists to remove.
+    """
+    hook = os.path.join(ROOT, "tools", "rules-hook.sh")
+    p = run(["sh", hook, "--check"])
+    expect(p.returncode == 0, f"--check on this tree:\n{p.out}{p.err}")
+    expect("code files" in p.out,
+           f"--check passed without saying what it counted:\n{p.out}")
+
+    t = tempfile.mkdtemp(prefix="nw-hook-check-")
+    try:
+        os.makedirs(os.path.join(t, "tools"))
+        shutil.copy2(hook, os.path.join(t, "tools", "rules-hook.sh"))
+        open(os.path.join(t, "brand-new-thing.c"), "w").write("int main(){}\n")
+        for a in (["init", "-q"], ["add", "-A"]):
+            subprocess.run(["git"] + a, cwd=t, capture_output=True, check=True)
+        # FIXTURE FIRST. If the copy or the add silently did nothing, the
+        # refusal below would be absent for a reason that is not the one it
+        # names.
+        expect(os.path.isfile(os.path.join(t, "tools", "rules-hook.sh")),
+               "the temp repo has no hook copy, so its result is about "
+               "nothing")
+        listed = subprocess.run(["git", "ls-files"], cwd=t,
+                                capture_output=True, text=True).stdout.split()
+        expect("brand-new-thing.c" in listed,
+               f"the planted file is not tracked in the temp repo: {listed}")
+
+        q = run(["sh", os.path.join(t, "tools", "rules-hook.sh"), "--check"])
+        expect(q.returncode != 0,
+               f"a code file no territory owns and UNOWNED does not mention "
+               f"was accepted:\n{q.out}{q.err}")
+        expect("brand-new-thing.c" in (q.out + q.err),
+               f"--check refused without naming the file, which is the whole "
+               f"value of it:\n{q.out}{q.err}")
+    finally:
+        shutil.rmtree(t, ignore_errors=True)
+
+    terr = run(["sh", hook, "--territories"])
+    expect(terr.returncode == 0 and terr.out.split() == ["runtime", "plan",
+                                                         "harness"],
+           f"--territories, which install-agents.sh reads instead of holding "
+           f"its own copy: {terr.out!r}")
+
+    print(f"ok code-file-census ({p.out.strip().split(': ', 1)[-1]}; a "
+          f"planted unowned file is refused by name in a temp repo; "
+          f"--territories feeds install-agents.sh)")
 
 
 def test_last_words_survive_group_term():
@@ -7282,6 +7424,8 @@ def main():
         test_rescue, test_halt_spawner, test_bad_crc,
         test_fd_preflight_names_the_shortfall,
         test_log_pipe_peak_is_one_end_per_house,
+        test_rules_hook_delivers_from_any_cwd,
+        test_every_code_file_is_accounted_for,
         test_last_words_survive_group_term,
         test_orphans_across_restarts,
         test_crash_does_not_halt, test_budget_is_hard_total,

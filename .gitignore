@@ -3,12 +3,25 @@
 #
 # Patterns, not a name list: this file previously enumerated each binary and
 # fell behind twice when new targets were added (nw-dawn and unit-term).
-# Every TCB binary is nw-* and every fixture is unit-*, while every source is
-# nwcheck.c / nwspawn.c / nwsup.c / unit_probe.c -- underscores, no hyphen --
-# so these patterns catch the products and no source.
+# Every TCB binary is nw-* and every fixture is unit-*.
+#
+# ANCHORED TO THE ROOT, because the unanchored form was false in the way
+# this repository specialises in. The comment here read "every source is
+# nwcheck.c / nwspawn.c / nwsup.c / unit_probe.c -- underscores, no hyphen
+# -- so these patterns catch the products and no source", and bare `nw-*`
+# matches a basename at any depth, so it caught `bakery/nw-cc.py`: a source,
+# the baker, which invariant 3 makes atomic with `blob.h`, `plan.als` and
+# `Plan.tla`. Nothing broke,
+# because a tracked file stays tracked and `git check-ignore` does not even
+# report one without --no-index -- so the only symptom was that a fresh
+# `git init && git add -A` silently dropped it. Found when a control fixture
+# built that way came up one code file short.
+#
+# The Makefile writes its products into the repo root, so the root is where
+# the patterns belong.
 *.o
-nw-*
-unit-*
+/nw-*
+/unit-*
 # tools/mkboot.sh's output: a source copy, a static build, an initrd, and two
 # 64 MiB disk images. Rebuilt from scratch on every run (the ESP is dd'd from
 # /dev/zero), so nothing in it is worth tracking and one `make qemu` would
