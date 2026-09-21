@@ -70,11 +70,30 @@ KEPT='fd-auditor measurement'
 # carries no copy of their text, for the same reason it carries none of
 # fd-auditor's.
 RULEDIR=.claude/rules
-RULES='plan runtime harness'
+# NOT A THIRD COPY. The territory names live once, in tools/rules-hook.sh's
+# MAP, and it prints them. A list here would be a second place to edit and
+# the first one anybody forgot -- which is the whole subject of the
+# post-mortem in docs/POSTMORTEM-rules-declaration.md.
+RULES=$(sh tools/rules-hook.sh --territories)
+# EMPTY IS NOT A RESULT. $RULES drives the per-territory loop below, and
+# empty runs it zero times: the gate then prints OK with runtime.md
+# deleted -- measured, and reproduced by `claims` with this guard removed.
+# The other two loops it feeds still run, over $SUPERSEDED's fixed names
+# and over $OWNED $KEPT, which is why an empty list is invisible without
+# this line. (It said "drives three for loops; empty runs them zero
+# times", which is true of one of them.) set -eu catches a --territories
+# that FAILS; this catches one that succeeds and says nothing.
+[ -n "$RULES" ] || { echo "install-agents: FAIL tools/rules-hook.sh \
+--territories printed nothing, so every per-territory check below would \
+run zero times" >&2; exit 1; }
 # Briefs superseded on 2026-09-10. Their content migrated into plan.md and
 # runtime.md; --check fails if one reappears, because two agents claiming the
 # same file is worse than either alone.
-SUPERSEDED='pid1 validator supervisor baker spec electrician repro plan runtime harness'
+# The territory names are appended from $RULES rather than spelled again:
+# they are in this list because each was once a dispatchable agent, and a
+# fourth territory must land here too. `claims` found them written out a
+# third time, just below a comment saying the names live once.
+SUPERSEDED="pid1 validator supervisor baker spec electrician repro $RULES"
 
 MODE=install
 if [ $# -gt 0 ]; then
@@ -117,6 +136,13 @@ if [ "$MODE" = list ]; then
         ds=$(sed -n 's/.*Scope: *//p' "$f" | head -1)
         printf '  %-12s %s\n' "$nm" "$ds" | fold -s -w 78 |
             sed '2,$s/^/               /'
+        # FROM MAP, not from the sentence above. The Scope prose is a
+        # one-line human description and nothing derives ownership from
+        # it; printing only that left the sole visible enumeration
+        # stale -- runtime's named a subset of what MAP held.
+        printf '               owns: %s\n' \
+            "$(sh tools/rules-hook.sh --owns "$nm")" | fold -s -w 78 |
+            sed '2,$s/^/                     /'
     done
     echo
     echo "WHEN TO DISPATCH — the table in CLAUDE.md is the authority."
@@ -139,6 +165,16 @@ into plan.md/runtime.md; two owners for one file)"
 
     for n in $RULES; do
         [ -e "$RULEDIR/$n.md" ] || fail "$RULEDIR/$n.md missing (territory rules)"
+        # EXISTS IS NOT ENOUGH. An emptied rules file made the hook emit a
+        # header naming it and nothing underneath, and the whole target
+        # stayed green -- a delivery that looks like a delivery and
+        # carries no rules. `control`. The heading is the cheapest thing
+        # that is present in a real one and absent from a truncated or
+        # emptied one.
+        grep -q "^# $n — territory rules" "$RULEDIR/$n.md" 2>/dev/null ||
+            fail "$RULEDIR/$n.md does not open with its own \`# $n — \
+territory rules\` heading, so it is empty, truncated, or some other \
+territory's file"
         if [ -e "$DIR/$n.md" ]; then
             fail "$n.md is in $DIR: it is territory rules, not an agent"
         fi
@@ -256,6 +292,37 @@ take it from the code at run time instead"
     done
 
     if [ $rc -eq 0 ]; then
+        # EVERY CODE FILE IS ACCOUNTED FOR, asked of the filesystem rather
+        # than of anything an author wrote. tools/rules-hook.sh --check
+        # enumerates the tracked tree and classifies each file through the
+        # SAME function the hook's event path uses, so the check and the
+        # delivery cannot disagree about what is owned. It lives there and
+        # is called here because the event path exits 0 always and cannot
+        # refuse anything.
+        # AND IT MUST HAVE AUDITED THIS TREE. The hook roots at its own
+        # resolved location, so a tools/rules-hook.sh symlinked into a
+        # SECOND checkout audits that one and reports it clean -- this
+        # tree's unaccounted files never seen, and the gate saying OK.
+        # `control` built the two-checkout case. --check names the root
+        # it enumerated precisely so this comparison is possible.
+        # `crc=0` first and `|| crc=$?` on the assignment: under set -e a
+        # bare `co=$(cmd); crc=$?` never reaches the second statement,
+        # so a refusing --check killed the gate silently at exit 1 with
+        # no output at all. Found by running it, not by reading it.
+        crc=0
+        co=$(sh tools/rules-hook.sh --check 2>&1) || crc=$?
+        printf '%s\n' "$co"
+        if [ "$crc" -ne 0 ]; then
+            fail "tools/rules-hook.sh --check"
+        else
+            case "$co" in
+                "rules-hook: $PWD: "*) ;;
+                *) fail "tools/rules-hook.sh --check audited some other \
+tree -- it reports its root and that root is not $PWD, so this hook is \
+installed in or linked from a different checkout" ;;
+            esac
+        fi
+        [ "$rc" -eq 0 ] || exit "$rc"
         echo "install-agents: OK $(ls "$DIR" | wc -l | tr -d ' ') briefs"
     fi
     exit $rc
