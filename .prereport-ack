@@ -616,3 +616,17 @@ unpaired-absence	tests/run.py	expect("## Liveness" not in d,
 unpaired-absence	tests/run.py	expect("install-agents: OK" not in (g.out + g.err),
 unpaired-absence	tests/run.py	f"{label}: the anchor {o!r} is not in the hook exactly "
 unpaired-absence	tools/mutation-sweep.py	if k not in survivors:
+
+# The triage round, 2026-09-21.
+
+# "one line of one" is English: the sentence contrasts a whole
+# statement with a fragment of one, and neither is a tally.
+prose-count	tools/mutation-sweep.py	# A CONTINUED SHELL STATEMENT IS ONE MUTANT, not one line of one.
+
+# Two in the gate-refusal table's own scaffolding, not assertions about
+# the tree: `held is None` is the restore helper deciding whether the
+# file existed before the plant, and the "not in the copy" line is a
+# fixture guard that aborts when a plant target is absent. Both are the
+# machinery that makes the planted cases mean something.
+unpaired-absence	tests/run.py	if held is None:
+unpaired-absence	tests/run.py	f"{label}: {rel} is not in the copy, so removing "

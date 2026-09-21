@@ -45,18 +45,38 @@ TESTS = ["test_rules_hook_delivers_from_any_cwd",
 # "<file>:<line-text>" stripped -- not a line NUMBER, which would go
 # stale on the next edit above it.
 RESIDUE = {
-    'tools/rules-hook.sh|for probe, want in (("pid1.c", ["runtime"]), ("nwcheck.c", ["plan"]),':
-        "The territory anchors. Pinning them needs a test that knows "
-        "which territory each file belongs to, which is a second copy of "
-        "MAP -- the two-lists problem arriving as a test. They are a "
-        "four-row second list, affordable where a fifty-row one is not, "
-        "and CLAUDE.md's 'Who owns which file' carries the argument. "
-        "What DOES pin them is the census test's planted-condition cases, "
-        "which reach them through --check's output.",
+    'tools/rules-hook.sh|if not names:':
+        "Correct redundancy with `if not blocks:` below it: a file no "
+        "territory owns produces an empty `names`, which produces no "
+        "blocks, and either guard alone ends the run silently. Removing "
+        "BOTH is caught -- the delivery test's unowned probe then gets a "
+        "JSON body with nothing in it. This is CLAUDE.md's `fds_ge3` "
+        "shape: two guards pinning their conjunction and neither "
+        "separately, and inventing an assertion that appears to "
+        "separate them is what that entry says not to do.",
+    'tools/rules-hook.sh|if not blocks:':
+        "The other half of the pair above, same reasoning.",
+    'install-agents.sh|[ -e "$f" ] || continue':
+        "A guard against an unmatched glob: `for f in .claude/rules/*.md` "
+        "yields the literal pattern when the directory is empty, and this "
+        "skips it. Reaching it needs a tree with no rules files at all, "
+        "which every other refusal in the gate fires on first -- so a "
+        "test for it would be asserting which refusal wins a race "
+        "between two correct ones. Three occurrences, one reason.",
+    "install-agents.sh|fail \"$n: the heredoc opener \\`put $n <<'NWEOF'\\` appears \\ $k times in install-agents.sh, so the extraction b":
+        "Reaching it means editing install-agents.sh's own heredoc "
+        "structure inside the fixture, which is a new fixture shape "
+        "rather than a planted condition in a copied tree. Pre-existing, "
+        "unpinned before this change and unpinned after it. Follow-up, "
+        "not widened here.",
+    'install-agents.sh|fail "$n.md has diverged from the heredoc in install-agents.sh: \\ --force would silently revert the file to th':
+        "Same shape: the condition is a brief differing from the heredoc "
+        "that ships it, and the plants that reach it also trip the "
+        "frontmatter refusals, which fire first. Pre-existing. Follow-up.",
 }
 
 
-def mutants(path):
+def mutants(path, root=None):
     """Every line worth deleting, as (id, line_no, original, replacement).
 
     Deletion where it parses, negation where it does not. A conditional
@@ -64,10 +84,26 @@ def mutants(path):
     a call or an assignment is commented out.
     """
     out = []
-    for i, line in enumerate(open(os.path.join(ROOT, path)).read().split("\n")):
+    base = root or ROOT
+    src = open(os.path.join(base, path)).read().split("\n")
+    i = -1
+    while i + 1 < len(src):
+        i += 1
+        line = src[i]
         t = line.strip()
         if not t or t.startswith("#"):
             continue
+        # A CONTINUED SHELL STATEMENT IS ONE MUTANT, not one line of one.
+        # Replacing only the first line of a `fail "... \` left the rest
+        # dangling, the file did not parse, and the run was counted as a
+        # kill -- every one of them a refusal, all reported as covered
+        # when nothing had been tested. Found by the validity guard,
+        # which is what that guard is for.
+        span = 1
+        while (i + span - 1 < len(src) and src[i + span - 1].endswith("\\")
+               and i + span < len(src)):
+            t += " " + src[i + span].strip().rstrip("\\")
+            span += 1
         ind = line[:len(line) - len(line.lstrip())]
         rep = None
         if re.match(r"(el)?if .*:$", t) and not t.startswith("elif not"):
@@ -81,8 +117,33 @@ def mutants(path):
         elif t.startswith("grep -q") and "||" in t:
             rep = ind + ": # swept"
         if rep and rep.strip() != t:
-            out.append((f"{path}|{t}", i, line, rep))
+            out.append((f"{path}|{t[:110]}", i, span, rep))
+        i += span - 1
     return out
+
+
+def valid(tree, path):
+    """Does the mutant still parse? Returns None if yes, else why.
+
+    A MUTANT THAT DOES NOT PARSE IS NOT A KILL. The hook traps its own
+    failures -- `python3 ... || exit 0` on the event path -- so a broken
+    heredoc exits 0 with no output, which the delivery test reports as a
+    failure for a reason that has nothing to do with the line removed.
+    Counting those as kills inflates the score in exactly the direction
+    that makes a sweep look finished.
+    """
+    f = os.path.join(tree, path)
+    r = subprocess.run(["sh", "-n", f], capture_output=True, text=True)
+    if r.returncode != 0:
+        return "sh -n: " + (r.stderr.strip().split("\n") or [""])[0]
+    body = open(f).read()
+    m = re.search(r"<<'PY'\n(.*?)\nPY\n", body, re.S)
+    if m:
+        try:
+            compile(m.group(1), path + " (heredoc)", "exec")
+        except SyntaxError as e:
+            return f"python: {e.msg} at line {e.lineno}"
+    return None
 
 
 def run_tests(tree):
@@ -98,7 +159,7 @@ def run_tests(tree):
     return a.returncode == 0 and b.returncode == 0
 
 
-def copy_tree(dst):
+def copy_tree(dst, root=None):
     """A copy that is a git repository, because --check enumerates one.
 
     THE FIRST VERSION OF THIS EXCLUDED .git AND DID NOT REPLACE IT, so
@@ -110,7 +171,7 @@ def copy_tree(dst):
     Hence baseline() below, which refuses to sweep at all until an
     UNMUTATED copy comes back green.
     """
-    shutil.copytree(ROOT, dst, symlinks=True,
+    shutil.copytree(root or ROOT, dst, symlinks=True,
                     ignore=shutil.ignore_patterns(".git", "__pycache__",
                                                   "boot-out", ".reviews"))
     for args in (["init", "-q"], ["add", "-A"]):
@@ -118,48 +179,100 @@ def copy_tree(dst):
                        check=True)
 
 
-def baseline(work):
+def baseline(work, root=None):
     """An unmutated copy must pass, or nothing below means anything."""
     tree = os.path.join(work, "baseline")
-    copy_tree(tree)
+    copy_tree(tree, root)
     ok = run_tests(tree)
     shutil.rmtree(tree, ignore_errors=True)
     return ok
 
 
-def sweep(extra=None):
+def sweep(root=None, only=None):
+    root = root or ROOT
     all_m = []
     for p in TARGETS:
-        all_m += mutants(p)
-    if extra:
-        all_m += extra
-    killed, survivors = 0, []
+        all_m += mutants(p, root)
+    if only:
+        all_m = [m for m in all_m if only in m[0]]
+    killed, survivors, invalid = 0, [], []
     work = tempfile.mkdtemp(prefix="nw-sweep-")
     try:
-        if not baseline(work):
+        if not baseline(work, root):
             shutil.rmtree(work, ignore_errors=True)
             raise SystemExit("mutation-sweep: an UNMUTATED copy of the "
                              "tree does not pass. Every mutant would be "
                              "reported killed by whatever is wrong with "
                              "the copy. Fix the fixture first.")
-        for mid, ln, orig, rep in all_m:
+        for mid, ln, span, rep in all_m:
             tree = os.path.join(work, "t")
             shutil.rmtree(tree, ignore_errors=True)
-            copy_tree(tree)
-            f = os.path.join(tree, mid.split("|", 1)[0])
+            copy_tree(tree, root)
+            rel = mid.split("|", 1)[0]
+            f = os.path.join(tree, rel)
             lines = open(f).read().split("\n")
-            if lines[ln] != orig:
-                print(f"SKIP  {mid[:90]} (line moved in the copy)")
-                continue
-            lines[ln] = rep
+            lines[ln:ln + span] = [rep]
             open(f, "w").write("\n".join(lines))
-            if run_tests(tree):
+            why = valid(tree, rel)
+            if why:
+                invalid.append((mid, why))
+            elif run_tests(tree):
                 survivors.append(mid)
             else:
                 killed += 1
     finally:
         shutil.rmtree(work, ignore_errors=True)
-    return all_m, killed, survivors
+    return all_m, killed, survivors, invalid
+
+
+PLANT = """    if os.environ.get("NW_SWEEP_PLANTED_REFUSAL"):
+        bad.append("a refusal no test exercises")
+"""
+
+
+def selftest():
+    """Plant a refusal nothing can reach; the sweep must list it.
+
+    THE CONTROL FOR THE CONTROL. A sweep whose answer is "nothing
+    survived" is indistinguishable from a sweep that is not looking --
+    which is not hypothetical here: this tool's first run reported
+    75 of 75 killed because its fixture had no git repo. So it has to
+    be shown finding something it was told to find.
+
+    The planted refusal is gated on an environment variable nothing
+    sets, so no test can reach it and deleting it can change no
+    outcome. Scoped to that one mutant: what is under test is the
+    classification, not the rest of the tree.
+    """
+    work = tempfile.mkdtemp(prefix="nw-sweep-self-")
+    try:
+        root = os.path.join(work, "repo")
+        copy_tree(root)
+        f = os.path.join(root, "tools", "rules-hook.sh")
+        body = open(f).read()
+        anchor = "def check():\n    bad = []\n"
+        if body.count(anchor) != 1:
+            raise SystemExit("selftest: cannot find check()'s opening in "
+                             "the copy, so the plant would prove nothing")
+        open(f, "w").write(body.replace(anchor, anchor + PLANT))
+        print("selftest: planted an env-gated refusal in check(); nothing "
+              "sets NW_SWEEP_PLANTED_REFUSAL, so no test can reach it.")
+        _, killed, survivors, invalid = sweep(root=root,
+                                              only="NW_SWEEP_PLANTED_REFUSAL")
+        for s_id in survivors:
+            print("  reported SURVIVOR: " + s_id[:100])
+        print(f"selftest: killed={killed} survivors={len(survivors)} "
+              f"invalid={len(invalid)}")
+        if len(survivors) == 1 and killed == 0 and not invalid:
+            print("selftest: PASS -- the sweep lists a refusal nothing "
+                  "exercises.")
+            return 0
+        print("selftest: FAIL -- the sweep did not report the planted "
+              "refusal as a survivor, so its survivor list is not "
+              "evidence of anything.")
+        return 1
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
 
 
 def main():
@@ -168,21 +281,10 @@ def main():
                     help="plant an unpinned refusal and require it to survive")
     a = ap.parse_args()
 
-    extra = None
     if a.selftest:
-        # A refusal nothing can pin: it never fires, so deleting it can
-        # change no test. If the sweep does not report it, the sweep is
-        # not looking.
-        src = os.path.join(ROOT, "tools", "rules-hook.sh")
-        lines = open(src).read().split("\n")
-        anchor = next(i for i, l in enumerate(lines)
-                      if l.strip().startswith("def check():"))
-        print(f"selftest: planting an unpinned refusal at "
-              f"tools/rules-hook.sh:{anchor + 2}")
-        extra = [("tools/rules-hook.sh|SELFTEST-PLANTED", anchor + 1,
-                  lines[anchor + 1], lines[anchor + 1])]
+        return selftest()
 
-    all_m, killed, survivors = sweep()
+    all_m, killed, survivors, invalid = sweep()
 
     unexplained = [s for s in survivors if not (RESIDUE.get(s) or "").strip()]
     print()
@@ -190,6 +292,9 @@ def main():
     print(f"killed    {killed}")
     print(f"survivors {len(survivors)}  "
           f"({len(survivors) - len(unexplained)} with a recorded reason)")
+    print(f"invalid   {len(invalid)}  (did not parse; NOT counted as kills)")
+    for mid, why in invalid:
+        print(f"    {mid[:80]}  --  {why}")
     for s in survivors:
         why = RESIDUE.get(s)
         print("\n  SURVIVOR " + s)
@@ -204,10 +309,6 @@ def main():
             print("    it is pinned now, or the line is gone. Remove it.")
             unexplained.append(k)
 
-    if a.selftest:
-        print("\nselftest: the planted refusal is a no-op line; the sweep "
-              "must have reported at least one survivor above, and the "
-              "run is only meaningful if it did.")
     return 1 if unexplained else 0
 
 

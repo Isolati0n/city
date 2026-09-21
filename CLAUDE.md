@@ -711,12 +711,28 @@ without becoming the thing this decision refuses.** `control` moved most of
 `MAP`'s members to another territory one at a time and the target stayed
 green for all but the few the anchors pin — an agent editing `dawn.c` would
 be handed `plan.md`, and both the gate and the suite print OK. The fix that
-suggests itself is an assertion listing where each file belongs, and that
-assertion is a second copy of `MAP`: the two-lists problem, arriving as a
-test. Checking an assignment needs a second opinion about the assignment,
-and a second opinion is a second list. So this is residue, deliberately,
-and the anchors exist to catch a classifier that has stopped working rather
-than a map that is wrong.
+suggests itself is an assertion listing where each file belongs, and a
+fifty-row version of that is a second copy of `MAP`: the two-lists
+problem, arriving as a test. Checking an assignment needs a second
+opinion about the assignment, and a second opinion is a second list.
+
+**The anchors ARE a second list, and saying otherwise was the dishonest
+part.** Four hand-written `(path, territory)` rows in `--check`, which is
+affordable exactly because it is four and not fifty — the rule for
+growing it is to add one when a specific assignment becomes
+load-bearing, not to mirror the map. They catch a classifier that has
+stopped working, not a map that is wrong, and they are the only thing
+standing between the tree and the first of those.
+
+That sentence was false when it was first written, because the anchors
+were themselves deletable green — `control` found it, and a paragraph
+explaining why something cannot be checked, resting on a detector
+nothing checked, is this project's characteristic failure at one
+remove. `tests/run.py` now plants an anchor that disagrees with `MAP`
+and requires `--check` to refuse, so the sentence is true as of the
+commit that says it. `tools/mutation-sweep.py` is what keeps it true:
+it deletes every refusal in the hook and the gate in turn and reports
+the ones nothing notices.
 
 What it also does not catch is a file that is owned and *undescribed*, and
 there is more than one. Read them off the tree rather than a list here:

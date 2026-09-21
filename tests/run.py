@@ -2121,6 +2121,26 @@ def test_every_code_file_is_accounted_for():
              '("plan", "runtime"),', '("plan", "ghosts"),',
              "which MAP\n                       f\"does not define"
              .replace("\n                       f\"", " ")),
+            ("an owned file also listed in UNOWNED",
+             "UNOWNED = [", 'UNOWNED = [\n    ("pid1.c", "contradiction"),',
+             "is owned by runtime AND listed in UNOWNED"),
+            ("a SHARED entry whose territories MAP disagrees with",
+             '"stage-layers.py": (\n        ("plan", "runtime"),',
+             '"stage-layers.py": (\n        ("plan", "harness"),',
+             "but SHARED declares"),
+            ("a SHARED entry with no reason",
+             '        "plan.md', '        "" and "plan.md',
+             "has no reason"),
+            ("a SHARED key matching no tracked file",
+             '    "stage-layers.py": (', '    "ghost-tool.py": (',
+             "matches no tracked code file"),
+            ("an anchor that disagrees with MAP",
+             '("pid1.c", ["runtime"])', '("pid1.c", ["plan"])',
+             "the classifier is broken"),
+            ("an enumeration that finds almost nothing",
+             'CODE = (".c", ".h", ".py", ".sh", ".als", ".tla")',
+             'CODE = (".nothing-has-this",)',
+             "which is fewer than this tree has ever had"),
             ("a PATH_RULES prefix nothing is under",
              '[("houses/", "harness")]', '[("houses/", "harness"), '
              '("mansions/", "harness")]',
@@ -2138,6 +2158,94 @@ def test_every_code_file_is_accounted_for():
             expect(r.returncode != 0 and want in (r.out + r.err),
                    f"{label}: planted, and the gate said:\n{r.out}{r.err}")
             open(fh, "w").write(src)
+
+        # THE GATE'S OWN REFUSALS, planted in the fixture. These are
+        # pre-existing -- brief existence, frontmatter, the superseded
+        # list, the rules-file checks -- and the mutation sweep found
+        # every one of them deletable green, because a refusal whose
+        # condition never occurs in a healthy tree is invisible when you
+        # remove it. install-agents.sh --check has never had a negative
+        # control in the suite; this is it, for the ones a copied tree
+        # reaches.
+        import glob as _g
+
+        def _restore(rel, held):
+            full = os.path.join(fake, rel)
+            if held is None:
+                if os.path.exists(full):
+                    os.remove(full)
+            else:
+                open(full, "wb").write(held)
+
+        gate_cases = [
+            ("a territory rules file missing", "rm",
+             ".claude/rules/plan.md", None, "missing (territory rules)"),
+            ("a territory rules file emptied", "write",
+             ".claude/rules/plan.md", b"", "does not open with its own"),
+            ("an agent brief missing", "rm",
+             ".claude/agents/claims.md", None, "claims.md missing"),
+            ("a brief whose name does not match its filename", "sub",
+             ".claude/agents/claims.md", (b"\nname: claims\n",
+                                          b"\nname: nonsuch\n"),
+             "name does not match filename"),
+            ("a brief with no description:", "sub",
+             ".claude/agents/claims.md", (b"\ndescription:", b"\nxxxxxxxxxxx:"),
+             "no description:"),
+            ("a superseded brief reappearing", "write",
+             ".claude/agents/pid1.md", b"name: pid1\n",
+             "superseded but present"),
+            ("territory rules filed as an agent", "write",
+             ".claude/agents/plan.md", b"name: plan\n",
+             "it is territory rules, not an agent"),
+            ("a brief carrying a struct format string", "sub",
+             ".claude/agents/claims.md", (b"\ndescription:",
+                                          b"\nformat is '<32sI' here\ndescription:"),
+             "struct format string or a magic literal"),
+            ("a brief naming a path that does not exist", "sub",
+             ".claude/agents/claims.md", (b"\ndescription:",
+                                          b"\nsee `tools/no-such-file.py`\ndescription:"),
+             "which does not exist"),
+        ]
+        for label, op, rel, payload, want in gate_cases:
+            full = os.path.join(fake, rel)
+            held = open(full, "rb").read() if os.path.exists(full) else None
+            try:
+                if op == "rm":
+                    expect(held is not None,
+                           f"{label}: {rel} is not in the copy, so removing "
+                           f"it proves nothing")
+                    os.remove(full)
+                elif op == "write":
+                    open(full, "wb").write(payload)
+                else:
+                    o, n = payload
+                    expect(held.count(o) == 1,
+                           f"{label}: {o!r} is not in {rel} exactly once")
+                    open(full, "wb").write(held.replace(o, n))
+                r = run(["sh", "install-agents.sh", "--check"], cwd=fake)
+                expect(r.returncode != 0 and want in (r.out + r.err),
+                       f"{label}: planted, and the gate said:\n"
+                       f"{r.out}{r.err}")
+            finally:
+                _restore(rel, held)
+
+        # The directory itself, restored by recreating what was moved.
+        agents = os.path.join(fake, ".claude", "agents")
+        stash = agents + ".stash"
+        os.rename(agents, stash)
+        try:
+            r = run(["sh", "install-agents.sh", "--check"], cwd=fake)
+            # THE DIRECTORY'S OWN MESSAGE, not the word "missing". The
+            # first version asserted the bare word and the sweep still
+            # deleted this refusal green: with $DIR gone every brief is
+            # missing too, so another refusal printed a line containing
+            # it and the loose assertion was satisfied by the wrong one.
+            expect(r.returncode != 0
+                   and ".claude/agents missing" in (r.out + r.err),
+                   f"the agents directory is gone and the gate said:\n"
+                   f"{r.out}{r.err}")
+        finally:
+            os.rename(stash, agents)
     finally:
         shutil.rmtree(t, ignore_errors=True)
 
