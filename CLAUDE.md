@@ -1746,6 +1746,151 @@ shape this file names as the durable kind.)
   *recorded*: the gate writes no log, so nothing in the tree evidences
   a firing that nobody wrote down.)
 
+- **THE EVIDENCE IS REAL AND IT IS ABOUT SOMETHING ELSE.** The
+  measurement was genuinely made, its result is genuinely what it says,
+  and re-running it returns the same right answer every time. What
+  differs is its SUBJECT — the set, the machine, the clone or the code
+  path it was taken over is not the one the sentence quantifies over.
+  Nothing is false, so nothing fails: re-run it and the answer is
+  right, and a reviewer checking the claim against the code finds it
+  supported, because it is.
+
+  **A CONTROL REACHES IT ONLY IF ONE EXISTS FOR THE PART THAT WAS NOT
+  MEASURED**, and whether one does varies instance by instance below.
+  Nothing in the build runs `--list`, so the roster-guard case has no
+  control at all. The unowned-file case has one *now* —
+  `test_rules_hook_refuses_a_tree_it_cannot_root_in`'s silence case
+  goes red under exactly the mutation that instance is about — and it
+  exists because the scope error was found, not before.
+
+  *This entry claimed a control reaches none of them, in the same
+  breath as naming the one that does. `claims` ran it and quoted it
+  red.*
+
+  What catches it is running the same question somewhere ELSE: in a
+  fresh clone, in the mode that actually executes, on the input the
+  sentence claims to cover.
+
+  **Read it beside its relatives rather than as a separate
+  discovery.** *Every absence is over a set somebody chose* is this for
+  absences, and the chooser is part of any measurement, not only a
+  negative one. *A soundness argument is a claim about where its
+  assumptions come from* is this for assumptions — "the assumption
+  held; the argument for it did not", and the case where it holds and
+  the case where it does not are "indistinguishable from a passing
+  run". Its question, **for each
+  assumption, what establishes it**, and this one's are the same
+  question asked of different things.
+
+  The instances, each with what was measured beside what it was used
+  for:
+
+  - *`git show e62c6a6` answers.* True in the working copy where that
+    commit was made, and nowhere else: it was dropped with
+    `git reset --hard` and never pushed, so it is an unreferenced
+    object in one object store — `git for-each-ref --contains e62c6a6`
+    returns nothing, here or on the remote. A clone fetches what is
+    reachable, so a fresh clone of this remote says `unknown revision
+    or path not in the working tree`, and always would have. Both run.
+    The sentence was about what a READER can fetch; the measurement was
+    about what one checkout still holds, and it was offered as proof
+    that an unreachable object is not an unresolvable one — true, and
+    not what a reader gets.
+
+  - *"the gate exits 1 with output byte-identical to the guards being
+    present"* (`fa1e0a9`'s message, on `origin/sweep`). Reproduced:
+    delete the `[ -e "$f" ] || continue` guards **in the roster loops**,
+    run `--check` against a tree with no rules files, and stdout and
+    stderr match to the byte. Those guards are in the `--list` arm and
+    `--check` never enters it — probed, not assumed, with an echo
+    planted inside the arm, silent under `--check` and firing under
+    `--list`. Identical output is exactly what a run that does not
+    execute the changed lines produces, and it was read as evidence
+    that the guards are redundant.
+
+    **Say which guards, because the quoted experiment deleted a wider
+    set than this reproduction.** `fa1e0a9` names *the three glob
+    guards*, and the extra one is in the `--check` arm — a line that
+    arm does execute. Its `continue` is inert for a different reason:
+    every owned brief exists, so the branch is never taken, probed the
+    same way and never fired. Two inert lines, two unrelated reasons,
+    one byte-identical result — which is why "the output was identical"
+    could not have told you either of them.
+
+    **"Both guards" was this entry's own version of the mistake** — a
+    count written over a file that holds another one, in the arm the
+    experiment runs in, inside the worked example about naming your
+    scope. The qualifier `install-agents.sh` itself uses, *roster
+    loops*, is the one that was dropped. `claims`.
+
+  - *"the hook is still silent for an unowned file"* (same message,
+    same branch). True of an unowned file INSIDE the tree, which is
+    what was run. Outside it, the same deletion lets the file reach
+    the outside-the-tree refusal and the hook answers. "An unowned file" is a larger set than the
+    one measured; the rest of it is pinned by the silence case in
+    `test_rules_hook_refuses_a_tree_it_cannot_root_in`.
+
+  - *`git push --delete` exited 0.* The command was
+    `git push … 2>&1 | tail -3`, and **one pipe did both halves of
+    this**: `$?` was `tail`'s, and `tail -3` kept the last three lines
+    while the line above them said `error: RPC failed; HTTP 403`. Run
+    unpiped, git prints the 403 in ordinary output and returns 1 — so
+    "visible only under `GIT_CURL_VERBOSE`", which stood here for a
+    round, was wrong about where the evidence was. Where: from this
+    checkout against this `origin`, `git push origin
+    :refs/heads/rules-declaration` prints `error: RPC failed; HTTP 403
+    curl 22` and exits 1, and `false | tail -3` exits 0 on its own.
+    That one is also *a
+    success signal confirms the step that ran*: a status for the wrong
+    step is this shape with an exit code as the measurement.
+
+  **So the question is not "did you run it".** It is **"what is this a
+  measurement OF, and is that the thing the sentence is about?"** Name
+  the set, the machine, the clone or the arm, in the sentence, beside
+  the result.
+
+  **Written honestly it looks like this**, and the tree has the worked
+  example: `.claude/rules/plan.md` cites a `* 2` → `* 3` change in
+  `blob.h` under which both specs run clean, and says in the same
+  sentence that `tools/gen-spec-limits.py` emits limit values and no
+  arithmetic — so a reader learns what the clean run is about. Same
+  shape, scope named, and the conclusion is trustworthy because of that
+  clause rather than in spite of it.
+
+  **What it earns over those two** is the generalisation and the
+  instances: they name absences and proof assumptions, and the ones
+  above are a clone, a shell arm, an input class and an exit status.
+  Scope is the variable in the clone, the shell arm and the input
+  class. The exit status's variable is *which step the status
+  describes*, which is why it belongs to the success-signal entry as
+  well and is listed here as the boundary rather than as a clean
+  member.
+
+  **THE PRACTICE, which is the half of this that anyone can act on.**
+  A claim of *measured*, *reproduced* or *verified* carries all of
+  this or it is not one:
+
+  - **WHERE it ran.** Which clone, which cwd, which tree, which ref.
+    "In a fresh clone" and "in the checkout I happened to be in" are
+    different results, and a sentence that omits which is not shorter,
+    it is unfalsifiable.
+  - **That the run REACHED its subject.** The arm was entered. The case
+    was taken on each side of the guard. The remote was queried rather
+    than the exit code trusted. An unreached line and a line that does
+    not matter produce identical output.
+
+  The instances above are what that missing half would have said:
+
+  - `e62c6a6` — a fresh clone, not the author's.
+  - byte-identical — `--check` never enters `--list`.
+  - the residue reason — inside the tree only.
+  - the deletion — exit 0 on a 403; `ls-remote` is the check.
+
+  Both halves are cheap: an `echo` planted inside the arm, a `git
+  clone` into a temp directory, the probe on the other side of the
+  guard. What is not cheap is the round spent on a conclusion drawn
+  from a run that never reached what it was about.
+
 ## The rule that matters most
 
 Every bug found in this codebase so far was found by running, and none by

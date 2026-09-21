@@ -18,22 +18,36 @@ proxy, or the button on the branch page.
 document" — written ahead of the action, landed, and false the moment it
 landed, because the push it named was refused. It is the characteristic
 failure inside the post-mortem about it, and the tell was that the failing
-command exited 0: `git push --delete` printed `send-pack: unexpected
-disconnect` and then `Everything up-to-date` and returned success.
-`git ls-remote --heads origin` is what showed it, and is what anyone should
-run before believing a deletion happened.*
+command exited 0. It was run as `git push … 2>&1 | tail -3`, so `$?` was
+`tail`'s and not git's, and `tail -3` kept `send-pack: unexpected
+disconnect`, `fatal: the remote end hung up unexpectedly` and `Everything
+up-to-date` while dropping the line above them: `error: RPC failed; HTTP
+403`. Unpiped, git prints that line and returns 1. One pipe discarded the
+evidence and supplied the status. `git ls-remote --heads origin` is what
+showed it, and is what anyone should run before believing a deletion
+happened.*
 
-**The hashes in the next section are reachable while the branch is**, and
-stop being so on the day somebody deletes it. `e62c6a6` is the one that is
-already unreachable, and it shows what that does and does not mean: `git
-show` still answers for it, because an unreachable object is not an
-unresolvable one — it is just one nothing keeps. So after the deletion,
-treat all of them as names for what happened rather than as things a reader
-can count on fetching. They were verified while the ref was live: `claims`
-re-checked the parent chain, the contents of each commit, and that
-`e62c6a6` was reachable from no ref. The findings are kept because they are
-the only record of how five attempts at one small thing went wrong, and
-because the way they were found is worth more than what they found.
+**`08f6eef`, `8bab9a5` and `222e2e4` resolve for a reader who clones
+today, and stop resolving when somebody deletes the branch** — they are
+reachable from `origin/rules-declaration` and from nothing else. `bd49568`
+is on `main` and is unaffected. `e62c6a6`, further down under *The five
+attempts*, already does not resolve for anyone but its author: it was
+dropped with `git reset --hard` and never pushed, so a fresh clone answers
+`unknown revision or path not in the working tree` and always would have.
+Treat the branch's three as names for what happened rather than as things
+a reader can fetch.
+
+*The sentence here said `git show` still answers for `e62c6a6` because an
+unreachable object is not an unresolvable one. It answers in ONE object
+store, the one the commit was made in, which is not a fact about
+reachability at all. `CLAUDE.md`'s "the evidence is real and it is about
+something else" carries the shape.*
+
+They were verified while the ref was live: `claims` re-checked the parent
+chain, the contents of each commit, and that `e62c6a6` was reachable from
+no ref. The findings are kept because they are the only record of how five
+attempts at one small thing went wrong, and because the way they were found
+is worth more than what they found.
 
 ## The branch
 

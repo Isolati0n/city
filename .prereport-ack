@@ -598,7 +598,6 @@ unpaired-absence	tools/rules-hook.sh	if b not in bases:
 # flagged by unpaired-absence, on the line quoting the tokens it fires
 # on. Twenty-fifth row of the round and the clearest single argument for
 # the narrowing the note describes.
-unpaired-absence	CLAUDE.md	— `--check`'s classification and validation branches, whose `is None` and
 
 # The sweep round, 2026-09-21.
 
@@ -668,3 +667,13 @@ unpaired-absence	tests/run.py	expect(not os.path.exists(os.path.join(nogit, ".gi
 # the missing-brief case stayed green with the heredoc loop's guard
 # deleted.
 unpaired-absence	tests/run.py	expect(unwanted not in (r.out + r.err),
+
+# The scope round, 2026-09-21.
+
+# Both are the matcher reading GIT'S OWN ERROR MESSAGE -- "unknown
+# revision or path not in the working tree" -- as an absence assertion.
+# It is quoted command output, not a claim this tree makes, and the two
+# sentences containing it are the worked instance of the section they
+# sit in: the string is real and is about something else.
+unpaired-absence	CLAUDE.md	or path not in the working tree`, and always would have. Both run.
+unpaired-absence	docs/POSTMORTEM-rules-declaration.md	`unknown revision or path not in the working tree` and always would have.
