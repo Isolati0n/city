@@ -734,6 +734,16 @@ commit that says it. `tools/mutation-sweep.py` is what keeps it true:
 it deletes every refusal in the hook and the gate in turn and reports
 the ones nothing notices.
 
+**Say the sweep's operator set whenever you cite its result.** It
+deletes or negates conditionals, and deletes refusals, exits and
+failure messages. It does not mutate constants, comparison operators,
+or data — the contents of `MAP`, `SHARED`, `UNOWNED`, `PATH_RULES` and
+the anchors' expected territories are all outside it. So "zero
+unexplained survivors" means zero *within those operators*: it says a
+refusal is watched, not that the thing it checks is right. A sweep
+whose scope goes unstated reads as a proof, which is the failure this
+file spends most of its length on.
+
 What it also does not catch is a file that is owned and *undescribed*, and
 there is more than one. Read them off the tree rather than a list here:
 
@@ -923,7 +933,25 @@ vocabulary above, and the same trap: a matcher edit made in passing is
 how the `which`-matches-English false positive shipped.
 
 The sequence, when someone takes it: narrow the shape, re-measure with the
-target, write the new calibration down, dispatch a reviewer. Note what
+target, write the new calibration down, dispatch a reviewer. The ack file
+stood at 34 live acks when this was written, so the trend is the thing to
+watch rather than the number.
+
+**A SECOND FOLLOW-UP, SAME SHAPE, ALSO UNBUILT: `tools/mutation-sweep.py`
+runs only when somebody remembers to run it.** `make test` does not, and
+should not — it is tens of minutes. But a tool that has to be remembered
+is one this file already has a name for: correct and routed around is
+worse than broken, which is the sweep's own header argument turned on the
+sweep. The proposal is `tools/review-gate.sh` requiring a fresh sweep
+result when the diff touches `tools/rules-hook.sh` or the ownership block
+in `install-agents.sh` — keyed to content, the way the review gate already
+keys reviews, so editing after a sweep re-owes one.
+
+It needs its own control before it is worth anything, and the control is
+the one this file keeps asking for: show the gate RED with a stale result
+and GREEN with a fresh one, and show that editing the hook after a sweep
+turns it red again. Without that it is a mechanism whose first firing
+nobody has seen, which is the class it exists to close. Note what
 would NOT settle it — counting how many acks were "fixed" instead. A fix
 count measures what the author chose to rewrite, not whether the acks were
 right, and reaching for it is how a heuristic's own quality gets argued

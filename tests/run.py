@@ -2201,6 +2201,20 @@ def test_every_code_file_is_accounted_for():
              ".claude/agents/claims.md", (b"\ndescription:",
                                           b"\nformat is '<32sI' here\ndescription:"),
              "struct format string or a magic literal"),
+            # BOTH HEREDOC CHECKS, which were recorded as residue on the
+            # reasoning that reaching them needs a fixture editing
+            # install-agents.sh's own structure. Written without running
+            # it: a body line appended to a brief reaches the divergence
+            # check on its own, and a duplicated opener line reaches the
+            # count. The residue reason was the defect, not the coverage.
+            ("a brief diverging from its heredoc", "sub",
+             ".claude/agents/claims.md", (b"\ntools:",
+                                          b"\nA line the heredoc lacks.\ntools:"),
+             "has diverged from the heredoc"),
+            ("a duplicated heredoc opener", "sub",
+             "install-agents.sh", (b"\nput claims <<'NWEOF'\n",
+                                   b"\nput claims <<'NWEOF'\nput claims <<'NWEOF'\n"),
+             "so the extraction below is ambiguous"),
             ("a brief naming a path that does not exist", "sub",
              ".claude/agents/claims.md", (b"\ndescription:",
                                           b"\nsee `tools/no-such-file.py`\ndescription:"),

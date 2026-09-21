@@ -15,6 +15,17 @@ the tree, applies one mutation, and runs the hook tests plus
 `install-agents.sh --check`. A mutant that is still green is a survivor:
 either nothing pins that line, or the line does nothing.
 
+WHAT IT DOES NOT MUTATE, and this belongs beside every citation of its
+result. The operators are: delete or negate a CONDITIONAL, and delete a
+REFUSAL, an exit or a failure message. It does not mutate constants, so
+the floor's `40` and any threshold are untouched; it does not flip
+comparison operators, so a `<` that should be `<=` is invisible; and it
+does not mutate DATA, so the contents of MAP, SHARED, UNOWNED,
+PATH_RULES and the anchors' expected territories are outside it. "Zero
+unexplained survivors" means zero within those operators and says
+nothing about the rest. A sweep whose scope is not stated reads as a
+proof.
+
 WHAT A SURVIVOR IS NOT. It is not automatically a defect. Some lines
 cannot be pinned without a second copy of the thing they check -- the
 territory anchors are the standing example, and `CLAUDE.md`'s "Who owns
@@ -46,33 +57,30 @@ TESTS = ["test_rules_hook_delivers_from_any_cwd",
 # stale on the next edit above it.
 RESIDUE = {
     'tools/rules-hook.sh|if not names:':
-        "Correct redundancy with `if not blocks:` below it: a file no "
-        "territory owns produces an empty `names`, which produces no "
-        "blocks, and either guard alone ends the run silently. Removing "
-        "BOTH is caught -- the delivery test's unowned probe then gets a "
-        "JSON body with nothing in it. This is CLAUDE.md's `fds_ge3` "
-        "shape: two guards pinning their conjunction and neither "
-        "separately, and inventing an assertion that appears to "
-        "separate them is what that entry says not to do.",
+        "FAIL-SAFE, measured: with this guard alone removed the hook is "
+        "still silent for an unowned file, because `if not blocks:` "
+        "below it catches the same case. Correct redundancy -- each "
+        "pins the conjunction and neither separately, CLAUDE.md's "
+        "fds_ge3 shape, and inventing an assertion that appears to "
+        "separate them is what that entry forbids. Removing BOTH is "
+        "caught: the delivery test's unowned probe then gets "
+        "`additionalContext: \"\"` and reports `the hook delivered for "
+        "tools/review-gate.sh, which no territory owns`. Run, not "
+        "reasoned.",
     'tools/rules-hook.sh|if not blocks:':
-        "The other half of the pair above, same reasoning.",
+        "The other half of the pair above, same measurement: removed "
+        "alone the hook stays silent, removed together the suite goes "
+        "red. FAIL-SAFE.",
     'install-agents.sh|[ -e "$f" ] || continue':
-        "A guard against an unmatched glob: `for f in .claude/rules/*.md` "
-        "yields the literal pattern when the directory is empty, and this "
-        "skips it. Reaching it needs a tree with no rules files at all, "
-        "which every other refusal in the gate fires on first -- so a "
-        "test for it would be asserting which refusal wins a race "
-        "between two correct ones. Three occurrences, one reason.",
-    "install-agents.sh|fail \"$n: the heredoc opener \\`put $n <<'NWEOF'\\` appears \\ $k times in install-agents.sh, so the extraction b":
-        "Reaching it means editing install-agents.sh's own heredoc "
-        "structure inside the fixture, which is a new fixture shape "
-        "rather than a planted condition in a copied tree. Pre-existing, "
-        "unpinned before this change and unpinned after it. Follow-up, "
-        "not widened here.",
-    'install-agents.sh|fail "$n.md has diverged from the heredoc in install-agents.sh: \\ --force would silently revert the file to th':
-        "Same shape: the condition is a brief differing from the heredoc "
-        "that ships it, and the plants that reach it also trip the "
-        "frontmatter refusals, which fire first. Pre-existing. Follow-up.",
+        "FAIL-SAFE, measured. It guards an unmatched glob -- `for f in "
+        "$RULEDIR/*.md` yields the literal pattern when the directory is "
+        "empty. Run against a tree with no rules files, with all three "
+        "occurrences removed, the gate exits 1 with output byte-identical "
+        "to the guards being present: `FAIL plan.md missing` / `FAIL "
+        "harness.md missing`. It cannot pass something it should refuse, "
+        "because the missing-rules-file refusal fires either way, so a "
+        "test here would assert which of two correct refusals wins. "
+        "Three occurrences, one reason.",
 }
 
 
