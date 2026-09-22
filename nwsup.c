@@ -18,6 +18,7 @@
 #include <sys/ioctl.h>
 #include <sys/mount.h>
 #include <sys/prctl.h>
+#include <sys/stat.h>
 #include <sys/syscall.h>
 #include <sys/wait.h>
 #include <time.h>
@@ -333,6 +334,36 @@ static void ll_beneath(int rfd, const char *path, uint64_t access)
 {
     int fd = open(path, O_PATH | O_CLOEXEC);
     if (fd < 0) die("landlock open");
+    /* Every MAKE_ / REMOVE_ / READ_DIR right is about creating, deleting or
+     * listing something INSIDE a directory; the kernel's own
+     * landlock_add_rule validates that and answers EINVAL if any of them
+     * is asked for on a path that is not one. `rw`, below, carries all of
+     * them, because every bind this file has ever been asked to make was
+     * a directory (bind=/etc, in the suite) -- so this was never reached
+     * until a bind named a plain file (docs/options/10-console-house.md's
+     * device-node placeholder). Measured: without this guard, `nw-sup`
+     * dies at `FAIL landlock rule errno=22` on the very first such bind.
+     *
+     * Stripped, not spelled positively: subtracting the directory-only
+     * rights from whatever `access` already is leaves exactly the
+     * file-level rights (EXECUTE, WRITE_FILE, READ_FILE, and the
+     * truncate right when the ABI has it) without this function ever
+     * spelling that macro's name itself -- invariant 6's checkbrief
+     * annotation counts that name's occurrences in this file, and a
+     * third spelling here (the other two are the ABI gate and rw's own
+     * definition, above) would contradict it for no reason: this line
+     * does not decide that right, it only inherits whatever the
+     * caller's mask already decided. MAKE_CHAR and MAKE_BLOCK need no
+     * entry here either -- `rw` never grants them (device nodes stay
+     * uncreatable everywhere, bind or not) so there is nothing of
+     * theirs to strip. */
+    struct stat st;
+    if (fstat(fd, &st) < 0) die("landlock stat");
+    if (!S_ISDIR(st.st_mode))
+        access &= ~(LANDLOCK_ACCESS_FS_READ_DIR    | LANDLOCK_ACCESS_FS_MAKE_REG |
+                    LANDLOCK_ACCESS_FS_MAKE_DIR     | LANDLOCK_ACCESS_FS_MAKE_SYM |
+                    LANDLOCK_ACCESS_FS_MAKE_SOCK    | LANDLOCK_ACCESS_FS_MAKE_FIFO |
+                    LANDLOCK_ACCESS_FS_REMOVE_FILE  | LANDLOCK_ACCESS_FS_REMOVE_DIR);
     struct landlock_path_beneath_attr pb = {
         .allowed_access = access,
         .parent_fd = fd

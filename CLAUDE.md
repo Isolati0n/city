@@ -373,6 +373,23 @@ sections after this one and are deliberately not numbered here.
    reaches the same durable state as delete, not because it resembles
    one.
 
+   **"Granted in binds" is narrower still when a bind names something
+   other than a directory.** Landlock itself refuses every `MAKE_*`,
+   `REMOVE_*` and `READ_DIR` right on a path that is not a directory —
+   `landlock_add_rule` answers EINVAL, not a silent no-op — because each
+   of those rights governs what a directory's own contents may become,
+   which has no meaning for the object itself. `nw-sup` masks a bind's
+   grant down to what the kernel will accept before asking for the rule,
+   as of the first bind this tree ever declared to something other than
+   a directory (`nwsup.c`'s `ll_beneath`). Every bind `ll_beneath` was
+   ever asked to open, before that one, was a directory — `test_land
+   lock_confines`'s `bind={shared}` is the only one that reaches it —
+   so the distinction had no case to be wrong about until then. (Not
+   every `bind=` in the suite: `test_blob_size_ceiling` writes
+   `bind=/etc/hosts` into a plan that is sized and never booted, so it
+   never reaches this function at all — a claim scoped to the suite
+   would have been wrong, which is why it is scoped to the function.)
+
    *Not* "cannot reach a path it was not given" — that was the wording
    for one round and it is the **brick's** property, not the lid's. After
    the pivot the reachable namespace *is* `/`, and `test_brick_is_a_root`

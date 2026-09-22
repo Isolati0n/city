@@ -1,11 +1,16 @@
 # 10 — The console house
 
-Status: **proposal.** Nothing here is built. This note exists to answer the
-mechanism-rule question before any code is written, per `CLAUDE.md`'s
-"Adding a field to the plan." The conclusion below is that this needs no new
-plan field and no TCB change; if a `claims` review of this note does not
-overturn that, the build follows in the same round, in the two-commit shape,
-as an ordinary house.
+Status: **stopped after a partial build; the seccomp premise below is
+false, and what replaces it needs an operator decision.** This note's
+original conclusion — no new plan field, no TCB change — was reviewed
+clean on paper and then falsified by actually booting the design under
+QEMU. The corrected finding is in **"What actually happened when this was
+built,"** near the end, and supersedes the "Decision" section above it,
+which is left in place because deleting a wrong conclusion without saying
+so is how the same mistake gets remade. Everything else here — the
+userland choice, the bind mechanism for the tty, the exit semantics, the
+visibility scope, the wrapper's fd-rewiring design — held up under
+building and reviewing it and is unaffected.
 
 ## Goal
 
@@ -357,3 +362,78 @@ this proceeds to a build this round, in the two-commit shape, once this
 note has a `claims` review — pending confirmation that the two unmeasured
 assumptions above (interactive `ash` with no controlling terminal;
 independent opens of one UART) hold when actually booted.
+
+## What actually happened when this was built
+
+The two unmeasured assumptions above both held: a standalone pty test
+(not QEMU) showed the wrapper's fd rewiring works and `ash` runs
+interactively with no controlling terminal, exactly reporting "can't
+access tty; job control turned off" as predicted. **The "no TCB change"
+conclusion did not hold**, and the paragraph above is left standing,
+uncorrected in place, because the mistake it makes is worth seeing rather
+than editing away.
+
+Booting the assembled brick under QEMU killed busybox with `SIGSYS` on
+`prctl` — a syscall not in `strict_allow[]`, called by busybox
+unconditionally at startup (confirmed with `strace`). Adding `prctl`
+alone was not enough: a `tcb-review` dispatched on the change rebuilt it
+in a scratch copy and, reading the killed syscall number off the kernel's
+own audit line each time a further one was needed, found the actual gap
+is **nine** syscalls before an interactive `busybox sh` over a real tty
+will run at all — `prctl`, `getuid`, `rt_sigaction`, `getppid`, `uname`,
+`ioctl`, `geteuid`, `getpgrp`, `poll`, `setpgid`. Every addition through
+all nine, in that scratch copy, made `tools/console-boot-test.py` pass
+end to end (the token sent over `ttyS1` came back, and the no-bind
+control stayed silent) — so the design's mechanism (the bind, the
+wrapper, `kind=oneshot`, the dedicated serial line) is sound; only the
+"no TCB change" premise was wrong.
+
+**`ioctl` is exactly what this note's own design section said was being
+avoided**, and for the reason stated there: it is not in `strict_allow[]`
+and the filter has no per-argument inspection, so granting it grants the
+*entire* `ioctl(2)` surface to every seccomp house, not a job-control
+subset. That is a materially larger, more consequential widening than
+adding `prctl` alone — which is what the build actually tried first,
+during this same round, on the evidence of one non-interactive `strace`
+run; that attempt is not itself written down earlier in this document,
+so "originally anticipated" would overstate what this note's own prior
+text commits to. On its own `prctl` would not have been enough anyway.
+Deciding whether the full widening is acceptable — or redesigning the
+wrapper to avoid needing an interactive `ash` at all, trading away more
+of "a normal shell" to keep the syscall surface where it is — is a
+design decision this note does not get to make by itself, per the same
+decision rule that authorized the build in the first place: **this
+needs the operator.**
+
+Why the first attempt's measurement missed the rest: the command run
+during that attempt was `strace -f -e trace=prctl /bin/busybox sh -c
+"echo hi"`. That flag traces only `prctl` by construction, and `-c` runs
+`ash` non-interactively, which is precisely the path that skips the
+job-control-adjacent syscalls (`ioctl`, `setpgid`, `getpgrp`, `poll`) an
+interactive shell attached to a real tty takes. The command's output was
+accurate and never capable of showing the thing that mattered — this
+project's own "the evidence is real and it is about something else,"
+reproduced in the writing of this very note.
+
+**One fix survives independently of this and is landing on its own,
+regardless of what the operator decides above:** booting also found that
+`nwsup.c`'s Landlock rule application (`ll_beneath()`) died with
+`FAIL landlock rule errno=22` on the console house's `bind=/dev/ttyS1`,
+because the kernel refuses directory-only Landlock rights (`READ_DIR`,
+every `MAKE_*`/`REMOVE_*`) on a bind target that is not a directory, and
+every bind `nwsup.c`'s Landlock code path was ever asked to open before
+this one was a directory (`test_landlock_confines`'s `bind={shared}` is
+the only one that reaches it; `tests/run.py` also has a `bind=/etc/hosts`
+that is never booted and so never reaches this code, which is why the
+claim is scoped to what the function was asked to open, not to every
+`bind=` line in the suite). That is a latent bug in the existing bind
+mechanism, not
+new mechanism this feature introduces, and it is fixed and reviewed
+(`tcb-review`, `fd-auditor`) independently of whether the console house
+itself ever ships.
+
+The wrapper (`houses/console-wrap.c`), the boot test
+(`tools/console-boot-test.py`), and `tools/mkboot.sh`'s `NW_CITY`/
+`NW_EXTRA_BRICKS` hooks are pushed to `wip/console-house`, not `main`,
+since the feature they support does not work yet and CLAUDE.md's own
+rule is no half-finished implementations on the trunk.
