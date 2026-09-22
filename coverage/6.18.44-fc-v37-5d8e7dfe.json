@@ -41,6 +41,7 @@
   "hash-pin",
   "kind-exit0",
   "kind-required",
+  "landlock-bind-to-a-file",
   "landlock-confines",
   "last-words-survive-group-term",
   "layer-survives-a-restart",

@@ -3060,7 +3060,7 @@ def test_seccomp_kills():
     print("ok seccomp-kill")
 
 
-def make_brick(ident, mirrors=(), exe="unit-brick"):
+def make_brick(ident, mirrors=(), exe="unit-brick", file_mirrors=()):
     """Build a content-addressed brick and return its HASH. The name is the
     sha256 of the tree's contents, so two bricks that differ only in the
     text of /id land at different paths on their own -- nothing assigns
@@ -3081,7 +3081,12 @@ def make_brick(ident, mirrors=(), exe="unit-brick"):
 
     `mirrors` are machine paths the brick must have mount points for. nw-sup
     will not mkdir into a brick, so the empty directories have to be baked in
-    here, which is exactly the constraint a real baker works under."""
+    here, which is exactly the constraint a real baker works under.
+
+    `file_mirrors` is the same requirement for a bind target that is not a
+    directory: the mount is `MS_BIND` on a plain file, and the kernel
+    requires the target to already exist as one, so it is baked in as an
+    empty regular file rather than a directory."""
     import hashlib, shutil
     # THE GUARD LIVES HERE so no caller can forget it. Every brick is an
     # image as of phase 2, so every make_brick() needs all three erofs
@@ -3112,6 +3117,9 @@ def make_brick(ident, mirrors=(), exe="unit-brick"):
     os.makedirs(f"{tmp}/d")
     for m in mirrors:
         os.makedirs(f"{tmp}{m}", exist_ok=True)
+    for m in file_mirrors:
+        os.makedirs(os.path.dirname(f"{tmp}{m}"), exist_ok=True)
+        open(f"{tmp}{m}", "wb").close()
 
     h = hashlib.sha256()
     for base, dnames, fnames in os.walk(tmp):
@@ -4818,6 +4826,73 @@ def test_landlock_confines():
           f"device node is still refused ({bd}) while fifo and socket "
           f"are allowed; mkdir/symlink/unlink/rmdir refused at the root "
           f"and allowed in the bind, mkblock refused in both; {trunc})")
+
+
+def test_landlock_bind_to_a_file():
+    """Pins nwsup.c's ll_beneath() fix for a bind target that is not a
+    directory. Every bind before this one, anywhere in this suite, named a
+    directory (bind=/etc, bind={shared} in test_landlock_confines above) --
+    so the kernel's own EINVAL on a directory-only Landlock right applied
+    to a non-directory path had never been reached by anything that boots.
+
+    The house must simply START. Before the fix, nw-sup died applying the
+    Landlock rule for this exact bind:
+
+        FAIL landlock rule errno=22
+
+    and the house never ran a line. The assertion is a paired positive,
+    not an absence: the house must both survive AND report the bind's
+    actual content, so a boot that failed for an unrelated reason before
+    ever reaching this bind cannot be mistaken for the fix working.
+
+    Negative control (not run here, run by hand when touching this):
+    revert ll_beneath's fstat/S_ISDIR masking and this test goes red on
+    `FAIL landlock rule errno=22` specifically -- not on a different
+    failure, which is what a test that merely checked "the boot failed
+    somehow" could not tell apart from the fix quietly regressing into a
+    different bug."""
+    abi = landlock_abi()
+    if abi is None:
+        skip("landlock-bind-to-a-file",
+             "kernel has no Landlock (landlock_create_ruleset -> ENOSYS); "
+             "the lid cannot be exercised here at all")
+        return
+
+    # A FILE, not a directory this time -- MS_BIND requires the target to
+    # already exist as the same type as the source, so the brick needs a
+    # plain file at this exact path (file_mirrors, not mirrors).
+    bind_file = f"{WORK}/ll-file-bind"
+    open(bind_file, "w").write("file-bind-token\n")
+    brick = make_brick("landlock-file-brick", exe="unit-bindfile",
+                        file_mirrors=(bind_file,))
+
+    city = f"{WORK}/ll-file.city"
+    open(city, "w").write(
+        f"house filebind /bin/brick kind=oneshot lids=newns,landlock "
+        f"brick={brick} layer=l-llfile bind={bind_file}\n")
+    blob = f"{WORK}/ll-file.blob"
+    b = run(["python3", CC, "--city", city, "--out", blob])
+    expect(b.returncode == 0, f"bake\n{b.out}{b.err}")
+
+    rc, out = boot(plan=blob, hold=1200)
+    expect(city_closed(rc, out), f"file-bind city rc={rc}\n{out}")
+    # Checked FIRST and by name, so a reverted fix goes red on this exact
+    # line rather than on "lid was not applied" or "the house never
+    # ran" -- both true consequences of the same cause, but neither
+    # names it. This is the assertion the negative control is about.
+    expect("FAIL landlock rule errno=22" not in out,
+           f"the non-directory bind fix regressed -- nw-sup died applying "
+           f"the Landlock rule for this exact bind, the pre-fix failure "
+           f"this test exists to catch\n{out}")
+    expect("lid landlock" in out, f"lid was not applied\n{out}")
+    expect("house exit filebind" in out,
+           f"the house never ran -- died applying the Landlock rule for "
+           f"a non-directory bind, which is the exact defect this test "
+           f"pins\n{out}")
+    expect("bindfile content=file-bind-token" in out,
+           f"the house ran but did not read its bind correctly\n{out}")
+    print("ok landlock-bind-to-a-file (a plain-file bind starts under "
+          "Landlock and reads its own content)")
 
 
 def c_name_slots(names):
@@ -8567,6 +8642,7 @@ def main():
         test_baker_writes_the_declared_layout,
         test_non_provision_at_max,
         test_landlock_confines,
+        test_landlock_bind_to_a_file,
         test_subset_run_is_not_a_gate,
     ]
 
