@@ -502,13 +502,29 @@ directory at its own root (`EACCES` — Landlock's `MAKE_CHAR`/
 It cannot mount a tmpfs, bind-mount `/` over anything, or `pivot_root`
 (`EPERM` — Landlock's blanket refusal of the mount family for any
 confined domain, independent of the ruleset's specific rights, which is
-what `runtime.md` means by "matters for a house with no seccomp"). It
-**can** call `unshare(CLONE_NEWNS)` successfully — harmless on its own:
-that call only gives the process its own copy of the mount table, and
-Landlock's restrictions travel with the process regardless of which
-mount namespace holds it, so the three refusals above hold exactly the
-same afterward. No escape found. Per the operator's stop condition, this
-measurement is what authorizes building from here rather than stopping.
+what `CLAUDE.md` invariant 6 means by "matters for a house with no
+seccomp"). It **can** call `unshare(CLONE_NEWNS)` successfully —
+harmless on its own: that call only gives the process its own copy of
+the mount table, and a Landlock domain is attached to the calling
+task's credentials rather than to a mount namespace, so `CLONE_NEWNS`
+does not touch it.
+
+**That last clause is reasoned, not re-measured, and the difference is
+worth being honest about.** The probe's own call order is mknod (char,
+block), mkdir, the tmpfs mount, the bind mount, *then* `unshare`, *then*
+`pivot_root` — so only `pivot_root`'s refusal is a direct measurement of
+what happens *after* `unshare(CLONE_NEWNS)`; the five refusals before it
+were never retried afterward in this run. That `pivot_root_noop` still
+comes back `EPERM` post-unshare is consistent with the reasoning above
+and is real evidence for it, but "the three refusals above hold exactly
+the same afterward" overstated a re-measurement this probe did not
+perform for those three specifically. No escape found either way — the
+mount-family refusal that matters for all of them is the one thing
+`pivot_root_noop` did confirm survives the unshare — but the honest
+description is one confirmed post-unshare data point plus a mechanism
+argument for the rest, not five identical repeated measurements. Per
+the operator's stop condition, this is what authorizes building from
+here rather than stopping.
 
 ### Built and controlled
 
