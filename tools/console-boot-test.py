@@ -164,11 +164,33 @@ def build_probe_brick(probe_path, brick_out_dir):
     return hexd
 
 
-def write_probe_city(path, brick_hex, lids=CONSOLE_LIDS):
+def write_probe_city(path, brick_hex, lids=CONSOLE_LIDS, with_victim=False):
+    lines = [
+        f"house probe /bin/probe kind=oneshot budget=1 "
+        f"lids={lids} brick={brick_hex} layer=probe\n"
+    ]
+    if with_victim:
+        # Brickless, staged straight onto the root image (NW_EXTRA_BIN),
+        # the same way unit-probe is -- an ordinary house, not sealed,
+        # for the process-reach measurement. budget=0: if the probe's
+        # SIGKILL against it lands, that is the finding; nothing should
+        # bring it back and mask that.
+        lines.append(
+            "house victim /nw/bin/unit-reach-victim kind=oneshot "
+            "budget=0 lids=seccomp\n")
     with open(path, "w") as f:
-        f.write(
-            f"house probe /bin/probe kind=oneshot budget=1 "
-            f"lids={lids} brick={brick_hex} layer=probe\n")
+        f.writelines(lines)
+
+
+def build_victim(build_dir):
+    victim = os.path.join(build_dir, "unit-reach-victim")
+    r = subprocess.run(
+        ["gcc", "-Wall", "-Wextra", "-O2", "-std=gnu11", "-static",
+         "-o", victim, os.path.join(ROOT, "houses/reach-victim.c")],
+        capture_output=True, text=True)
+    if r.returncode != 0:
+        raise SystemExit(f"FAIL: building reach-victim\n{r.stdout}{r.stderr}")
+    return victim
 
 
 def build_images(out_dir, city_path, brick_dir):
@@ -294,6 +316,100 @@ def boot_and_probe(out_dir, want_response):
     return open(log0).read() if os.path.exists(log0) else "", received
 
 
+def boot_and_wait(out_dir, wait_s):
+    """Boot the images in out_dir and just read the ttyS0 log for wait_s
+    seconds after city open -- no ttyS1 interaction at all. For a
+    measurement like process-reach, where the probe's own battery (a PID
+    sweep plus per-pid kill/ptrace/process_vm_readv) and the victim
+    house's lifetime both take longer than the short exchanges the
+    other boot_and_probe() callers need. Returns the ttyS0 log text."""
+    kernel = os.environ.get("KERNEL", "/boot/vmlinuz")
+    accel = os.environ.get("ACCEL", "tcg")
+    append = ("console=ttyS0,115200n8 ignore_loglevel NW_ROOT=/dev/vda "
+              "NW_ROOT_FSTYPE=ext4 NW_ESP=/dev/vdb NW_ESP_FSTYPE=vfat")
+    log0 = os.path.join(out_dir, "console.log")
+    try:
+        os.remove(log0)
+    except FileNotFoundError:
+        pass
+
+    cmd = [
+        "qemu-system-x86_64",
+        "-machine", f"q35,accel={accel}", "-cpu", "max", "-m", "512M",
+        "-nographic", "-no-reboot", "-display", "none",
+        "-serial", f"file:{log0}",
+        "-monitor", "none",
+        "-kernel", kernel,
+        "-initrd", os.path.join(out_dir, "initrd.cpio"),
+        "-append", append,
+        "-drive", f"file={out_dir}/root.img,if=virtio,format=raw,cache=writeback",
+        "-drive", f"file={out_dir}/esp.img,if=virtio,format=raw,cache=writeback",
+    ]
+    proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        deadline = time.time() + 30
+        opened = False
+        while time.time() < deadline:
+            if os.path.exists(log0) and "city open" in open(log0).read():
+                opened = True
+                break
+            time.sleep(0.5)
+        if not opened:
+            return open(log0).read() if os.path.exists(log0) else ""
+        time.sleep(wait_s)
+    finally:
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+    return open(log0).read() if os.path.exists(log0) else ""
+
+
+def measure_process_reach(workroot):
+    """What an unconfined (no seccomp) console house can do to ANOTHER
+    process in the city -- kill it, ptrace it, read its memory -- per
+    the operator's follow-up to measure_escape() below, which covered
+    the filesystem only. Boots the probe alongside houses/reach-
+    victim.c, an ordinary lids=seccomp house with no brick, and reads
+    every reach_* line the probe's PID sweep produced."""
+    probe = build_probe(workroot)
+    victim = build_victim(workroot)
+    brick_dir = os.path.join(workroot, "reach-bricks")
+    brick_hex = build_probe_brick(probe, brick_dir)
+    bin_dir = os.path.join(workroot, "reach-bin")
+    os.makedirs(bin_dir, exist_ok=True)
+    shutil.copy(victim, os.path.join(bin_dir, "unit-reach-victim"))
+
+    city = os.path.join(workroot, "reach.city")
+    write_probe_city(city, brick_hex, with_victim=True)
+    out = os.path.join(workroot, "boot-reach")
+
+    env = dict(os.environ)
+    env["OUT"] = out
+    env["NW_CITY"] = city
+    env["NW_EXTRA_BRICKS"] = brick_dir
+    env["NW_EXTRA_BIN"] = bin_dir
+    r = subprocess.run(["sh", os.path.join(ROOT, "tools/mkboot.sh")],
+                        cwd=ROOT, env=env, capture_output=True, text=True)
+    if r.returncode != 0:
+        raise SystemExit(f"FAIL: mkboot.sh (reach)\n{r.stdout}{r.stderr}")
+
+    log = boot_and_wait(out, wait_s=10)
+    if "city open" not in log:
+        print(f"MEASUREMENT FAILED: boot never reached city open\n{log}")
+        return None
+    lines = [ln for ln in log.splitlines() if "PROBE reach_" in ln]
+    print("=== process-reach measurement: probe results (direct syscalls) ===")
+    for ln in lines:
+        print(ln)
+    print("=== end ===")
+    if not lines:
+        print(f"MEASUREMENT FAILED: no PROBE reach_ lines in the log\n{log}")
+    return lines
+
+
 def measure_escape(workroot):
     """What lids=newns,landlock,newnet actually lets this house do, with no
     seccomp lid at all -- the operator's own instruction: report what it
@@ -341,11 +457,15 @@ def main():
         return 0
 
     only_escape = "--measure-escape" in sys.argv[1:]
+    only_reach = "--measure-reach" in sys.argv[1:]
 
     workroot = tempfile.mkdtemp(prefix="nw-console-boot-")
     try:
         if only_escape:
             measure_escape(workroot)
+            return 0
+        if only_reach:
+            measure_process_reach(workroot)
             return 0
 
         wrap = build_wrapper(workroot)

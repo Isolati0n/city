@@ -480,11 +480,11 @@ security refusal produce the same shell text, and this project's own
 "the evidence is real and it is about something else" is exactly this
 shape.
 
-`houses/console-escape-probe.c` (on `wip/console-house`, not shipped in
-the real console house's brick — a measurement tool for this one
-question) calls the syscalls directly and prints each one's own errno,
-so there is no shell, no `/proc` dependency, and no ambiguity between
-them. Booted under the same `lids=newns,landlock,newnet`, no seccomp:
+`houses/console-escape-probe.c` (in the tree, not shipped in the real
+console house's brick — a measurement tool for this investigation only)
+calls the syscalls directly and prints each one's own errno, so there is
+no shell, no `/proc` dependency, and no ambiguity between them. Booted
+under the same `lids=newns,landlock,newnet`, no seccomp:
 
 ```
 PROBE mknod_char rc=-1 errno=13(Permission denied)
@@ -492,6 +492,8 @@ PROBE mknod_block rc=-1 errno=13(Permission denied)
 PROBE mkdir_root rc=-1 errno=13(Permission denied)
 PROBE mount_tmpfs rc=-1 errno=1(Operation not permitted)
 PROBE mount_bind_root rc=-1 errno=1(Operation not permitted)
+PROBE mknod_char_in_layer rc=-1 errno=13(Permission denied)
+PROBE mknod_block_in_layer rc=-1 errno=13(Permission denied)
 PROBE unshare_newns rc=0 errno=0(-)
 PROBE pivot_root_noop rc=-1 errno=1(Operation not permitted)
 ```
@@ -509,22 +511,173 @@ the mount table, and a Landlock domain is attached to the calling
 task's credentials rather than to a mount namespace, so `CLONE_NEWNS`
 does not touch it.
 
+**`mknod_char_in_layer`/`mknod_block_in_layer` are the same two calls,
+run again inside `/mnt` — a plain directory in the writable overlay —
+rather than at `/` itself.** The first pair could have been read two
+ways: Landlock refused `MAKE_CHAR`/`MAKE_BLOCK` (the claimed mechanism),
+or something about `/` specifically — the pivoted root's own
+mountpoint, rather than an ordinary directory beneath it — behaved
+differently from an ordinary write, since `/` is already known to be
+writable (`WRITE_FILE` is granted there) in a way that could have been
+mistaken for "device nodes are creatable here too". Identical `EACCES`
+in `/mnt` rules that out: the refusal is Landlock's `MAKE_CHAR`/
+`MAKE_BLOCK` withholding, not something particular to the root
+mountpoint.
+
 **That last clause is reasoned, not re-measured, and the difference is
 worth being honest about.** The probe's own call order is mknod (char,
-block), mkdir, the tmpfs mount, the bind mount, *then* `unshare`, *then*
-`pivot_root` — so only `pivot_root`'s refusal is a direct measurement of
-what happens *after* `unshare(CLONE_NEWNS)`; the five refusals before it
-were never retried afterward in this run. That `pivot_root_noop` still
-comes back `EPERM` post-unshare is consistent with the reasoning above
-and is real evidence for it, but "the three refusals above hold exactly
-the same afterward" overstated a re-measurement this probe did not
-perform for those three specifically. No escape found either way — the
-mount-family refusal that matters for all of them is the one thing
-`pivot_root_noop` did confirm survives the unshare — but the honest
-description is one confirmed post-unshare data point plus a mechanism
-argument for the rest, not five identical repeated measurements. Per
-the operator's stop condition, this is what authorizes building from
-here rather than stopping.
+block), mkdir, the tmpfs mount, the bind mount, the same two mknods
+again in `/mnt`, *then* `unshare`, *then* `pivot_root` — so only
+`pivot_root`'s refusal is a direct measurement of what happens *after*
+`unshare(CLONE_NEWNS)`; the six refusals before it were never retried
+afterward in this run. That `pivot_root_noop` still comes back `EPERM`
+post-unshare is consistent with the reasoning above and is real evidence
+for it, but "the three refusals above hold exactly the same afterward"
+overstated a re-measurement this probe did not perform for those three
+specifically.
+
+**No FILESYSTEM escape found either way** — the mount-family refusal
+that matters for all of them is the one thing `pivot_root_noop` did
+confirm survives the unshare — but the honest description is one
+confirmed post-unshare data point plus a mechanism argument for the
+rest, not seven identical repeated measurements. The qualifier is not
+decorative: the filesystem is one of two things measured this round.
+The other — what this lid set lets a house do to *another process* in
+the city — is not the same story, and is not folded into "no escape
+found" below. Per the operator's stop condition (a filesystem escape
+would have meant stop and report instead of building), this measurement
+alone is what authorized building the console house from here.
+
+### Measured: process reach
+
+**A second, separate question, asked after the filesystem one because
+building had already been authorized by the time it was asked: what can
+this house do to *another process* in the city, not to the filesystem.**
+No seccomp lid means no restriction on `kill(2)`, `ptrace(2)` or
+`process_vm_readv(2)` at all — none of the three is governed by
+Landlock, which is filesystem-only in this tree, or by the mount/net
+namespaces this house has. There is no pid namespace lid, so every
+process in the city — this house's, any other house's, any
+supervisor's — shares one flat pid space with the same numbers
+everywhere.
+
+**Discovery has no `/proc` to read either, so it is the same
+brute-force `kill(pid, 0)` sweep the operator specified**, extended in
+`houses/console-escape-probe.c`'s `reach_probes()`. Getting the range
+right took three wrong attempts, each found by running, and the
+comment in that function records all three so the next person does not
+repeat them: scanning up from pid 2 hit kernel threads and this house's
+own supervisor and log-relaying process, and killing one of those broke
+the probe's own log pipe and ended it with `SIGPIPE` before it ever
+reached the victim; scanning up from this process's own pid on the
+assumption a later-declared unit always gets a higher one was falsified
+by the boot log itself (`spawned probe pid=80`, `spawned victim
+pid=82`, this process's own runtime pid `84` — the victim's house pid
+sits *below* this process's, not above, because this house's longer lid
+chain loses the race to fork+exec against the victim's simpler one); a
+wider one-directional retry did not help because the direction, not the
+distance, was wrong. The working sweep is a symmetric window around this
+process's own pid, excluding pid 1, this process's own pid, and its own
+supervisor (`getppid()`, which for an exec'd house is exactly that), and
+staying clear of low pids where kernel threads and this house's logger
+live.
+
+Booted alongside `houses/reach-victim.c` — an ordinary `lids=seccomp`
+house with no brick, chosen deliberately: seccomp restricts what a
+process may call itself, not what another process may do to it, so a
+"confined" victim is not a shield here and the measurement is not
+flattered by picking an undefended one. Quoted from an actual run:
+
+```
+PROBE reach_exists_pid57 rc=0 errno=0(-)
+PROBE reach_ptrace_seize_pid57 rc=-1 errno=1(Operation not permitted)
+PROBE reach_vm_readv_pid57 rc=-1 errno=3(No such process)
+PROBE reach_sigkill_pid57 rc=0 errno=0(-)
+```
+
+repeated for every pid the sweep finds in range (typically 3-4 in a
+two-house test boot). **`kill(pid, 0)` finds them and `kill(pid,
+SIGKILL)` reaches them — confirmed against the real victim, not just a
+process the sweep happened to find**, by the boot log's own line:
+`[nw-root] house exit victim status=9` — status 9 is `SIGKILL`'s raw
+signal number in a `WIFSIGNALED` wait status, the same encoding the
+earlier `status=13` (`SIGPIPE`, from the first wrong attempt above) used.
+This is not inferred from the sweep; it is nw-root itself reporting that
+the victim house died by exactly the signal this probe sent.
+
+`PTRACE_SEIZE` is refused (`EPERM`) on every pid, every run. This did
+**not** reproduce locally in an isolated test (a plain fork()ed child
+with the identical Landlock ruleset applied to itself, ptrace-seized by
+its uid-0 parent, succeeds) — the difference between that and the real
+measurement is not fully identified. Candidates not ruled out: the
+sibling relationship (probe and victim share a common ancestor rather
+than one being the other's direct parent), or something about this
+house's own `unshare(CLONE_NEWNS|CLONE_NEWNET)` changing how its
+capabilities are evaluated against the target. **This is named as an
+open question rather than resolved**, because guessing a mechanism here
+and writing it down with confidence is exactly the failure this
+project's rules exist to catch — the fact that ptrace is refused is
+measured and reproducible; why is not, yet.
+
+`process_vm_readv` never succeeds either — `EPERM` in some runs, `ESRCH`
+("No such process") in others, against a pid that `kill(pid, 0)` had
+just confirmed existed moments before. Both outcomes mean the same
+thing operationally (no memory content was ever read; every attempt
+returned an error, none a byte count), and the `ESRCH` cases are at
+least partly explained by the sweep also catching short-lived kernel
+worker threads spawned by this house's own erofs/loop/overlay mount
+setup, which have no user address space `process_vm_readv` can name —
+plausible given the pid clustering observed, not fully disentangled
+from genuine victim-process results within this investigation.
+
+**So: no filesystem escape, and — separately — an unconfined house can
+discover and kill any process in the city it can reach by pid, but this
+measurement did not achieve a memory read and did not confirm a
+successful `ptrace` attach against another process, for reasons not
+fully explained.** That is the honest shape of the finding, not "an
+operator console that can reach every process in the city" in the
+strongest sense that phrase could be read — kill, yes, demonstrated and
+confirmed against the real target; attach and read, refused, every
+time, by a mechanism this note does not claim to have identified.
+
+### Candidate mitigations for the process-reach cost — listed, not built
+
+Per the operator's instruction: this is the record of what exists to
+choose from, not a decision. Nothing below is implemented.
+
+- **A pid-namespace lid.** The structural fix — a house in its own pid
+  namespace cannot even *name* a process outside it, so `kill(pid, 0)`
+  on anything but its own descendants would be `ESRCH` before any
+  permission question arises. This is a **plan-format change**: a fifth
+  `NW_LID_*` bit, `unshare(CLONE_NEWPID)` in `nwsup.c` alongside
+  `lid_newns()`, and the usual four-place update invariant 3 requires
+  (`blob.h`, the baker, both specs). It also changes what "this house's
+  own supervisor" means for reaping — a pid-namespace init has its own
+  reaping obligations — which is new TCB surface, not a flag flip.
+
+- **Landlock signal scoping, if the kernel's ABI has it — measured
+  here, not assumed.** `landlock_create_ruleset(NULL, 0,
+  LANDLOCK_CREATE_RULESET_VERSION)` returns `7` on this kernel
+  (`6.18.44-fc-v37`), and `LANDLOCK_SCOPE_SIGNAL` (restricting signal
+  delivery across a Landlock domain boundary) is a real ABI 6+ feature —
+  but this box's installed `/usr/include/linux/landlock.h` predates it:
+  no `LANDLOCK_SCOPE_SIGNAL` constant, no `scoped` member on `struct
+  landlock_ruleset_attr`. Using it from `nwsup.c` would need either
+  newer kernel headers or a hand-extended struct definition matching
+  what the running kernel actually accepts — a real but small
+  implementation cost, named so it is not discovered mid-change. It
+  would not touch `ptrace`/`process_vm_readv` at all (Landlock's scoping
+  in this ABI is signals only), so it closes the `kill` finding and
+  leaves the ptrace/read question exactly as open as it is today.
+
+- **A narrow seccomp denylist for this house specifically.** Tempting
+  and, on its own terms, **already refused**: `runtime.md`'s hard rules
+  say "There is **one** allow-list and a house does not choose it" and
+  name a second filter path as "recreating the bug that was removed."
+  A per-house denylist is a second table by a different name. Listing
+  it here because it is the mitigation someone will reach for first,
+  not because it is free — building it means reopening that decision
+  explicitly, in `runtime.md`, not adding a table beside it.
 
 ### Built and controlled
 
@@ -555,6 +708,46 @@ ok console-house-lids-exact (blob lids byte = 0x0e = landlock|newns|newnet,
 no seccomp)
 ALL CONSOLE BOOT CHECKS PASSED
 ```
+
+**Wired into the gate, not run by hand.** `tools/console-boot-test.py`
+ran only when someone typed its name, so `make test` never re-checked
+any of this — the exact silence failure `CLAUDE.md` names: a mechanism
+that is correct and never reached looks identical to one that does not
+exist. `tests/run.py` now has `test_console_house_reachable`, which
+imports `tools/console-boot-test.py` as a module (the same
+`importlib.util.spec_from_file_location` idiom `_fold_house_body()`
+already uses for `tools/fold-house.py`), captures its stdout, and
+requires `rc == 0` and `"ALL CONSOLE BOOT CHECKS PASSED"` in the output.
+A missing `qemu-system-x86_64`, a non-static `/bin/busybox`, or a
+non-root run makes `check_environment()` raise `Unavailable`, which the
+test turns into a named `SKIP: console-boot-test (...)` — never a
+silent pass, per `harness.md`'s *a test whose outcome depends on the
+environment must say so*. It is registered in `main()`'s test list
+after `test_landlock_bind_to_a_file`, so a plain `make test` boots the
+four QEMU guests this needs; `docs/ENVIRONMENT.md` records the measured
+cost (about fifty seconds of the suite's forty minutes) and the three
+things the test asks for before it asks the machine to boot anything.
+
+**The control asked for — drop the bind and `make test` goes red —
+was run, not assumed.** `write_city()` in `tools/console-boot-test.py`
+was edited to force `with_bind = False` unconditionally (a one-line,
+clearly-marked temporary change, never committed), and a full `make
+test` was run against it. It failed exactly where the missing bind
+should make it fail, not somewhere upstream:
+
+```
+FAIL: token not echoed back over ttyS1
+FAIL: console-boot-test.py did not report all checks passing (rc=1)
+```
+
+and the overall run ended `EXIT_CODE=2`. The forced line was then
+reverted and a plain `--only console-house-reachable` run confirmed
+green again before anything was staged. The control is not itself
+checked into the tree — `write_city()`'s own `with_bind` parameter is
+what the checks above already exercise, by calling it with `True` and
+`False` — so this paragraph is the record of having run it, the same
+shape `plan.md`'s definition of done asks for a crafted-bad-blob
+rejection.
 
 ### What this means for the mechanism-rule table above
 

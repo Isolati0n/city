@@ -4895,6 +4895,75 @@ def test_landlock_bind_to_a_file():
           "Landlock and reads its own content)")
 
 
+def test_console_house_reachable():
+    """docs/options/10-console-house.md's console house, wired into the
+    gate rather than left a hand-run tool -- so make test re-checks it
+    and a regression cannot pass silently by nobody running
+    tools/console-boot-test.py that week. Needs qemu-system-x86_64, a
+    STATIC busybox (`apt-get install busybox-static`; the dynamically
+    linked one in busybox-initramfs fails execve inside a brick with no
+    loader), and root for the loop mounts mkboot.sh's image build needs
+    -- missing any of them is a named skip, the same discipline
+    landlock-confines already uses via Unavailable, not a silent
+    omission that reads as "not applicable" the way harness.md's own
+    history warns about.
+
+    console-boot-test.py's own main() already runs all four checks (the
+    token echoed back, silence with bind= removed, seccomp added back
+    kills the house, the baked lids byte pinned exactly) and its own
+    controls; called here by import rather than duplicated, so there is
+    one copy of this logic, not two that can drift apart. Its stdout is
+    captured and inspected for the same three outcomes the script
+    itself already prints: `SKIP: console-boot-test (...)` becomes an
+    Unavailable (named skip, this test's own name); `ALL CONSOLE BOOT
+    CHECKS PASSED` is the pass; anything else -- a crash, a `FAIL:`
+    line, a nonzero return with neither marker -- fails loudly with the
+    captured output attached, because a script that changes what it
+    prints without this test noticing is exactly the silent-drift shape
+    this file's own rules warn about.
+
+    SLOW: four QEMU boots under TCG (no KVM in this container), each
+    ~15-50s. This is in the gate because it must eventually run, not
+    because it is cheap -- do not reach for --only console-house-
+    reachable as a substitute for `make test` on a change near it.
+
+    Control, run by hand rather than checked in (this test wraps
+    console-boot-test.py's own main(), so the control forces its
+    write_city() plan builder to skip the bind= line unconditionally):
+    with the console house's bind removed, a full `make test` went red
+    at exactly this test -- `FAIL: token not echoed back over ttyS1`,
+    then `FAIL: console-boot-test.py did not report all checks passing
+    (rc=1)`, overall EXIT_CODE=2 -- before the forced line was reverted
+    and a green run confirmed again. docs/options/10-console-house.md
+    has the full transcript."""
+    import contextlib
+    import importlib.util
+    import io
+
+    def by_path(n, rel):
+        sp_ = importlib.util.spec_from_file_location(n, os.path.join(ROOT, rel))
+        m = importlib.util.module_from_spec(sp_)
+        sp_.loader.exec_module(m)
+        return m
+
+    cbt = by_path("console_boot_test", "tools/console-boot-test.py")
+
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        rc = cbt.main()
+    out = buf.getvalue()
+    print(out, end="")
+
+    m = re.search(r"^SKIP: console-boot-test \((.*)\)$", out, re.M)
+    if m:
+        raise Unavailable(m.group(1))
+
+    expect(rc == 0 and "ALL CONSOLE BOOT CHECKS PASSED" in out,
+           f"console-boot-test.py did not report all checks passing "
+           f"(rc={rc})\n{out}")
+    print("ok console-house-reachable")
+
+
 def c_name_slots(names):
     """Ask nwcheck.c itself which table slot each name occupies.
 
@@ -8643,6 +8712,7 @@ def main():
         test_non_provision_at_max,
         test_landlock_confines,
         test_landlock_bind_to_a_file,
+        test_console_house_reachable,
         test_subset_run_is_not_a_gate,
     ]
 

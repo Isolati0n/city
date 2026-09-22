@@ -106,6 +106,31 @@ the answers.
   (`make proof` is tens of minutes on top, and `CLAUDE.md` says not to
   budget for it from any written line.)
 
+- **`test_console_house_reachable` costs about fifty seconds of that
+  forty minutes, measured**: `time python3 tests/run.py --only
+  console-house-reachable` → `real 0m48.725s` on this box. It boots four
+  separate QEMU guests under TCG (no `/dev/kvm` here — see below), one
+  per check `tools/console-boot-test.py` runs. `--only` for iterating on
+  it specifically is still slower than most of the suite combined, so
+  prefer reading `tools/console-boot-test.py`'s own output over re-running
+  it unless the change is actually near it.
+
+- **What that test needs, each checked the way it checks itself, not
+  assumed:** `qemu-system-x86_64` is present
+  (`command -v qemu-system-x86_64` → `/usr/bin/qemu-system-x86_64`); a
+  STATIC `/bin/busybox` is not, by default — `apt-get install
+  busybox-static` installs one, and `file /bin/busybox` must report
+  `statically linked` afterward, because the brick this test boots
+  carries no loader and the dynamically-linked copy in
+  `busybox-initramfs` fails `execve` inside it with `ENOENT` (the exact
+  trap `harness.md` names for `dawn-real-boot`, met again here). Root is
+  required for the loop mounts `tools/mkboot.sh`'s image build does
+  (`os.geteuid() != 0` is the check). All three are asked for by
+  `check_environment()` in `tools/console-boot-test.py`, and missing any
+  one is a named skip (`SKIP: console-boot-test (...)`), not a silent
+  pass or a crash — the same discipline `landlock-confines` already uses
+  via `Unavailable`.
+
 - **The agent's batch harness reported a control GREEN once, wrongly, and
   it has not been explained.** A mutation that should have turned a test
   red printed `STILL GREEN` inside a batch while the artifact it guards

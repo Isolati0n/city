@@ -44,17 +44,21 @@ for a in "$@"; do
     esac
 done
 
-# NW_CITY, NW_EXTRA_BRICKS: both optional, both additive, neither changes
-# behaviour when unset. docs/options/10-console-house.md's boot test is
-# the first (and so far only) caller: it needs a plan other than the
-# fixed four-probe-house default, and brick images this script does not
-# itself build. (That test drives qemu itself for the interactive part,
-# with its own second serial chardev, rather than adding one here --
-# --run/--check's qemu invocation is unchanged and stays exactly as
-# tested.) Each is read once, right here, so every place below that cares
-# can just test whether the variable is empty.
+# NW_CITY, NW_EXTRA_BRICKS, NW_EXTRA_BIN: all optional, all additive,
+# none changes behaviour when unset. docs/options/10-console-house.md's
+# boot test is the first (and so far only) caller: it needs a plan other
+# than the fixed four-probe-house default, brick images this script does
+# not itself build, and (for a brickless fixture, e.g. a process-reach
+# victim house with no brick of its own) a binary staged onto the root
+# image's /nw/bin the way unit-probe already is. (That test drives qemu
+# itself for the interactive part, with its own second serial chardev,
+# rather than adding one here -- --run/--check's qemu invocation is
+# unchanged and stays exactly as tested.) Each is read once, right here,
+# so every place below that cares can just test whether the variable is
+# empty.
 NW_CITY=${NW_CITY:-}
 NW_EXTRA_BRICKS=${NW_EXTRA_BRICKS:-}
+NW_EXTRA_BIN=${NW_EXTRA_BIN:-}
 
 need() {
     command -v "$1" >/dev/null 2>&1 || {
@@ -158,6 +162,13 @@ cp -f "$BUILD/nw-root" "$BUILD/nw-spawn" "$BUILD/nw-sup" \
       "$BUILD/unit-boom" "$BUILD/unit-badcall" "$BUILD/unit-term" \
       "$BUILD/unit-brick" \
       "$MNT/root/nw/bin/"
+# NW_EXTRA_BIN: a directory of extra binaries for a brickless fixture --
+# e.g. docs/options/10-console-house.md's process-reach victim house,
+# which needs no brick and so is exec'd straight from the root image the
+# way unit-probe already is.
+if [ -n "$NW_EXTRA_BIN" ]; then
+    cp -f "$NW_EXTRA_BIN"/* "$MNT/root/nw/bin/"
+fi
 chmod 0755 "$MNT/root/nw/bin/"*
 # THE PER-HOUSE LAYER CHILDREN, from the plan, by the only thing that makes
 # them. `mkdir /nw/layers` above is the parent only -- the same split the
