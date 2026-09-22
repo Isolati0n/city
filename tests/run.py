@@ -5311,15 +5311,25 @@ def test_rlimit_raise():
         with open("/proc/sys/fs/nr_open", "w") as f:
             f.write(str(lowered_nr_open))
 
+    # Popen + reap_nested, not subprocess.run(timeout=...): a timeout on
+    # the latter only kills the `unshare` process, not the nested PID 1
+    # it forked -- reap_nested()'s own docstring names that exact trap.
+    # Bounded and reaped here so a hang cannot leave fs.nr_open, a
+    # SYSTEMWIDE sysctl, permanently lowered on this machine.
+    p2 = subprocess.Popen(
+        ["unshare", "--pid", "--fork", "--mount-proc", "--",
+         f"{BIN}/nw-root", "--hold-ms", "900", blob],
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        start_new_session=True, preexec_fn=_cap2)
     try:
-        p2 = subprocess.run(
-            ["unshare", "--pid", "--fork", "--mount-proc", "--",
-             f"{BIN}/nw-root", "--hold-ms", "900", blob],
-            capture_output=True, preexec_fn=_cap2)
+        try:
+            out2b, _ = p2.communicate(timeout=25)
+        except subprocess.TimeoutExpired:
+            out2b = b""
         rc2 = p2.returncode
-        out2 = (p2.stdout or b"").decode("utf-8", "replace") + \
-               (p2.stderr or b"").decode("utf-8", "replace")
+        out2 = out2b.decode("utf-8", "replace")
     finally:
+        reap_nested(p2)
         with open("/proc/sys/fs/nr_open", "w") as f:
             f.write(orig_nr_open)
 
