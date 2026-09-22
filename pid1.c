@@ -283,13 +283,18 @@ static void spawn_logger(uint32_t i)
          * lands, block SIGTTOU/SIGTTIN here. */
         setpgid(0, 0);
         close(houses[i].log_w);
-        for (uint32_t j = 0; j < n_houses; j++) {
-            if (j == i) continue;
-            /* Interleaved create/fork: later houses have no pipe yet
-             * (log_* == -1). Closing an unset fd would close 0. */
-            if (houses[j].log_r >= 0) close(houses[j].log_r);
-            if (houses[j].log_w >= 0) close(houses[j].log_w);
-        }
+        /* Close only earlier houses' write ends. Later slots have not
+         * been created, so there is no sentinel and nothing to mistake
+         * for fd 0. houses[] is static: a -1 init that is deleted
+         * becomes 0, and a `>= 0` scan of all n_houses then closes
+         * stdin of every logger but the last -- suite stays green.
+         * Trade-off: spawn_logger(i) is order-dependent. It must run
+         * after houses[0..i] have pipes and before houses[i+1..] do.
+         * That is already the interleaved loop. A scan of every slot
+         * would be order-independent and would need the sentinel
+         * back. */
+        for (uint32_t j = 0; j < i; j++)
+            close(houses[j].log_w);
         char prefix[NW_NAME_LEN + 4];
         int pn = snprintf(prefix, sizeof prefix, "[%.*s] ",
                           NW_NAME_LEN - 1, houses[i].name);
@@ -340,13 +345,17 @@ static int run_rescue(const char *slot)
  * behind several past bugs, and it made A/B a directory layout rather than a
  * mechanism. PID 1 mounts nothing here and still learns nothing about
  * filesystems -- it opens a path it was handed. */
-/* 0 ok, -2 pointer file absent (unchosen), -1 present but untrusted. */
+/* 0 ok, -3 slots directory absent, -2 pointer file absent (unchosen),
+ * -1 present but untrusted. open(slots/current) returns ENOENT for
+ * both absences; those are different repairs. Open the directory
+ * first so they stay distinct. */
 static int slot_from_current(const char *slots, char *out, size_t outsz)
 {
-    char cur[512];
-    if (snprintf(cur, sizeof cur, "%s/current", slots) >= (int)sizeof cur)
-        return -1;
-    int fd = open(cur, O_RDONLY);
+    int dfd = open(slots, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    if (dfd < 0)
+        return (errno == ENOENT) ? -3 : -1;
+    int fd = openat(dfd, "current", O_RDONLY);
+    close(dfd);
     if (fd < 0) return (errno == ENOENT) ? -2 : -1;
     char nm[NW_NAME_LEN];
     ssize_t n = read(fd, nm, sizeof nm - 1);
@@ -427,6 +436,8 @@ int main(int argc, char **argv)
     if (!plan && !slot && slots) {
         {
             int sc = slot_from_current(slots, slotbuf, sizeof slotbuf);
+            if (sc == -3)
+                halt_now("slots missing");
             if (sc == -2)
                 halt_now("slot unchosen");
             if (sc < 0)
@@ -503,7 +514,43 @@ int main(int argc, char **argv)
      * plan this check just ACCEPTED halts `report pipe` whenever
      * soft < need <= hard. Measured at n=3, soft=8, hard=20, and
      * again at n=6, soft=10. fd-auditor and claims, independently,
-     * from different rungs. */
+     * from different rungs.
+     *
+     * "need" HERE IS PID 1's OWN DESCRIPTOR COUNT, not any house's --
+     * NW_FD_RESERVED plus one log_w per house, the table this process
+     * itself is about to hold. It is not sized for any one house;
+     * nothing here reads or applies the plan's resource block. A house's own
+     * descriptor limit is a different, still-unbuilt mechanism: it
+     * belongs in that per-house resource block, which nwsup.c does not
+     * apply yet (.claude/rules/runtime.md's "The resource block is in
+     * the plan and nothing applies it" already carries this as a kind-3
+     * item; a per-house NOFILE limit is a candidate field for it, not
+     * built here).
+     *
+     * Every house inherits this table by fork, unmodified before exec,
+     * so raising the soft limit to `need` gives every house a NOFILE
+     * soft limit of roughly PID 1's own descriptor count -- not a
+     * number chosen for what any single house needs. Soft is raised to
+     * `need`, not to `rlim_max`: raising to the hard ceiling would hand
+     * every house the whole machine's limit instead. If that first
+     * raise is refused (EPERM, which happens when `need` still exceeds
+     * `fs.nr_open` -- measured on a host with nr_open lowered to 1024,
+     * hard 8192: setrlimit(12, 8192) answers EPERM while setrlimit(12,
+     * 12) succeeds), the fallback lowers `rlim_max` to `need` as well
+     * and retries once. That fallback is a PERMANENT reduction of PID
+     * 1's own hard limit -- rlim_max only ever falls, per POSIX, so
+     * every house started after the fallback path inherits hard = need
+     * too, for the remaining life of the machine. The refuse/accept
+     * decision above is unaffected either way: it already compared
+     * `need` to the ORIGINAL `rlim_max`, before either setrlimit call.
+     *
+     * Practical reach: PID 1 starts at the kernel's default soft limit
+     * (1024 on an ordinary boot) and `need` tops out at
+     * NW_FD_RESERVED + NW_MAX_UNITS, which stays under it at today's
+     * limits -- so in production this raise, and its EPERM fallback,
+     * should almost never run at all. That is a claim about this
+     * kernel's defaults, not about the code, and belongs measured in
+     * QEMU rather than asserted here. */
     {
         struct rlimit rl;
         if (getrlimit(RLIMIT_NOFILE, &rl) < 0)
@@ -521,9 +568,12 @@ int main(int argc, char **argv)
         }
         if (rl.rlim_cur != RLIM_INFINITY &&
             need > (unsigned long long)rl.rlim_cur) {
-            rl.rlim_cur = rl.rlim_max;
-            if (setrlimit(RLIMIT_NOFILE, &rl) < 0)
-                halt_now("setrlimit nofile");
+            rl.rlim_cur = (rlim_t)need;
+            if (setrlimit(RLIMIT_NOFILE, &rl) < 0) {
+                rl.rlim_max = (rlim_t)need;
+                if (setrlimit(RLIMIT_NOFILE, &rl) < 0)
+                    halt_now("setrlimit nofile");
+            }
         }
     }
 
@@ -546,8 +596,11 @@ int main(int argc, char **argv)
         memcpy(houses[i].name, u[i].name, NW_NAME_LEN);
         houses[i].pid = 0;
         houses[i].logger = 0;
-        houses[i].log_r = -1;
-        houses[i].log_w = -1;
+        /* No log_r/log_w init here: houses[] is static (BSS, zeroed),
+         * and the only reader that used to need a -1 sentinel was
+         * spawn_logger's full-array close scan, which is gone -- it
+         * now closes only houses[0..i-1], already-created pipes, so
+         * there is nothing left to mistake for fd 0. */
     }
     for (uint32_t i = 0; i < n_houses; i++) {
         int pfd[2];

@@ -603,6 +603,91 @@ def reap_nested(p):
         pass
 
 
+def _proc_children(pid):
+    """Direct children of `pid`, read from outside its own namespace --
+    the same mechanism nested_init() uses to find PID 1 itself."""
+    try:
+        return [int(x) for x in
+                open(f"/proc/{pid}/task/{pid}/children").read().split()]
+    except (FileNotFoundError, ProcessLookupError):
+        return []
+
+
+def _descendants(pid):
+    """BFS over _proc_children, every descendant of `pid` (pid itself
+    excluded). Used to find a house or a supervisor from outside its
+    own pid namespace when it is not a DIRECT child of the nested
+    PID 1 -- a house is PID 1's great-great-grandchild (nw-spawn ->
+    nw-sup -> the house)."""
+    out, seen, frontier = [], set(), [pid]
+    while frontier:
+        nxt = []
+        for p in frontier:
+            for c in _proc_children(p):
+                if c in seen:
+                    continue
+                seen.add(c)
+                out.append(c)
+                nxt.append(c)
+        frontier = nxt
+    return out
+
+
+def _pgid_eq_self(pid):
+    """Whether `pid` is its own process group leader. setpgid(0, 0) is
+    called nowhere in this TCB except spawn_logger() in pid1.c (grepped
+    -- `grep -n setpgid *.c`), so among PID 1's direct children this
+    uniquely picks out the loggers: nw-spawn never calls it and stays
+    in whatever group it inherited."""
+    try:
+        return os.getpgid(pid) == pid
+    except ProcessLookupError:
+        return False
+
+
+def _fd_is_open(pid, fdnum):
+    """Whether process `pid` still holds fd `fdnum` open, checked the
+    same way pid1.c's own fcntl(fd, F_GETFD) control checks it: a
+    closed fd has no /proc/<pid>/fd/<n> entry to read at all."""
+    try:
+        os.readlink(f"/proc/{pid}/fd/{fdnum}")
+        return True
+    except (FileNotFoundError, ProcessLookupError):
+        return False
+
+
+def _comm(pid):
+    try:
+        return open(f"/proc/{pid}/comm").read().strip()
+    except (FileNotFoundError, ProcessLookupError):
+        return None
+
+
+def _find_by_comm(root_pid, name):
+    """The first descendant of `root_pid` whose /proc comm is exactly
+    `name`, or None. comm is the exec'd binary's own basename (up to
+    the kernel's 15-byte TASK_COMM_LEN limit), so this finds a house by
+    the binary it runs -- not by table position, which is not visible
+    from outside the namespace at all."""
+    for pid in _descendants(root_pid):
+        if _comm(pid) == name:
+            return pid
+    return None
+
+
+def _nofile_limits(pid):
+    """(soft, hard) read from /proc/<pid>/limits' own "Max open files"
+    row, or None if the process is gone or the row is missing."""
+    try:
+        for line in open(f"/proc/{pid}/limits"):
+            if line.startswith("Max open files"):
+                parts = line.split()
+                return int(parts[3]), int(parts[4])
+    except (FileNotFoundError, ProcessLookupError, ValueError):
+        return None
+    return None
+
+
 def city_closed(rc, out):
     """Production PID 1 ends in reboot(RB_POWER_OFF), not _exit.
 
@@ -4966,6 +5051,290 @@ def test_console_house_reachable():
     print("ok console-house-reachable")
 
 
+def test_slot_unchosen_not_missing_dir():
+    """slot_from_current() in pid1.c must tell two different absences
+    apart: the slots DIRECTORY missing (nothing has ever staged this
+    box -- dawn passed a path that was never created) from the pointer
+    FILE missing inside an existing directory (staged, but no plan has
+    been chosen yet). Both used to answer ENOENT identically through a
+    single open() on "<slots>/current" and both used to halt "slot
+    unchosen" -- the right diagnosis for the second case and the wrong
+    one for the first, which sends whoever reads the console line
+    looking at the wrong layer of the machine (a repair to "choose a
+    slot" when the actual fault is "nothing ever staged this box at
+    all").
+
+    Grok's fix opens the directory first, with O_DIRECTORY, so a
+    missing directory answers its own errno before openat("current")
+    ever runs -- the two absences are distinguished by WHEN the ENOENT
+    happens, not by inspecting anything about the path.
+
+    Control, run by hand rather than automated here (this is a source
+    mutation, not a runtime toggle): collapse -3 back into -2 by
+    reverting slot_from_current() to the single-open form -- the
+    missing-directory case then answers "HALT: slot unchosen" instead
+    of "HALT: slots missing", and this test's second expect() goes red
+    at exactly that assertion. Confirmed both ways while landing this
+    test: red against the reverted source, green against Grok's fix."""
+    slots = f"{WORK}/unchosen-slots"
+    shutil.rmtree(slots, ignore_errors=True)
+
+    # Case 1: the directory exists; nothing has chosen a slot in it.
+    os.makedirs(slots)
+    rc, out = boot(extra=["--slots", slots], hold=200)
+    expect("HALT: slot unchosen" in out,
+           f"an existing, empty slots dir must halt 'slot unchosen'\n{out}")
+
+    # Case 2: the directory itself was never staged.
+    shutil.rmtree(slots, ignore_errors=True)
+    rc2, out2 = boot(extra=["--slots", slots], hold=200)
+    expect("HALT: slots missing" in out2,
+           f"a slots dir that was never created at all must halt "
+           f"'slots missing' -- a DIFFERENT diagnosis than an existing "
+           f"but empty one. Collapsing them back into one code path is "
+           f"exactly the regression this test pins\n{out2}")
+    expect("HALT: slot unchosen" not in out2,
+           f"the missing-directory case must not reuse the "
+           f"missing-file message\n{out2}")
+
+    print("ok slot-unchosen-not-missing-dir (existing empty dir -> "
+          "'slot unchosen'; dir never staged -> 'slots missing')")
+
+
+def test_logger_holds_fd0():
+    """Every per-house logger must keep fd 0 open across its own close
+    loop. spawn_logger()'s old close loop scanned ALL n_houses,
+    including slots not yet given a pipe -- and houses[] being a
+    static (BSS, zero-initialized) array meant an unset log_r/log_w
+    silently read as 0, so a ">= 0" test treated fd 0 itself as an
+    unclosed pipe end and closed it. Fixed by scanning only [0, i): the
+    pipes that actually exist by the time logger i runs.
+
+    test_fd_preflight_names_the_shortfall's own docstring already
+    named this as a live, uncovered gap ("deleting the -1
+    initialisation of log_r/log_w in pid1.c leaves this test green...
+    while every logger but the last loses fd 0"); this is that test.
+
+    Checked from OUTSIDE PID 1, not by adding a print to production
+    boot output (the alternative this round considered and rejected --
+    see the operator's item A): setpgid(0, 0) is called nowhere else in
+    this TCB, so "direct child of the nested PID 1 whose own process
+    group equals its own pid" uniquely picks out the loggers among
+    PID 1's direct children (the other one, nw-spawn, never calls
+    setpgid and stays in whatever group it inherited). /proc/<pid>/fd/0
+    is then read the same way this harness already inspects any other
+    process from outside its own pid namespace -- nested_init() does
+    exactly this to find and signal the nested PID 1 itself.
+
+    n=3, per the operator's instruction. Control, run by hand: restore
+    the old full-array ">= 0" scan with no per-house -1 init -> loggers
+    other than the last lose fd 0 (measured 2 of 3 missing on this tree
+    against the reverted source) -- red at the "hold fd 0" assertion
+    below; green against the fix as landed."""
+    n = 3
+    city = f"{WORK}/logger-fd0.city"
+    with open(city, "w") as f:
+        for i in range(n):
+            f.write(f"house h{i} {BIN}/unit-term kind=longrun lids=none\n")
+    blob = f"{WORK}/logger-fd0.blob"
+    b = run(["python3", CC, "--city", city, "--out", blob])
+    expect(b.returncode == 0, f"bake\n{b.out}{b.err}")
+
+    p = subprocess.Popen(
+        ["unshare", "--pid", "--fork", "--mount-proc", "--",
+         f"{BIN}/nw-root", "--hold-ms", "5000", blob],
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        start_new_session=True)
+    try:
+        os.set_blocking(p.stdout.fileno(), False)
+        buf = b""
+        t0 = time.time()
+        while b"city open" not in buf and time.time() - t0 < 20:
+            try:
+                buf += p.stdout.read() or b""
+            except Exception:
+                pass
+            time.sleep(0.02)
+        expect(b"city open" in buf,
+               f"the city never opened; nothing to inspect\n"
+               f"{buf.decode('utf-8', 'replace')}")
+
+        init = nested_init(p.pid)
+        expect(init is not None, "no nested PID 1 found")
+
+        children = _proc_children(init)
+        loggers = [c for c in children if _pgid_eq_self(c)]
+        expect(len(loggers) == n,
+               f"expected {n} loggers (one per house, identified by "
+               f"setpgid(0,0)'s own signature), found {len(loggers)}: "
+               f"{loggers} among PID 1's direct children {children}")
+
+        missing = [pid for pid in loggers if not _fd_is_open(pid, 0)]
+        expect(not missing,
+               f"logger(s) {missing} of {loggers} do not hold fd 0 open "
+               f"-- the close loop closed a live logger's own stdin")
+
+        print(f"ok logger-holds-fd0 (n={n}, loggers {loggers}, "
+              f"all {n} hold fd 0)")
+    finally:
+        p.stdout.close()
+        reap_nested(p)
+
+
+def test_rlimit_raise():
+    """PID 1's fd preflight raises its OWN NOFILE soft limit to `need`
+    (NW_FD_RESERVED + n_houses) when it started below that, and every
+    house forked afterward inherits whatever this process ends up
+    holding -- there is no per-house rlimit mechanism yet
+    (.claude/rules/runtime.md's "The resource block is in the plan and
+    nothing applies it" already carries that as a kind-3 item; a
+    per-house NOFILE limit is a candidate field for it, not built
+    here). "need" is PID 1's own descriptor count, not any house's.
+
+    Case 1: soft well below need, hard well above it. The raise must
+    succeed on the first setrlimit call, and every house must inherit
+    soft == need -- not the machine's hard ceiling and not the
+    original low soft. Checked on a live house process from outside,
+    the same way logger-holds-fd0 checks a logger: /proc/<pid>/limits.
+    Numbers match Grok's own measurement (need=11 at n=3, hard=75).
+
+    Case 2: the process holds a STALE hard limit already above the
+    kernel's CURRENT fs.nr_open ceiling -- reproducing Grok's own
+    measurement (nr_open lowered to 1024, hard 8192: setrlimit(12,
+    8192) answers EPERM, setrlimit(12, 12) succeeds) in this container,
+    rather than arguing it from the comment alone. The
+    first setrlimit (soft raised, hard left at the stale value) must
+    answer EPERM, and the fallback that lowers hard to `need` too must
+    then succeed -- the city opens rather than halting.
+
+    fs.nr_open is a SYSTEMWIDE sysctl, not a per-namespace one. This
+    case lowers it only inside the forked child that is about to exec
+    the boot process (after that child's own hard limit is already
+    set to the stale value, which must happen while nr_open is still
+    the real one or the setup step fails for the same reason the case
+    exists to test), and restores the original value in a `finally`
+    the instant that one boot completes -- never touching the value
+    the rest of this suite, or anything else in this container, runs
+    under for longer than that single boot.
+
+    Controls, run by hand against the fix as landed:
+      - drop the EPERM retry (the `if (setrlimit(...) < 0) { ... }`
+        fallback block) -> case 2 halts "HALT: setrlimit nofile"
+        instead of opening, red;
+      - case 1's own numbers were chosen so soft0 < need < hard0
+        strictly, confirmed by the assert below rather than assumed,
+        so a future edit to NW_FD_RESERVED cannot silently turn this
+        into a no-op setup."""
+    n = 3
+    reserved = int(blob_h("NW_FD_RESERVED"))
+    need = reserved + n
+
+    city = f"{WORK}/rlimit-raise.city"
+    with open(city, "w") as f:
+        for i in range(n):
+            f.write(f"house h{i} {BIN}/unit-term kind=longrun lids=none\n")
+    blob = f"{WORK}/rlimit-raise.blob"
+    b = run(["python3", CC, "--city", city, "--out", blob])
+    expect(b.returncode == 0, f"bake\n{b.out}{b.err}")
+
+    # --- Case 1: soft well below need, hard well above it. ---
+    soft0, hard0 = need - 5, need + 64
+    expect(0 < soft0 < need < hard0,
+           f"test setup: soft0={soft0} < need={need} < hard0={hard0} "
+           f"must hold strictly, or this case is not testing the raise")
+
+    def _cap1():
+        import resource
+        resource.setrlimit(resource.RLIMIT_NOFILE, (soft0, hard0))
+
+    p = subprocess.Popen(
+        ["unshare", "--pid", "--fork", "--mount-proc", "--",
+         f"{BIN}/nw-root", "--hold-ms", "5000", blob],
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        start_new_session=True, preexec_fn=_cap1)
+    try:
+        os.set_blocking(p.stdout.fileno(), False)
+        buf = b""
+        t0 = time.time()
+        while b"city open" not in buf and time.time() - t0 < 20:
+            try:
+                buf += p.stdout.read() or b""
+            except Exception:
+                pass
+            time.sleep(0.02)
+        expect(b"city open" in buf,
+               f"case 1: the city never opened\n"
+               f"{buf.decode('utf-8', 'replace')}")
+
+        init = nested_init(p.pid)
+        expect(init is not None, "case 1: no nested PID 1 found")
+        house_pid = _find_by_comm(init, "unit-term")
+        expect(house_pid is not None,
+               f"case 1: no unit-term process found among descendants "
+               f"of {init}")
+        got = _nofile_limits(house_pid)
+        expect(got is not None,
+               f"case 1: could not read /proc/{house_pid}/limits")
+        expect(got[0] == need,
+               f"case 1: a house must inherit soft == need ({need}); "
+               f"got soft={got[0]} hard={got[1]} (started at "
+               f"soft={soft0} hard={hard0})")
+    finally:
+        p.stdout.close()
+        reap_nested(p)
+
+    print(f"ok rlimit-raise-case1 (n={n} need={need}: started "
+          f"soft={soft0} hard={hard0}, house inherited soft={need})")
+
+    # --- Case 2: a stale hard limit above the CURRENT nr_open. ---
+    try:
+        orig_nr_open = open("/proc/sys/fs/nr_open").read().strip()
+        with open("/proc/sys/fs/nr_open", "w") as f:
+            f.write(orig_nr_open)  # confirm writability before relying on it
+    except OSError as e:
+        raise Unavailable(f"cannot read/write /proc/sys/fs/nr_open ({e})")
+
+    stale_hard = 8192
+    lowered_nr_open = 1024
+    expect(need < lowered_nr_open < stale_hard,
+           f"test setup: need={need} < lowered_nr_open={lowered_nr_open} "
+           f"< stale_hard={stale_hard} must hold, or this case is not "
+           f"reproducing the gap between a process's own hard limit and "
+           f"the kernel's current ceiling")
+
+    def _cap2():
+        import resource
+        # Both steps IN THE CHILD, in this order: the hard limit must be
+        # set while nr_open is still the real value, or this setrlimit
+        # itself fails for the same reason the case exists to test.
+        resource.setrlimit(resource.RLIMIT_NOFILE, (need - 2, stale_hard))
+        with open("/proc/sys/fs/nr_open", "w") as f:
+            f.write(str(lowered_nr_open))
+
+    try:
+        p2 = subprocess.run(
+            ["unshare", "--pid", "--fork", "--mount-proc", "--",
+             f"{BIN}/nw-root", "--hold-ms", "900", blob],
+            capture_output=True, preexec_fn=_cap2)
+        rc2 = p2.returncode
+        out2 = (p2.stdout or b"").decode("utf-8", "replace") + \
+               (p2.stderr or b"").decode("utf-8", "replace")
+    finally:
+        with open("/proc/sys/fs/nr_open", "w") as f:
+            f.write(orig_nr_open)
+
+    expect("HALT: setrlimit nofile" not in out2,
+           f"case 2: the EPERM fallback did not fire -- the city halted "
+           f"instead of opening under a stale hard limit above the "
+           f"(temporarily lowered) nr_open ceiling\n{out2}")
+    expect(city_closed(rc2, out2),
+           f"case 2: the city must still open and close cleanly despite "
+           f"the EPERM/retry path\nrc={rc2}\n{out2}")
+
+    print(f"ok rlimit-raise-case2 (nr_open temporarily {lowered_nr_open}, "
+          f"stale hard={stale_hard}: EPERM fallback fired, city opened)")
+
+
 def c_name_slots(names):
     """Ask nwcheck.c itself which table slot each name occupies.
 
@@ -8715,6 +9084,9 @@ def main():
         test_landlock_confines,
         test_landlock_bind_to_a_file,
         test_console_house_reachable,
+        test_slot_unchosen_not_missing_dir,
+        test_logger_holds_fd0,
+        test_rlimit_raise,
         test_subset_run_is_not_a_gate,
     ]
 

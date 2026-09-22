@@ -378,10 +378,11 @@ prose-count	blob.h	* Set it to 4 and the check ACCEPTS a city that then dies at
 # blob.h: 'the one place' is English, not an instance-count; the
 # claim is about WHERE the 6 lives, and it names the place.
 prose-count	blob.h	* the counted 6 in the compiler, which is the one place "counted peak is
-# pid1.c: '2 pointer file' is the return code -2 being documented.
-# Same false positive the fd-auditor and tcb-review rounds both
-# identified independently.
-prose-count	pid1.c	/* 0 ok, -2 pointer file absent (unchosen), -1 present but untrusted. */
+# pid1.c: '2 pointer file' is the return code -2 being documented,
+# same false positive the fd-auditor and tcb-review rounds both
+# identified independently. Re-keyed when -3 (slots directory absent)
+# was added beside it -- the reason is unchanged, only the text moved.
+prose-count	pid1.c	/* 0 ok, -3 slots directory absent, -2 pointer file absent (unchosen),
 # HISTORY.md: prose about an arithmetic identity, not a test
 # assertion -- there is nothing to pair it with. The claim is
 # checked by reading 6 + n, which contains no 8.
@@ -760,3 +761,18 @@ prose-count	docs/options/10-console-house.md	filter widened by ten syscalls was 
 # named in the same sentence: "the token echoed back... silence when bind= is removed" are the two
 prose-count	docs/options/10-console-house.md	`tools/console-boot-test.py`'s original two checks (the token echoed
 
+# paired with the positive directly above it in the same test:
+# expect("HALT: slots missing" in out2, ...) proves the missing-directory
+# code path ran and produced its own distinct message; this absence rules
+# out the OTHER halt message also being present in the same run.
+unpaired-absence	tests/run.py	expect("HALT: slot unchosen" not in out2,
+# paired with the positive two lines above in the same test:
+# expect(len(loggers) == n, ...) proves the real, correctly-identified set
+# of logger processes was found before this checks whether any of them
+# lost fd 0.
+unpaired-absence	tests/run.py	expect(not missing,
+# paired with the positive directly below it in the same test:
+# expect(city_closed(rc2, out2), ...) proves the boot actually completed
+# and the city opened -- the strongest positive available, since a halted
+# boot could not produce that line at all.
+unpaired-absence	tests/run.py	expect("HALT: setrlimit nofile" not in out2,
