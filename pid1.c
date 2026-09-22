@@ -355,8 +355,12 @@ static int slot_from_current(const char *slots, char *out, size_t outsz)
     if (dfd < 0)
         return (errno == ENOENT) ? -3 : -1;
     int fd = openat(dfd, "current", O_RDONLY);
+    /* Save errno BEFORE close(dfd): close(2) is permitted to set its own
+     * errno on failure, and reading errno after it would then classify
+     * openat's real failure by whatever close's was instead. */
+    int fd_errno = errno;
     close(dfd);
-    if (fd < 0) return (errno == ENOENT) ? -2 : -1;
+    if (fd < 0) return (fd_errno == ENOENT) ? -2 : -1;
     char nm[NW_NAME_LEN];
     ssize_t n = read(fd, nm, sizeof nm - 1);
     close(fd);
@@ -532,13 +536,18 @@ int main(int argc, char **argv)
      * soft limit of roughly PID 1's own descriptor count -- not a
      * number chosen for what any single house needs. Soft is raised to
      * `need`, not to `rlim_max`: raising to the hard ceiling would hand
-     * every house the whole machine's limit instead. If that first
-     * raise is refused (EPERM, which happens when `need` still exceeds
+     * every house the whole machine's limit instead. The fallback below
+     * retries UNCONDITIONALLY on any failure of that first call, not
+     * only EPERM -- there is no errno test, deliberately: a failed
+     * setrlimit(2) never partially applies its argument, so a retry
+     * after an unrelated failure either fails identically (falling
+     * through to the same halt either way) or succeeds harmlessly. The
+     * case this exists for is EPERM from `need` still exceeding
      * `fs.nr_open` -- measured on a host with nr_open lowered to 1024,
      * hard 8192: setrlimit(12, 8192) answers EPERM while setrlimit(12,
-     * 12) succeeds), the fallback lowers `rlim_max` to `need` as well
-     * and retries once. That fallback is a PERMANENT reduction of PID
-     * 1's own hard limit -- rlim_max only ever falls, per POSIX, so
+     * 12) succeeds -- and the fallback lowers `rlim_max` to `need` as
+     * well and retries once. That fallback is a reduction of PID 1's
+     * own hard limit that nothing in this file ever raises back, so
      * every house started after the fallback path inherits hard = need
      * too, for the remaining life of the machine. The refuse/accept
      * decision above is unaffected either way: it already compared
