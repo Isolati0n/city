@@ -26,6 +26,7 @@
   "checker-rejects-crafted-binds",
   "checker-rejects-crafted-fields",
   "checker-rejects-crafted-resources",
+  "console-house-reachable",
   "coverage-accounting",
   "crash-does-not-halt",
   "dawn-real-boot",
