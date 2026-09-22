@@ -44,6 +44,18 @@ for a in "$@"; do
     esac
 done
 
+# NW_CITY, NW_EXTRA_BRICKS: both optional, both additive, neither changes
+# behaviour when unset. docs/options/10-console-house.md's boot test is
+# the first (and so far only) caller: it needs a plan other than the
+# fixed four-probe-house default, and brick images this script does not
+# itself build. (That test drives qemu itself for the interactive part,
+# with its own second serial chardev, rather than adding one here --
+# --run/--check's qemu invocation is unchanged and stays exactly as
+# tested.) Each is read once, right here, so every place below that cares
+# can just test whether the variable is empty.
+NW_CITY=${NW_CITY:-}
+NW_EXTRA_BRICKS=${NW_EXTRA_BRICKS:-}
+
 need() {
     command -v "$1" >/dev/null 2>&1 || {
         echo "missing tool: $1" >&2
@@ -122,10 +134,16 @@ mkdir -p "$MNT/root" "$MNT/esp"
 # impossible without mounting it twice.
 esp_stage="$MNT/espstage"
 mkdir -p "$esp_stage/slots/A" "$esp_stage/slots/B"
-python3 "$ROOT/bakery/nw-cc.py" \
-    --probe /nw/bin/unit-probe \
-    --out "$esp_stage/slots/A/plan.blob" \
-    --lids seccomp
+if [ -n "$NW_CITY" ]; then
+    python3 "$ROOT/bakery/nw-cc.py" \
+        --city "$NW_CITY" \
+        --out "$esp_stage/slots/A/plan.blob"
+else
+    python3 "$ROOT/bakery/nw-cc.py" \
+        --probe /nw/bin/unit-probe \
+        --out "$esp_stage/slots/A/plan.blob" \
+        --lids seccomp
+fi
 printf 'A\n' > "$esp_stage/slots/current"
 
 echo "== root.img (ext4, 64 MiB) =="
@@ -159,6 +177,16 @@ chmod 0755 "$MNT/root/nw/bin/"*
 # boot failure with a misleading message.
 python3 "$ROOT/tools/stage-layers.py" \
     "$esp_stage/slots/A/plan.blob" --root "$MNT/root"
+# NW_EXTRA_BRICKS: a directory of already-built <hash>.img files (from
+# bakery/mkbrick.py), for a caller whose plan declares a brick this script
+# did not itself build -- the default four-probe-house city never does.
+# Copied to NW_BRICK_DIR verbatim ("/nw/bricks", read from blob.h above,
+# not spelled here a second time); nw-sup composes the rest of the path
+# from the plan's brick hash at mount time, the same as it does for a
+# brick this script never sees.
+if [ -n "$NW_EXTRA_BRICKS" ]; then
+    cp -f "$NW_EXTRA_BRICKS"/*.img "$MNT/root/nw/bricks/"
+fi
 sync
 umount "$MNT/root"
 
