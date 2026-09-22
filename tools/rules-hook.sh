@@ -116,7 +116,7 @@ MAP = [
       "Plan.tla", "stage-candidate.py", "gen-spec-limits.py",
       "caller_nw_check.c", "leaf_name_dup.c", "leaf_name_ok.c",
       "leaf_path_ok.c", "stage-layers.py"}, "plan"),
-    ({"run.py", "unit_probe.c", "scale-probe.py"}, "harness"),
+    ({"console-boot-test.py", "run.py", "unit_probe.c", "scale-probe.py"}, "harness"),
 ]
 
 # A FILE MAY BE OWNED BY TWO TERRITORIES, and this is where that is
