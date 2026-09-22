@@ -105,13 +105,70 @@ def build_brick(wrap_path, brick_out_dir):
     return hexd
 
 
-def write_city(path, brick_hex, with_bind):
+# No seccomp. lids are per-house, not a single global choice -- the
+# operator's correction to this design's first attempt, which reached
+# for the one shared seccomp filter and then had to widen it by ten
+# syscalls busybox needs. newns + landlock + newnet costs nothing to any
+# OTHER house (lids.c is untouched) and the cost this house itself pays
+# is stated rather than hidden: uid 0, the full syscall surface, confined
+# only by its own mount namespace, Landlock, and a net namespace with no
+# interfaces. Whether that confinement actually holds -- can this house
+# mknod a device, or mount its way out of the brick -- is measured in
+# measure_escape() below, not assumed from reading invariant 6.
+CONSOLE_LIDS = "newns,landlock,newnet"
+
+
+def write_city(path, brick_hex, with_bind, lids=CONSOLE_LIDS):
     bind = " bind=/dev/ttyS1" if with_bind else ""
     with open(path, "w") as f:
         f.write(
             f"house console /bin/wrap kind=oneshot budget=3 "
-            f"lids=newns,landlock,seccomp brick={brick_hex} "
+            f"lids={lids} brick={brick_hex} "
             f"layer=console{bind}\n")
+
+
+def build_probe(build_dir):
+    probe = os.path.join(build_dir, "unit-console-escape-probe")
+    r = subprocess.run(
+        ["gcc", "-Wall", "-Wextra", "-O2", "-std=gnu11", "-static",
+         "-o", probe,
+         os.path.join(ROOT, "houses/console-escape-probe.c")],
+        capture_output=True, text=True)
+    if r.returncode != 0:
+        raise SystemExit(f"FAIL: building console-escape-probe\n{r.stdout}{r.stderr}")
+    return probe
+
+
+def build_probe_brick(probe_path, brick_out_dir):
+    """The measurement-only brick: the probe binary and an empty /mnt for
+    it to target, nothing else. No wrapper, no busybox, no tty bind --
+    this house needs neither a shell nor a terminal, only its own root
+    to try mounting into and out of."""
+    tree = tempfile.mkdtemp(prefix="nw-console-probe-brick-")
+    os.makedirs(f"{tree}/bin")
+    os.makedirs(f"{tree}/mnt")
+    shutil.copy(probe_path, f"{tree}/bin/probe")
+    os.chmod(f"{tree}/bin/probe", 0o755)
+
+    os.makedirs(brick_out_dir, exist_ok=True)
+    r = subprocess.run(
+        ["python3", os.path.join(ROOT, "bakery/mkbrick.py"), tree,
+         "--out-dir", brick_out_dir, "--quiet"],
+        capture_output=True, text=True)
+    shutil.rmtree(tree, ignore_errors=True)
+    if r.returncode != 0:
+        raise SystemExit(f"FAIL: mkbrick (probe)\n{r.stdout}{r.stderr}")
+    hexd = r.stdout.strip()
+    if not os.path.exists(f"{brick_out_dir}/{hexd}.img"):
+        raise SystemExit(f"FAIL: mkbrick printed {hexd!r} but wrote no image")
+    return hexd
+
+
+def write_probe_city(path, brick_hex, lids=CONSOLE_LIDS):
+    with open(path, "w") as f:
+        f.write(
+            f"house probe /bin/probe kind=oneshot budget=1 "
+            f"lids={lids} brick={brick_hex} layer=probe\n")
 
 
 def build_images(out_dir, city_path, brick_dir):
@@ -129,7 +186,13 @@ def build_images(out_dir, city_path, brick_dir):
 
 def boot_and_probe(out_dir, want_response):
     """Boot the images in out_dir with a second serial chardev on ttyS1.
-    Returns (ttyS0_log_text, ttyS1_bytes_received)."""
+    Returns (ttyS0_log_text, ttyS1_bytes_received).
+
+    `want_response` is True for the original single-token echo, False for
+    the no-bind control (no commands, just confirm silence), or a list of
+    shell command strings sent in order -- each command's raw output is
+    read back before the next is sent, so a probe reports what actually
+    happened for each escape attempt rather than one merged blob."""
     kernel = os.environ.get("KERNEL", "/boot/vmlinuz")
     accel = os.environ.get("ACCEL", "tcg")
     append = ("console=ttyS0,115200n8 ignore_loglevel NW_ROOT=/dev/vda "
@@ -195,9 +258,23 @@ def boot_and_probe(out_dir, want_response):
                 received += r
             except socket.timeout:
                 pass
-        if want_response:
-            sock.sendall(f"echo {TOKEN}\n".encode())
-        end = time.time() + 4
+        commands = [f"echo {TOKEN}"] if want_response is True else (want_response or [])
+        for line in commands:
+            sock.sendall(f"{line}\n".encode())
+            end = time.time() + 3
+            while time.time() < end:
+                try:
+                    r = sock.recv(4096)
+                    if not r:
+                        break
+                    received += r
+                except socket.timeout:
+                    pass
+        try:
+            sock.sendall(b"exit\n")
+        except OSError:
+            pass
+        end = time.time() + 2
         while time.time() < end:
             try:
                 r = sock.recv(4096)
@@ -206,10 +283,6 @@ def boot_and_probe(out_dir, want_response):
                 received += r
             except socket.timeout:
                 pass
-        try:
-            sock.sendall(b"exit\n")
-        except OSError:
-            pass
         sock.close()
     finally:
         proc.terminate()
@@ -221,6 +294,45 @@ def boot_and_probe(out_dir, want_response):
     return open(log0).read() if os.path.exists(log0) else "", received
 
 
+def measure_escape(workroot):
+    """What lids=newns,landlock,newnet actually lets this house do, with no
+    seccomp lid at all -- the operator's own instruction: report what it
+    CAN do, measured in QEMU, not argued from CLAUDE.md's invariant 6.
+
+    A dedicated probe binary (houses/console-escape-probe.c), not
+    busybox: an earlier attempt sent `mount`/`unshare` over the
+    interactive shell and both came back "not found", which measured
+    something real but not the thing asked -- ash's standalone-shell
+    dispatch for those two applets goes through a re-exec path that
+    reads something under /proc, and a house's own pivoted root never
+    mounts /proc at all, so the ambiguity was "missing dependency", not
+    "Landlock refused it". The probe calls each syscall directly and
+    prints its own errno; nothing between the syscall and this
+    function's output can misreport why something failed. It runs
+    kind=oneshot, needs no bind and no tty, and its stdout goes to the
+    ordinary log pipe -- so the measurement reads the ttyS0 boot log,
+    not the ttyS1 socket."""
+    probe = build_probe(workroot)
+    brick_dir = os.path.join(workroot, "bricks")
+    brick_hex = build_probe_brick(probe, brick_dir)
+    city = os.path.join(workroot, "console-escape.city")
+    write_probe_city(city, brick_hex)
+    out = os.path.join(workroot, "boot-escape")
+    build_images(out, city, brick_dir)
+    log, _ = boot_and_probe(out, want_response=False)
+    if "city open" not in log:
+        print(f"MEASUREMENT FAILED: boot never reached city open\n{log}")
+        return None
+    lines = [ln for ln in log.splitlines() if "PROBE " in ln]
+    print("=== escape measurement: probe results (direct syscalls) ===")
+    for ln in lines:
+        print(ln)
+    print("=== end ===")
+    if not lines:
+        print(f"MEASUREMENT FAILED: no PROBE lines in the log\n{log}")
+    return lines
+
+
 def main():
     try:
         check_environment()
@@ -228,8 +340,14 @@ def main():
         print(f"SKIP: console-boot-test ({e})")
         return 0
 
+    only_escape = "--measure-escape" in sys.argv[1:]
+
     workroot = tempfile.mkdtemp(prefix="nw-console-boot-")
     try:
+        if only_escape:
+            measure_escape(workroot)
+            return 0
+
         wrap = build_wrapper(workroot)
         brick_dir = os.path.join(workroot, "bricks")
         brick_hex = build_brick(wrap, brick_dir)
@@ -269,6 +387,58 @@ def main():
             return 1
         print("ok console-house-control (silent on ttyS1 with bind= removed, "
               "as required)")
+
+        # CONTROL: same plan, seccomp ADDED to the lid set. Proves the lid
+        # set is what makes this work -- not the brick, not the bind, not
+        # the wrapper -- by showing the one thing this round changed
+        # (dropping seccomp) is load-bearing: put it back and the house
+        # dies, budget exhausted, the same way the first build attempt did
+        # before the lid set was corrected.
+        sec_city = os.path.join(workroot, "console-secc.city")
+        write_city(sec_city, brick_hex, with_bind=True,
+                   lids=CONSOLE_LIDS + ",seccomp")
+        sec_out = os.path.join(workroot, "boot-secc")
+        build_images(sec_out, sec_city, brick_dir)
+        log3, resp3 = boot_and_probe(sec_out, want_response=True)
+        if "city open" not in log3:
+            print(f"FAIL: seccomp-control boot never reached city open\n{log3}")
+            return 1
+        if TOKEN.encode() in resp3:
+            print(f"FAIL: adding seccomp back should have killed the house "
+                  f"(it needs syscalls strict_allow[] does not have) -- "
+                  f"instead the token came back: {resp3!r}\nlog:\n{log3}")
+            return 1
+        if "spent console" not in log3:
+            print(f"FAIL: seccomp-control did not die the expected way -- "
+                  f"expected the budget exhausted (\"spent console\"), got:"
+                  f"\n{log3}")
+            return 1
+        print("ok console-house-seccomp-control (adding seccomp back kills "
+              "the house, budget exhausted, as required)")
+
+        # PIN: the baked blob's lids byte is exactly newns|landlock|newnet
+        # (14) -- no seccomp bit, no stray bit either. Offsets from
+        # blob.h: nw_hdr is 20 bytes, lids is nw_unit's byte 226, and this
+        # plan bakes exactly one unit, so the byte is at 20 + 226 = 246.
+        plan_blob_path = os.path.join(workroot, "lids-pin.blob")
+        b = subprocess.run(
+            ["python3", os.path.join(ROOT, "bakery/nw-cc.py"),
+             "--city", pos_city, "--out", plan_blob_path],
+            capture_output=True, text=True)
+        if b.returncode != 0:
+            print(f"FAIL: re-baking for the lids pin\n{b.stdout}{b.stderr}")
+            return 1
+        blob = open(plan_blob_path, "rb").read()
+        NW_HDR_SIZE = 20
+        LIDS_OFFSET_IN_UNIT = 226
+        got_lids = blob[NW_HDR_SIZE + LIDS_OFFSET_IN_UNIT]
+        want_lids = 0x02 | 0x04 | 0x08  # LANDLOCK | NEWNS | NEWNET, no SECCOMP
+        if got_lids != want_lids:
+            print(f"FAIL: lids byte is {got_lids:#04x}, expected "
+                  f"{want_lids:#04x} (landlock|newns|newnet, no seccomp)")
+            return 1
+        print(f"ok console-house-lids-exact (blob lids byte = "
+              f"{got_lids:#04x} = landlock|newns|newnet, no seccomp)")
     finally:
         shutil.rmtree(workroot, ignore_errors=True)
 

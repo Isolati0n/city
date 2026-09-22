@@ -379,10 +379,10 @@ unconditionally at startup (confirmed with `strace`). Adding `prctl`
 alone was not enough: a `tcb-review` dispatched on the change rebuilt it
 in a scratch copy and, reading the killed syscall number off the kernel's
 own audit line each time a further one was needed, found the actual gap
-is **nine** syscalls before an interactive `busybox sh` over a real tty
+is **ten** syscalls before an interactive `busybox sh` over a real tty
 will run at all — `prctl`, `getuid`, `rt_sigaction`, `getppid`, `uname`,
 `ioctl`, `geteuid`, `getpgrp`, `poll`, `setpgid`. Every addition through
-all nine, in that scratch copy, made `tools/console-boot-test.py` pass
+all ten, in that scratch copy, made `tools/console-boot-test.py` pass
 end to end (the token sent over `ttyS1` came back, and the no-bind
 control stayed silent) — so the design's mechanism (the bind, the
 wrapper, `kind=oneshot`, the dedicated serial line) is sound; only the
