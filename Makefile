@@ -13,7 +13,7 @@ CFLAGS = -Wall -Wextra -O2 -g -std=gnu11 -ffile-prefix-map=$(CURDIR)=.
 # the stage a parallel run is using.
 STAGE ?= /tmp/nw-init-run
 
-all: nw-dawn nw-root nw-spawn nw-check nw-sup nw-rescue unit-probe unit-boom unit-badcall unit-term unit-brick unit-slowdie unit-dieterm unit-lastwords unit-lastwordsmany unit-orphan unit-orphanslow unit-layer
+all: nw-dawn nw-root nw-spawn nw-check nw-sup nw-rescue unit-probe unit-boom unit-badcall unit-term unit-brick unit-slowdie unit-dieterm unit-lastwords unit-lastwordsmany unit-orphan unit-orphanslow unit-layer unit-bindfile
 
 # blob.h IS A PREREQUISITE, and leaving it off is not cosmetic. dawn now
 # includes it for NW_BRICK_MNT, and the whole justification for that include
@@ -97,6 +97,12 @@ unit-orphanslow: houses/orphan.c
 unit-layer: houses/layer.c
 	$(CC) $(CFLAGS) -static -o $@ houses/layer.c
 
+# -static, same reason as unit-brick and unit-layer: pivots into a brick
+# whose bind target is a plain file, not a directory (test_landlock_
+# bind_to_a_file), and the brick carries nothing but this binary.
+unit-bindfile: houses/bindfile.c
+	$(CC) $(CFLAGS) -static -o $@ houses/bindfile.c
+
 stage: all
 	rm -rf $(STAGE)
 	# No $(STAGE)/nw/bricks: phase 3 made nw-sup compose an ABSOLUTE
@@ -136,7 +142,7 @@ stage: all
 	cp -f nw-dawn nw-root nw-spawn nw-check nw-sup nw-rescue \
 	      unit-probe unit-boom unit-badcall unit-term unit-brick unit-slowdie unit-dieterm \
 	      unit-lastwords unit-lastwordsmany unit-orphan unit-orphanslow \
-      unit-layer $(STAGE)/nw/bin/
+      unit-layer unit-bindfile $(STAGE)/nw/bin/
 	chmod +x $(STAGE)/nw/bin/*
 	# The sources the staged binaries were built from, staged with them.
 	# tests/run.py's hash probe compiles nwcheck.c to ask which slot a name
