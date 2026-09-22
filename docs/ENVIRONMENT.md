@@ -108,24 +108,29 @@ the answers.
 
 - **`test_console_house_reachable` costs about fifty seconds of that
   forty minutes, measured**: `time python3 tests/run.py --only
-  console-house-reachable` → `real 0m48.725s` on this box. It boots four
-  separate QEMU guests under TCG (no `/dev/kvm` here — see below), one
-  per check `tools/console-boot-test.py` runs. `--only` for iterating on
-  it specifically is still slower than most of the suite combined, so
+  console-house-reachable` → `real 0m48.725s` on this box. It boots
+  three separate QEMU guests under TCG (no `/dev/kvm` here — see below)
+  for `tools/console-boot-test.py`'s checks `console-house-reachable`,
+  `console-house-control` and `console-house-seccomp-control` — the
+  fourth, `console-house-lids-exact`, re-bakes the plan and reads a byte
+  offset out of the blob, no boot at all. `--only` for iterating on it
+  specifically is still slower than most of the suite combined, so
   prefer reading `tools/console-boot-test.py`'s own output over re-running
   it unless the change is actually near it.
 
 - **What that test needs, each checked the way it checks itself, not
   assumed:** `qemu-system-x86_64` is present
-  (`command -v qemu-system-x86_64` → `/usr/bin/qemu-system-x86_64`); a
-  STATIC `/bin/busybox` is not, by default — `apt-get install
+  (`command -v qemu-system-x86_64` → `/usr/bin/qemu-system-x86_64`);
+  `mkfs.erofs` is present too (`command -v mkfs.erofs` →
+  `/usr/bin/mkfs.erofs`, needed to build the probe brick); a STATIC
+  `/bin/busybox` is not, by default — `apt-get install
   busybox-static` installs one, and `file /bin/busybox` must report
   `statically linked` afterward, because the brick this test boots
   carries no loader and the dynamically-linked copy in
   `busybox-initramfs` fails `execve` inside it with `ENOENT` (the exact
   trap `harness.md` names for `dawn-real-boot`, met again here). Root is
   required for the loop mounts `tools/mkboot.sh`'s image build does
-  (`os.geteuid() != 0` is the check). All three are asked for by
+  (`os.geteuid() != 0` is the check). All four are asked for by
   `check_environment()` in `tools/console-boot-test.py`, and missing any
   one is a named skip (`SKIP: console-boot-test (...)`), not a silent
   pass or a crash — the same discipline `landlock-confines` already uses

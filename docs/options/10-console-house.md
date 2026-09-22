@@ -529,7 +529,7 @@ worth being honest about.** The probe's own call order is mknod (char,
 block), mkdir, the tmpfs mount, the bind mount, the same two mknods
 again in `/mnt`, *then* `unshare`, *then* `pivot_root` — so only
 `pivot_root`'s refusal is a direct measurement of what happens *after*
-`unshare(CLONE_NEWNS)`; the six refusals before it were never retried
+`unshare(CLONE_NEWNS)`; the seven refusals before it were never retried
 afterward in this run. That `pivot_root_noop` still comes back `EPERM`
 post-unshare is consistent with the reasoning above and is real evidence
 for it, but "the three refusals above hold exactly the same afterward"
@@ -619,16 +619,19 @@ and writing it down with confidence is exactly the failure this
 project's rules exist to catch — the fact that ptrace is refused is
 measured and reproducible; why is not, yet.
 
-`process_vm_readv` never succeeds either — `EPERM` in some runs, `ESRCH`
-("No such process") in others, against a pid that `kill(pid, 0)` had
-just confirmed existed moments before. Both outcomes mean the same
-thing operationally (no memory content was ever read; every attempt
-returned an error, none a byte count), and the `ESRCH` cases are at
-least partly explained by the sweep also catching short-lived kernel
-worker threads spawned by this house's own erofs/loop/overlay mount
-setup, which have no user address space `process_vm_readv` can name —
-plausible given the pid clustering observed, not fully disentangled
-from genuine victim-process results within this investigation.
+`process_vm_readv` never succeeds either — every run measured, including
+a re-run for this correction, returned `ESRCH` ("No such process")
+against a pid that `kill(pid, 0)` had just confirmed existed moments
+before. That outcome means no memory content was ever read (every
+attempt returned an error, none a byte count), and it is at least partly
+explained by the sweep also catching short-lived kernel worker threads
+spawned by this house's own erofs/loop/overlay mount setup, which have
+no user address space `process_vm_readv` can name — plausible given the
+pid clustering observed, not fully disentangled from genuine
+victim-process results within this investigation. (An earlier telling of
+this paragraph also claimed `EPERM` on some runs; no run recoverable
+from this investigation, including a fresh reproduction, shows it, so
+that claim is removed rather than kept as an unconfirmed alternative.)
 
 **So: no filesystem escape, and — separately — an unconfined house can
 discover and kill any process in the city it can reach by pid, but this

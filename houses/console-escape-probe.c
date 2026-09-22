@@ -14,9 +14,11 @@
  *
  * Not TCB. Not shipped in the real console house's brick -- a
  * measurement tool for this one investigation, exec'd by its own city
- * in place of the wrapper, over the same ttyS1 channel (filesystem
- * probes) or logged plainly to fd 1/2 (process-reach probes, which need
- * no tty at all).
+ * in place of the wrapper. Every PROBE line below is a plain printf to
+ * fd 1, which lands in the ordinary per-house log pipe and is read from
+ * there -- neither battery uses ttyS1 or needs a tty at all; that
+ * channel is what the wrapper this probe replaces talks over, not this
+ * probe.
  */
 #define _GNU_SOURCE
 #include <errno.h>

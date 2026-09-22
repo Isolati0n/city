@@ -4922,10 +4922,12 @@ def test_console_house_reachable():
     prints without this test noticing is exactly the silent-drift shape
     this file's own rules warn about.
 
-    SLOW: four QEMU boots under TCG (no KVM in this container), each
-    ~15-50s. This is in the gate because it must eventually run, not
-    because it is cheap -- do not reach for --only console-house-
-    reachable as a substitute for `make test` on a change near it.
+    SLOW: three QEMU boots under TCG (no KVM in this container), each
+    ~15-50s, covering three of the four checks -- the fourth re-bakes
+    the plan and reads a byte offset, no boot. This is in the gate
+    because it must eventually run, not because it is cheap -- do not
+    reach for --only console-house-reachable as a substitute for
+    `make test` on a change near it.
 
     Control, run by hand rather than checked in (this test wraps
     console-boot-test.py's own main(), so the control forces its
