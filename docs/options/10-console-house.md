@@ -1,16 +1,19 @@
 # 10 — The console house
 
-Status: **stopped after a partial build; the seccomp premise below is
-false, and what replaces it needs an operator decision.** This note's
-original conclusion — no new plan field, no TCB change — was reviewed
-clean on paper and then falsified by actually booting the design under
-QEMU. The corrected finding is in **"What actually happened when this was
-built,"** near the end, and supersedes the "Decision" section above it,
-which is left in place because deleting a wrong conclusion without saying
-so is how the same mistake gets remade. Everything else here — the
-userland choice, the bind mechanism for the tty, the exit semantics, the
-visibility scope, the wrapper's fd-rewiring design — held up under
-building and reviewing it and is unaffected.
+Status: **resolved and built.** This note's first conclusion — no new
+plan field, no TCB change — was reviewed clean on paper and then
+falsified by actually booting the design under QEMU: a shared seccomp
+filter widened by ten syscalls was the wrong mechanism. The operator's
+correction is in **"The option the note missed: lids are per-house,"**
+the final section — declare the console house without the seccomp lid
+at all, since lids are independent per-unit bits, not a single choice
+for the whole machine. That correction is what shipped; the "What
+actually happened when this was built" section and the "Decision" above
+it are both left standing, unedited, because a wrong conclusion deleted
+without saying so is how the same mistake gets remade. Everything else
+in the note — the userland choice, the bind mechanism for the tty, the
+exit semantics, the visibility scope, the wrapper's fd-rewiring design —
+held up under building and reviewing it from the start.
 
 ## Goal
 
@@ -437,3 +440,112 @@ The wrapper (`houses/console-wrap.c`), the boot test
 `NW_EXTRA_BRICKS` hooks are pushed to `wip/console-house`, not `main`,
 since the feature they support does not work yet and CLAUDE.md's own
 rule is no half-finished implementations on the trunk.
+
+## The option the note missed: lids are per-house
+
+The operator's correction, and it is a correction to how this note
+*thought*, not only to what it concluded. `lid_landlock`, `lid_newns`,
+`lid_netns` and seccomp are four independent bits in one `lids=` byte
+(`bakery/nw-cc.py`'s `"seccomp"`/`"landlock"`/`"newns"`/`"newnet"` map;
+`blob.h`'s `NW_LID_*`), and the suite already has houses with no seccomp
+lid at all. The note above reached for the one shared seccomp filter as
+if it were the only knob a house has, found it too narrow, and stopped —
+without asking whether seccomp was the right lid to declare on this
+house in the first place.
+
+**Declare the console house `lids=newns,landlock,newnet`. No seccomp
+lid.** That is the whole fix. `lids.c` is untouched; no other house's
+filter widens; the ten-syscall gap stops being a question because
+nothing is filtering syscalls for this house at all.
+
+### The cost, stated rather than hidden
+
+This house runs as uid 0 with the full syscall surface — every syscall
+the kernel has, not a `strict_allow[]` subset — confined by exactly
+three things: its own mount namespace (`NW_LID_NEWNS`), Landlock, and a
+network namespace with no interfaces (`NW_LID_NEWNET`). `CLAUDE.md`
+already records, in prose, that such a house can `mknod`, `mount` and
+`unshare` inside its own namespace. The operator's instruction was not
+to take that on faith: **measure what it can actually do.**
+
+### Measured, not argued
+
+A first attempt at this measurement sent `mknod`/`mount`/`unshare` as
+shell commands over the interactive console and got `sh: mount: not
+found` / `sh: unshare: not found` — which measured something real (ash's
+standalone-shell dispatch for those two applets needs something under
+`/proc`, and a house's own pivoted root never mounts `/proc` at all) and
+was not an answer to the question asked. A missing dependency and a
+security refusal produce the same shell text, and this project's own
+"the evidence is real and it is about something else" is exactly this
+shape.
+
+`houses/console-escape-probe.c` (on `wip/console-house`, not shipped in
+the real console house's brick — a measurement tool for this one
+question) calls the syscalls directly and prints each one's own errno,
+so there is no shell, no `/proc` dependency, and no ambiguity between
+them. Booted under the same `lids=newns,landlock,newnet`, no seccomp:
+
+```
+PROBE mknod_char rc=-1 errno=13(Permission denied)
+PROBE mknod_block rc=-1 errno=13(Permission denied)
+PROBE mkdir_root rc=-1 errno=13(Permission denied)
+PROBE mount_tmpfs rc=-1 errno=1(Operation not permitted)
+PROBE mount_bind_root rc=-1 errno=1(Operation not permitted)
+PROBE unshare_newns rc=0 errno=0(-)
+PROBE pivot_root_noop rc=-1 errno=1(Operation not permitted)
+```
+
+Read plainly: it cannot create a device node (char or block) or a new
+directory at its own root (`EACCES` — Landlock's `MAKE_CHAR`/
+`MAKE_BLOCK`/`MAKE_DIR` withheld, exactly as invariant 6 already says).
+It cannot mount a tmpfs, bind-mount `/` over anything, or `pivot_root`
+(`EPERM` — Landlock's blanket refusal of the mount family for any
+confined domain, independent of the ruleset's specific rights, which is
+what `runtime.md` means by "matters for a house with no seccomp"). It
+**can** call `unshare(CLONE_NEWNS)` successfully — harmless on its own:
+that call only gives the process its own copy of the mount table, and
+Landlock's restrictions travel with the process regardless of which
+mount namespace holds it, so the three refusals above hold exactly the
+same afterward. No escape found. Per the operator's stop condition, this
+measurement is what authorizes building from here rather than stopping.
+
+### Built and controlled
+
+`tools/console-boot-test.py`'s original two checks (the token echoed
+back over `ttyS1`; silence when `bind=` is removed) pass unchanged under
+the new lid set — nothing about reachability depended on seccomp. Two
+more, as instructed:
+
+- **`console-house-seccomp-control`**: the identical plan with `seccomp`
+  added back to the lid set. The house dies, budget exhausted, the same
+  way the first build attempt did — proving the lid set is what makes
+  this work, not the brick, the bind, or the wrapper. If this control
+  ever passed (the house working *with* seccomp declared), that would
+  mean the fix was accidental.
+- **`console-house-lids-exact`**: the baked blob's `lids` byte, read at
+  its declared offset, is exactly `0x0e` (`landlock|newns|newnet`) — no
+  seccomp bit, no stray bit either.
+
+All four pass. Quoted from the actual run:
+
+```
+ok console-house-reachable (received b"...sh: can't access tty; job
+control turned off\r\n~ # ...NWCONSOLE-8f2c1a\r\n...")
+ok console-house-control (silent on ttyS1 with bind= removed, as required)
+ok console-house-seccomp-control (adding seccomp back kills the house,
+budget exhausted, as required)
+ok console-house-lids-exact (blob lids byte = 0x0e = landlock|newns|newnet,
+no seccomp)
+ALL CONSOLE BOOT CHECKS PASSED
+```
+
+### What this means for the mechanism-rule table above
+
+Unchanged in substance, corrected in one row: `lids=` is
+`newns,landlock,newnet`, not `newns,landlock,seccomp`. No new plan
+field, no TCB change — this time genuinely, checked by building it
+rather than by reading `strict_allow[]` and stopping. The `nw-sup`
+Landlock fix earlier in this note is unaffected by any of this and has
+already landed on `main` independently, with its own test
+(`test_landlock_bind_to_a_file`).

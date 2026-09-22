@@ -753,4 +753,10 @@ prose-count	docs/POSTMORTEM-rules-declaration.md	- Of its four root assertions, 
 prose-count	CLAUDE.md	both "the three tests", which goes stale the moment a fourth ownership
 prose-count	CLAUDE.md	(`tail -3` keeping three lines), things enumerated in the same clause,
 prose-count	CLAUDE.md	— two prose lines in this file, one more in
+# paired, three lines down in the same test: expect("lid landlock" in out) and expect("house exit filebind" in out) are the positives showing ll_beneath's code path was reached and completed -- not on the same call, but in the same function, which is what the shape cannot see across
+unpaired-absence	tests/run.py	expect("FAIL landlock rule errno=22" not in out,
+# named in full a few paragraphs below, in "What actually happened when this was built" (prctl, getuid, rt_sigaction, getppid, uname, ioctl, geteuid, getpgrp, poll, setpgid) -- redundant but checkable, which CLAUDE.md's own rule allows
+prose-count	docs/options/10-console-house.md	filter widened by ten syscalls was the wrong mechanism. The operator's
+# named in the same sentence: "the token echoed back... silence when bind= is removed" are the two
+prose-count	docs/options/10-console-house.md	`tools/console-boot-test.py`'s original two checks (the token echoed
 
