@@ -45,6 +45,7 @@
   "landlock-bind-to-a-file",
   "landlock-confines",
   "last-words-survive-group-term",
+  "layer-bytes-enforces-capacity",
   "layer-survives-a-restart",
   "leading-zero-hash-is-a-brick",
   "leading-zero-hash-reaches-the-supervisor",
