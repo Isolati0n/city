@@ -776,3 +776,25 @@ unpaired-absence	tests/run.py	expect(not missing,
 # and the city opened -- the strongest positive available, since a halted
 # boot could not produce that line at all.
 unpaired-absence	tests/run.py	expect("HALT: setrlimit nofile" not in out2,
+# real capability check paired with the tool-presence one on the same
+# line: fs_mountable("vfat") reads /proc/filesystems directly (the
+# kernel-driver question); shutil.which("mkfs.vfat") only narrows which
+# branch's SKIP REASON is accurate when the kernel side is already true.
+# Neither substitutes for the other.
+tool-presence	tests/run.py	if fs_mountable("vfat") and shutil.which("mkfs.vfat"):
+# paired with the two positive checks directly above (death=1, death=2,
+# spent .../3 all present) and the exact count n==2 directly below --
+# together they pin that restart accounting stops at exactly two, not
+# that a third restart merely wasn't logged.
+unpaired-absence	tests/run.py	expect("restart false death=3" not in out, f"third restart\n{out}")
+# paired with the positive check directly above it in the same test:
+# the shim's own interception line must be present first, proving the
+# forced ENOSYS was actually delivered, before this absence (no
+# subsequent die("pidfd_open")) means the fallback ran rather than
+# nothing having reached that code at all.
+unpaired-absence	tests/run.py	expect("pidfd_open" not in out.replace(
+# paired with the positive check directly above it in the same test:
+# at least one LD_PRELOAD-announced waitpid() call must be observed
+# before this absence (no waitpid(-1) among them) means anything --
+# the exact gap `control` found and this pairing was added to close.
+unpaired-absence	tests/run.py	expect("WAITPID_ANY" not in err, f"waitpid(-1) used\n{err}")

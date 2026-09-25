@@ -539,12 +539,39 @@ static void on_term(int sig)
  * Lids still run in the child after fork, before exec. fork is
  * unchanged; clone3(CLONE_PIDFD) would change how the child is
  * born and is not used.
+ *
+ * pidfd_open NEEDS LINUX >= 5.3 AND CAN FAIL ON A KERNEL THAT HAS
+ * IT: ENOSYS on an older or filtered kernel, EMFILE/ENFILE on
+ * descriptor exhaustion. The old plain waitpid(2) this replaces has
+ * no such dependency -- it consumes no descriptor and exists on
+ * every kernel this project has ever targeted. Dying unconditionally
+ * on that failure, as an earlier version of this function did, would
+ * have taken down the whole per-house supervisor OUTSIDE the
+ * deaths/budget accounting the rest of this file is built around --
+ * no restart line, no spent line, and the house itself left running,
+ * forked and already orphaned, unreaped. Measured live with an
+ * LD_PRELOAD forcing ENOSYS: the house became a permanent zombie and
+ * nw-sup exited 72 with no accounting at all. So a pidfd_open failure
+ * falls back to the exact pre-pidfd mechanism instead of dying:
+ * ordinary blocking waitpid(p, &st, 0), which is what this function
+ * replaced and what every death/restart/budget line downstream of
+ * this call already expects to have happened. extra_fd has no real
+ * caller yet -- both call sites below pass -1 -- so the fallback's
+ * inability to also service a second fd costs nothing today; it
+ * dies only if BOTH pidfd_open fails AND a real extra_fd caller
+ * exists, which is not a case this tree has yet.
  */
 static int wait_house(pid_t p, int extra_fd)
 {
     int pfd = (int)syscall(SYS_pidfd_open, p, 0U);
-    if (pfd < 0)
-        die("pidfd_open");
+    if (pfd < 0) {
+        if (extra_fd >= 0)
+            die("pidfd_open");
+        int st = 0;
+        if (waitpid(p, &st, 0) < 0)
+            die("wait house");
+        return st;
+    }
 
     struct pollfd pf[2];
     nfds_t n = 1;

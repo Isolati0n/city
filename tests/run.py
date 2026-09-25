@@ -3131,12 +3131,19 @@ def test_shutdown_does_not_restart():
 
 
 def test_pidfd_reaps_and_counts():
-    """House death is reaped on the pidfd path and counted against budget.
+    """Death/restart/budget counting is correct once a status is
+    obtained: /bin/false as longrun budget=2 must log death=1 and
+    death=2 as restarts, then spent on death=3, exactly.
 
-    Direct nw-sup. /bin/false as longrun budget=2 must log death=1 and
-    death=2 as restarts, then spent on death=3. Control: waitpid(-1)
-    that reaped the wrong child would skip a death line or run on.
-    """
+    THIS DOES NOT DISTINGUISH waitpid(p) FROM waitpid(-1), and an
+    earlier version of this docstring claimed it did. Direct-invocation
+    nw-sup (this harness -- fork one house, block on it, then fork the
+    next) never has a second live child to reap by mistake, so mutating
+    wait_house() to call waitpid(-1, ...) reaps the identical pid and
+    produces byte-identical output here -- `control` verified this
+    concretely. That distinction is test_wait_is_poll_not_spin's job,
+    via its LD_PRELOAD shim; this test's job is only the counting
+    arithmetic, whatever obtained the status."""
     env = os.environ.copy()
     env["NW_KIND"] = "1"
     env["NW_BUDGET"] = "2"
@@ -3154,8 +3161,92 @@ def test_pidfd_reaps_and_counts():
     print("ok pidfd-reaps-and-counts")
 
 
+def test_pidfd_open_failure_falls_back():
+    """A pidfd_open(2) failure must not take down the supervisor
+    outside the death/budget accounting -- it must fall back to plain
+    waitpid(2) and keep reaping and counting correctly.
+
+    `tcb-review` found the first version of wait_house() dies
+    unconditionally on a pidfd_open failure: ENOSYS on a kernel without
+    it, or EMFILE/ENFILE under descriptor exhaustion, either of which
+    the OLD plain-waitpid code could never hit (waitpid consumes no
+    descriptor and needs no kernel feature). Measured live: nw-sup
+    exited 72 with no restart/spent line at all, and the house it had
+    already forked was left running, orphaned, and unreaped -- a
+    permanent zombie. That is not a memory-safety bug, but it is
+    exactly this project's characteristic failure: a well-commented
+    mechanism that quietly narrowed a universally-available primitive
+    into one with a new, silent, un-gated failure mode.
+
+    This forces the exact failure tcb-review measured, with the same
+    technique (an LD_PRELOAD shim intercepting syscall(2) to fail
+    SYS_pidfd_open with ENOSYS, tests/block_pidfd.so.c), and requires
+    the SAME restart/spent accounting test_pidfd_reaps_and_counts
+    already pins for the pidfd-success path -- proving the fallback
+    reaches identical, correct behavior, not just that it compiles.
+
+    Control, run by hand: revert wait_house()'s pidfd_open failure
+    path to unconditional die("pidfd_open") -- this test goes red at
+    the first restart-line assertion, with "pidfd_open" in the output
+    instead."""
+    so_src = os.path.join(ROOT, "tests", "block_pidfd.so.c")
+    so = f"{WORK}/block_pidfd.so"
+    c = subprocess.run(
+        ["gcc", "-shared", "-fPIC", "-O2", "-o", so, so_src, "-ldl"],
+        capture_output=True, text=True)
+    expect(c.returncode == 0, f"block_pidfd.so\n{c.stderr}")
+
+    env = os.environ.copy()
+    env["NW_KIND"] = "1"
+    env["NW_BUDGET"] = "2"
+    env["NW_LIDS"] = "0"
+    env["LD_PRELOAD"] = so
+    p = subprocess.run(
+        [f"{BIN}/nw-sup", "/bin/false", "false"],
+        capture_output=True, text=True, env=env, timeout=10)
+    out = (p.stdout or "") + (p.stderr or "")
+    expect("intercepted pidfd_open, forcing ENOSYS" in out,
+           f"the shim never fired -- this run says nothing about the "
+           f"fallback at all\n{out}")
+    expect("pidfd_open" not in out.replace(
+               "intercepted pidfd_open, forcing ENOSYS", ""),
+           f"wait_house still died on the forced pidfd_open failure "
+           f"instead of falling back\n{out}")
+    expect("restart false death=1/" in out, f"first death not counted\n{out}")
+    expect("restart false death=2/" in out, f"second death not counted\n{out}")
+    expect("spent false death=3/" in out, f"spent line missing\n{out}")
+    n = out.count("restart false death=")
+    expect(n == 2, f"expected 2 restarts under the fallback, got {n}\n{out}")
+    print("ok pidfd-open-failure-falls-back")
+
+
 def test_wait_is_poll_not_spin():
-    """The blocking primitive is poll(), not a busy non-blocking wait."""
+    """The blocking primitive is poll(), not a busy non-blocking wait,
+    and the wait is never waitpid(-1).
+
+    Two mechanisms, two controls. Busy-vs-blocking: /proc/<pid>/syscall
+    must show poll() (syscall 7 on this arch -- confirmed against
+    /usr/include/x86_64-linux-gnu/asm/unistd_64.h, not just trusted;
+    this is an x86_64-specific number and unchecked on any other arch).
+    CPU stays near zero. waitpid(-1): an LD_PRELOAD shim
+    (tests/count_wait.so.c) announces every waitpid() call as it
+    happens and flags any waitpid(-1) specifically.
+
+    THE SHIM CHECK MUST BE PAIRED, or it is satisfied by the shim never
+    loading at all. `ld.so` does not abort on a bad LD_PRELOAD -- it
+    prints a warning and runs the target uninstrumented -- so "no
+    WAITPID_ANY seen" is also what a preload that silently failed to
+    attach looks like. `control` demonstrated this concretely: with the
+    shim's own source hidden, a wait_house() mutated to call
+    waitpid(-1, ...) still passed this test, because nothing was
+    watching. An earlier version of this shim tried to prove it had
+    loaded with an `__attribute__((destructor))` dump instead of a
+    per-call announcement -- which never fires here, because every exit
+    path in nwsup.c is _exit(2), and _exit(2) skips ELF destructors
+    entirely; that version's positive check could never have passed
+    against the real binary. So this now requires at least one
+    per-call announcement line to be present before the WAITPID_ANY
+    absence means anything."""
     import resource, time
     env = os.environ.copy()
     env["NW_KIND"] = "0"
@@ -3189,12 +3280,36 @@ def test_wait_is_poll_not_spin():
     expect(proc.returncode == 0, f"oneshot sleep rc={proc.returncode}\n{err}")
     expect(sc.split()[0] == "7", f"not blocked in poll(); syscall={sc}")
     expect(cpu < 0.20, f"CPU {cpu:.3f}s looks like a spin\n{err}")
+    n_calls = len(re.findall(r"count_wait CALL waitpid pid=", err))
+    expect(n_calls >= 1,
+           f"the LD_PRELOAD shim never announced a single waitpid() call -- "
+           f"either it did not load (ld.so silently ignores a bad "
+           f"LD_PRELOAD and runs the target uninstrumented, which is not "
+           f"a crash) or nw-sup never called waitpid() at all -- either "
+           f"way the WAITPID_ANY check below would be meaningless without "
+           f"this positive proof that something was watching\n{err}")
     expect("WAITPID_ANY" not in err, f"waitpid(-1) used\n{err}")
-    print(f"ok wait-is-poll-not-spin syscall={sc.split()[0]} cpu={cpu:.3f}")
+    print(f"ok wait-is-poll-not-spin syscall={sc.split()[0]} cpu={cpu:.3f} "
+          f"waitpid_calls={n_calls}")
 
 
 def test_poll_set_takes_a_second_fd():
-    """Adding a second poll member does not require restructuring wait_house."""
+    """A two-fd poll set works -- in a STANDALONE demo, not in
+    wait_house() itself.
+
+    tests/poll_shape.c reimplements the same shape (a pidfd plus one
+    extra fd) independently in its own main(); it never calls the real
+    wait_house() in nwsup.c, and neither of that function's two real
+    call sites passes extra_fd >= 0 today -- both pass -1. So this test
+    proves the PATTERN is sound in isolation and proves NOTHING about
+    wait_house()'s own `if (extra_fd >= 0) { ... }` branch, which has
+    no caller yet and is untested in situ. `control` confirmed this
+    experimentally: deleting that whole branch, or just its
+    `pf[1].revents = 0` reset, from the real wait_house() changes
+    nothing about this test's outcome. Forward-looking plumbing for the
+    socket/log-fd work still to come -- a pass here is not evidence
+    that wait_house's own second-fd handling is correct, only that the
+    idea works."""
     src = os.path.join(ROOT, "tests", "poll_shape.c")
     binp = f"{WORK}/poll_shape"
     if not os.path.exists(src):
@@ -3207,7 +3322,9 @@ def test_poll_set_takes_a_second_fd():
     r = subprocess.run([binp], capture_output=True, text=True, timeout=5)
     expect(r.returncode == 0, f"poll_shape rc={r.returncode}\n{r.stderr}")
     expect("extra=1" in r.stderr and "house=1" in r.stderr, r.stderr)
-    print("ok poll-set-takes-a-second-fd")
+    print("ok poll-set-takes-a-second-fd (standalone shape only -- "
+          "wait_house's own extra_fd branch has no caller and is not "
+          "exercised by this)")
 
 
 def test_seccomp_kills():
@@ -9150,7 +9267,8 @@ def main():
         test_orphans_across_restarts,
         test_crash_does_not_halt, test_budget_is_hard_total,
         test_shutdown_does_not_restart,
-        test_pidfd_reaps_and_counts, test_wait_is_poll_not_spin,
+        test_pidfd_reaps_and_counts, test_pidfd_open_failure_falls_back,
+        test_wait_is_poll_not_spin,
         test_poll_set_takes_a_second_fd,
         test_term_signal, test_dawn_real_boot,
         test_kind_required, test_kind_exit0, test_seccomp_kills,

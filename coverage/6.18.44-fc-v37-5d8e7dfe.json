@@ -57,6 +57,8 @@
   "old-magic-is-refused-as-magic",
   "orphans-across-restarts",
   "path-traversal-refused",
+  "pidfd-reaps-and-counts",
+  "poll-set-takes-a-second-fd",
   "rescue",
   "rlimit-raise",
   "rules-hook-delivers-from-any-cwd",
@@ -68,7 +70,8 @@
   "specs-are-checked",
   "subset-run-is-not-a-gate",
   "term-signal",
-  "the-layer-reset-fires-once-per-run"
+  "the-layer-reset-fires-once-per-run",
+  "wait-is-poll-not-spin"
  ],
  "skipped": {
   "dawn-real-boot:vfat-esp": "kernel has no FAT driver (/proc/filesystems lists none), so the ESP is ext4 and FAT's execute bit, ownership and 4 GiB cap stay untested -- which is what docs/options/06 reasons from"
