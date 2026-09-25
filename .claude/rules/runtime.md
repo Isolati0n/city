@@ -313,7 +313,8 @@ through to the sealed image; writes land in `upper` and survive a restart.
   -- and refuses a request that disagrees with what it finds, by name,
   rather than choosing a winner. A REQUEST THAT AGREES stays idempotent
   exactly as before. `test_layer_bytes_representation_switch_refused`
-  pins all three refusing transitions and the one that must not refuse.
+  pins the refusing transitions named above (a resize, sized to
+  unsized, unsized to sized) and the one that must not refuse.
 
   **`nw-sup`'s own pairing re-checks missed the capacity's half of the
   pairing too**, a LOW finding from the same review: `brick without

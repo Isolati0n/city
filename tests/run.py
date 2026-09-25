@@ -4368,7 +4368,19 @@ def test_layer_bytes_representation_switch_refused():
                "a refused unsized->sized must not create a sized store "
                "beside the plain directory it would have shadowed")
     finally:
+        # SAME CLEANUP AS THE FIRST BLOCK, and for the same reason it is
+        # needed there: `control` ran the has_plain guard removed (the
+        # exact regression this block exists to catch) and found
+        # `_make_sized_store` DOES run for lid2 under that mutation,
+        # leaving a real 1 MiB `.img` on the machine root that this
+        # `finally` used to leave behind -- the asymmetry was harmless
+        # under correct code (no `.img` is ever created here) and a real
+        # leak under the exact mutation this test is supposed to detect.
         shutil.rmtree(os.path.join(_layer_dir(), lid2), ignore_errors=True)
+        img2 = os.path.join(_layer_dir(),
+                             lid2 + _blob_str("NW_LAYER_STORE_SUFFIX"))
+        if os.path.exists(img2):
+            os.unlink(img2)
 
     print("ok layer-bytes-representation-switch-refused "
           "(resize, sized->unsized and unsized->sized all refused; "

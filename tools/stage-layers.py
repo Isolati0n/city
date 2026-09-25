@@ -250,9 +250,13 @@ def stage(blob_path, root=""):
                     f"({os.path.getsize(img)} bytes) on disk; this plan "
                     f"declares no layer-bytes (unsized). Refusing rather "
                     f"than silently stranding the sized store's data "
-                    f"behind an unsized mountpoint -- see "
-                    f".claude/rules/runtime.md's THE RECOVERY if "
-                    f"converting it is intentional.")
+                    f"behind an unsized mountpoint -- delete {img} first "
+                    f"if converting to unsized is intentional (this "
+                    f"discards the layer's data). THE RECOVERY in "
+                    f".claude/rules/runtime.md does not reach this file: "
+                    f"it removes only the mountpoint directory, a "
+                    f"SIBLING of this one, which is exactly why the two "
+                    f"are separate paths.")
             else:
                 for leaf in (upper, work):
                     os.makedirs(os.path.join(base, i, leaf), exist_ok=True)
