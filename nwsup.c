@@ -549,9 +549,16 @@ static void on_term(int sig)
  * have taken down the whole per-house supervisor OUTSIDE the
  * deaths/budget accounting the rest of this file is built around --
  * no restart line, no spent line, and the house itself left running,
- * forked and already orphaned, unreaped. Measured live with an
- * LD_PRELOAD forcing ENOSYS: the house became a permanent zombie and
- * nw-sup exited 72 with no accounting at all. So a pidfd_open failure
+ * forked and immediately orphaned. Measured live with an LD_PRELOAD
+ * forcing ENOSYS: nw-sup exited 72 with no accounting at all, and the
+ * house ran on UNSUPERVISED -- reparented to whatever is PID 1, which
+ * in the real boot chain is nw-root's own continuous orphan-reap loop
+ * (pid1.c's reap_all()), not a bare test harness with nothing above
+ * it. That loop does eventually reap it when it exits on its own, so
+ * "permanent zombie" overstated the real-boot consequence -- the
+ * actual, still-serious defect is the budget/restart accounting for
+ * that house being silently lost for the rest of its life, invisible
+ * to nw-sup and to anyone reading its output. So a pidfd_open failure
  * falls back to the exact pre-pidfd mechanism instead of dying:
  * ordinary blocking waitpid(p, &st, 0), which is what this function
  * replaced and what every death/restart/budget line downstream of

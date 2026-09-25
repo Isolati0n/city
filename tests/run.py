@@ -3164,7 +3164,9 @@ def test_pidfd_reaps_and_counts():
 def test_pidfd_open_failure_falls_back():
     """A pidfd_open(2) failure must not take down the supervisor
     outside the death/budget accounting -- it must fall back to plain
-    waitpid(2) and keep reaping and counting correctly.
+    waitpid(2) and keep reaping and counting correctly, and that
+    fallback's waitpid call must itself still be waitpid(p), not
+    waitpid(-1).
 
     `tcb-review` found the first version of wait_house() dies
     unconditionally on a pidfd_open failure: ENOSYS on a kernel without
@@ -3172,35 +3174,63 @@ def test_pidfd_open_failure_falls_back():
     the OLD plain-waitpid code could never hit (waitpid consumes no
     descriptor and needs no kernel feature). Measured live: nw-sup
     exited 72 with no restart/spent line at all, and the house it had
-    already forked was left running, orphaned, and unreaped -- a
-    permanent zombie. That is not a memory-safety bug, but it is
-    exactly this project's characteristic failure: a well-commented
-    mechanism that quietly narrowed a universally-available primitive
-    into one with a new, silent, un-gated failure mode.
+    already forked ran on UNSUPERVISED -- reparented to whatever is
+    PID 1. In the real boot chain that is nw-root's own continuous
+    orphan-reap loop, which does eventually reap it once it exits on
+    its own; an earlier telling of this called it "a permanent zombie",
+    which overstated the real-boot consequence -- confirmed by a
+    second review building a minimal PR_SET_CHILD_SUBREAPER harness
+    that reproduces pid1.c's actual reap_all() loop. The defect that
+    survives that correction is still real and still serious: that
+    house's budget/restart accounting is silently lost for the rest of
+    its life, invisible to nw-sup and to anyone reading its output.
+    That is exactly this project's characteristic failure: a
+    well-commented mechanism that quietly narrowed a
+    universally-available primitive into one with a new, silent,
+    un-gated failure mode.
 
-    This forces the exact failure tcb-review measured, with the same
-    technique (an LD_PRELOAD shim intercepting syscall(2) to fail
-    SYS_pidfd_open with ENOSYS, tests/block_pidfd.so.c), and requires
-    the SAME restart/spent accounting test_pidfd_reaps_and_counts
+    This forces the exact pidfd_open failure tcb-review measured, with
+    the same technique (an LD_PRELOAD shim intercepting syscall(2) to
+    fail SYS_pidfd_open with ENOSYS, tests/block_pidfd.so.c), and
+    requires the SAME restart/spent accounting test_pidfd_reaps_and_counts
     already pins for the pidfd-success path -- proving the fallback
     reaches identical, correct behavior, not just that it compiles.
+    tests/count_wait.so.c is loaded ALONGSIDE block_pidfd.so.c (both
+    are plain LD_PRELOAD shims over different symbols, so they combine
+    without conflict) specifically because a second review found the
+    fallback's own waitpid(p, ...) call was not covered by any
+    waitpid(-1) detection: test_wait_is_poll_not_spin only exercises
+    the pidfd-success path. Mutating both the success-path AND the
+    fallback's waitpid to waitpid(-1) left this test green before that
+    fix, since it only checked accounting, never the call's own
+    argument.
 
     Control, run by hand: revert wait_house()'s pidfd_open failure
     path to unconditional die("pidfd_open") -- this test goes red at
-    the first restart-line assertion, with "pidfd_open" in the output
-    instead."""
-    so_src = os.path.join(ROOT, "tests", "block_pidfd.so.c")
-    so = f"{WORK}/block_pidfd.so"
+    the SECOND expect() (the one checking "pidfd_open" is not in the
+    output beyond the shim's own announcement line), before any
+    restart-line assertion is even reached. An earlier version of this
+    docstring said it failed at "the first restart-line assertion",
+    which was wrong -- checked by actually running the control, not
+    assumed from the code's shape."""
+    block_src = os.path.join(ROOT, "tests", "block_pidfd.so.c")
+    block_so = f"{WORK}/block_pidfd.so"
     c = subprocess.run(
-        ["gcc", "-shared", "-fPIC", "-O2", "-o", so, so_src, "-ldl"],
+        ["gcc", "-shared", "-fPIC", "-O2", "-o", block_so, block_src, "-ldl"],
         capture_output=True, text=True)
     expect(c.returncode == 0, f"block_pidfd.so\n{c.stderr}")
+    count_src = os.path.join(ROOT, "tests", "count_wait.so.c")
+    count_so = f"{WORK}/count_wait_fb.so"
+    c2 = subprocess.run(
+        ["gcc", "-shared", "-fPIC", "-O2", "-o", count_so, count_src, "-ldl"],
+        capture_output=True, text=True)
+    expect(c2.returncode == 0, f"count_wait.so\n{c2.stderr}")
 
     env = os.environ.copy()
     env["NW_KIND"] = "1"
     env["NW_BUDGET"] = "2"
     env["NW_LIDS"] = "0"
-    env["LD_PRELOAD"] = so
+    env["LD_PRELOAD"] = f"{block_so}:{count_so}"
     p = subprocess.run(
         [f"{BIN}/nw-sup", "/bin/false", "false"],
         capture_output=True, text=True, env=env, timeout=10)
@@ -3217,7 +3247,15 @@ def test_pidfd_open_failure_falls_back():
     expect("spent false death=3/" in out, f"spent line missing\n{out}")
     n = out.count("restart false death=")
     expect(n == 2, f"expected 2 restarts under the fallback, got {n}\n{out}")
-    print("ok pidfd-open-failure-falls-back")
+    n_calls = len(re.findall(r"count_wait CALL waitpid pid=", out))
+    expect(n_calls >= 1,
+           f"count_wait.so.c never announced a waitpid() call under the "
+           f"fallback -- either it did not load alongside block_pidfd.so, "
+           f"or the fallback path was never reached, so the WAITPID_ANY "
+           f"check below would be meaningless\n{out}")
+    expect("WAITPID_ANY" not in out,
+           f"the fallback called waitpid(-1) instead of waitpid(p)\n{out}")
+    print(f"ok pidfd-open-failure-falls-back waitpid_calls={n_calls}")
 
 
 def test_wait_is_poll_not_spin():

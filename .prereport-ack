@@ -798,3 +798,15 @@ unpaired-absence	tests/run.py	expect("pidfd_open" not in out.replace(
 # before this absence (no waitpid(-1) among them) means anything --
 # the exact gap `control` found and this pairing was added to close.
 unpaired-absence	tests/run.py	expect("WAITPID_ANY" not in err, f"waitpid(-1) used\n{err}")
+# false positive: "which" matches the tool-presence pattern for
+# shutil.which, but this is ordinary English ("which overstated") in a
+# docstring, not a capability check.
+tool-presence	tests/run.py	which overstated the real-boot consequence -- confirmed by a
+# false positive: prose in a docstring describing the control's own
+# behavior ("checking ... is not in the output"), not a test assertion.
+unpaired-absence	tests/run.py	the SECOND expect() (the one checking "pidfd_open" is not in the
+# paired with the positive check directly above it in the same test:
+# at least one count_wait-announced waitpid() call must be observed
+# under the fallback path specifically before this absence (no
+# waitpid(-1) among them) means anything.
+unpaired-absence	tests/run.py	expect("WAITPID_ANY" not in out,
