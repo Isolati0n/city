@@ -57,6 +57,7 @@
   "old-magic-is-refused-as-magic",
   "orphans-across-restarts",
   "path-traversal-refused",
+  "pidfd-open-failure-falls-back",
   "pidfd-reaps-and-counts",
   "poll-set-takes-a-second-fd",
   "rescue",
