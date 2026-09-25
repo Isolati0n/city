@@ -420,8 +420,16 @@ def bake(path, houses):
     #
     # No "no brick" spelling, because NW_E_LAYERPAIR makes a layer
     # without a brick unrepresentable in both directions.
+    # THIRD FIELD, LAYER_BYTES: the value is already in the sealed blob
+    # (nwcheck.c validates it, nwspawn.c forwards it to nw-sup), and
+    # this is the same reason the brick is the second field rather than
+    # left for the reader to re-derive -- the reader that needs it
+    # (tools/stage-layers.py, sizing the backing store before boot)
+    # must not parse the blob to get it, or that is a third copy of the
+    # unit layout. 0 means unset, the same convention the field uses
+    # everywhere else.
     open(path + ".layers", "w").write(
-        "".join(h["layer"] + " " + h["brick"] + "\n"
+        "".join(f'{h["layer"]} {h["brick"]} {h["res"]["layer_bytes"]}\n'
                 for h in houses if h["layer"]))
     print(f"wrote {path} units={len(houses)} binds={len(binds)} "
           f"crc=0x{crc:08x} bytes={len(blob)} sha256={digest}")

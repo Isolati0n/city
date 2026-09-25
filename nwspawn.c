@@ -209,6 +209,14 @@ int main(int argc, char **argv)
              * from the sealed blob. setenv with overwrite=1 so a house
              * without a layer cannot inherit the previous one's. */
             setenv("NW_LAYER", u[i].layer, 1);
+            /* Decimal, not hex: this is a byte count, not an opaque id,
+             * and nw-sup only ever needs it as a number to size a loop
+             * device against. 0 = unset, same convention the field has
+             * everywhere else it is read. */
+            char lbb[24];
+            snprintf(lbb, sizeof lbb, "%llu",
+                     (unsigned long long)u[i].res.layer_bytes);
+            setenv("NW_LAYER_BYTES", lbb, 1);
             int nb = 0;
             for (uint32_t b = 0; b < h->n_binds; b++) {
                 if (bd[b].unit != (uint16_t)i) continue;

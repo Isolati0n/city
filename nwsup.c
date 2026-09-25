@@ -100,8 +100,57 @@ static void lid_newns(void)
  * brick a directory bind-mounted onto itself, the pre-phase-2 code, and
  * the write succeeds. docs/plans/01.
  */
+/* Attach backing_fd to a free loop device, retrying past the EBUSY race
+ * documented in full below (this is the same mechanism, extracted so a
+ * second loop-mounted image -- the sized layer store -- does not
+ * duplicate the retry logic verbatim). Returns an OPEN, CONFIGURED loop
+ * device fd and fills dev_out with its path; the caller mounts dev_out
+ * and then closes the returned fd (LO_FLAGS_AUTOCLEAR frees the device
+ * once the mount that holds it goes away). Dies internally; never
+ * returns failure to the caller. */
+static int loop_attach(int backing_fd, uint32_t extra_flags,
+                        char *dev_out, size_t dev_out_sz)
+{
+    int ld = -1;
+    for (int attempt = 0; attempt < NW_MAX_UNITS; attempt++) {
+        int ctl = open("/dev/loop-control", O_RDWR | O_CLOEXEC);
+        if (ctl < 0) die("open loop-control");
+        int idx = ioctl(ctl, LOOP_CTL_GET_FREE);
+        int e = errno;
+        close(ctl);
+        if (idx < 0) { errno = e; die("loop get free"); }
+
+        int dn = snprintf(dev_out, dev_out_sz, "/dev/loop%d", idx);
+        if (dn < 0 || (size_t)dn >= dev_out_sz) die("loop device name");
+        /* THE SEAL (or its absence) IS OVER-DETERMINED, the same way
+         * the brick's is: the kernel forces the resulting mount
+         * read-only when EITHER the backing fd or the loop device fd
+         * is O_RDONLY. LO_FLAGS_READ_ONLY says which this caller
+         * wants -- the device fd itself must agree, or a writable
+         * caller's backing file still mounts read-only underneath it. */
+        int dev_flags = (extra_flags & LO_FLAGS_READ_ONLY)
+                       ? O_RDONLY : O_RDWR;
+        ld = open(dev_out, dev_flags | O_CLOEXEC);
+        if (ld < 0) die("open loop device");
+
+        struct loop_config cfg;
+        memset(&cfg, 0, sizeof cfg);
+        cfg.fd = (uint32_t)backing_fd;
+        cfg.info.lo_flags = LO_FLAGS_AUTOCLEAR | extra_flags;
+        if (ioctl(ld, LOOP_CONFIGURE, &cfg) == 0)
+            return ld;          /* attached */
+        if (errno != EBUSY) die("loop configure");
+        /* Lost the race. Drop this device and ask for another index --
+         * re-CONFIGUREing the same one would lose again forever. */
+        close(ld);
+        ld = -1;
+    }
+    die("loop configure: no free device");
+    return -1;  /* unreachable; silences a maybe-uninitialized warning */
+}
+
 static void lid_brick(const char *brick, const char *layer,
-                      char *const *binds, int nbinds)
+                      uint64_t layer_bytes, char *const *binds, int nbinds)
 {
     /* Without this the mounts below propagate back to the machine and every
      * house sees every other house's binds. A brick that is visible outside
@@ -159,42 +208,16 @@ static void lid_brick(const char *brick, const char *layer,
      * max_loop is not a ceiling -- it is how many devices exist at module
      * load, and GET_FREE allocates past it. Measured: 4096 attached on a
      * kernel reporting 8, no ceiling found. docs/plans/01. */
+    /* LO_FLAGS_AUTOCLEAR is the design decision here: the device frees
+     * itself when its last reference goes, so there is no teardown path
+     * to get wrong, no cleanup on any die() below, and nothing leaked
+     * when a house is killed -- including on a die() where the device is
+     * already configured. Both directions are controlled: drop the flag
+     * and `losetup -a` shows the device still attached after the house
+     * exits, and drop it with a forced mount failure and it is still
+     * attached after the _exit(72). loop_attach() always sets it. */
     char dev[32];
-    int ld = -1;
-    for (int attempt = 0; attempt < NW_MAX_UNITS; attempt++) {
-        int ctl = open("/dev/loop-control", O_RDWR | O_CLOEXEC);
-        if (ctl < 0) die("open loop-control");
-        int idx = ioctl(ctl, LOOP_CTL_GET_FREE);
-        int e = errno;
-        close(ctl);
-        if (idx < 0) { errno = e; die("loop get free"); }
-
-        int dn = snprintf(dev, sizeof dev, "/dev/loop%d", idx);
-        if (dn < 0 || (size_t)dn >= sizeof dev) die("loop device name");
-        ld = open(dev, O_RDONLY | O_CLOEXEC);
-        if (ld < 0) die("open loop device");
-
-        /* LO_FLAGS_AUTOCLEAR is the design decision here: the device frees
-         * itself when its last reference goes, so there is no teardown path
-         * to get wrong, no cleanup on any die() below, and nothing leaked
-         * when a house is killed -- including on the die() just below, where
-         * the device is already configured. Both directions are controlled:
-         * drop the flag and `losetup -a` shows the device still attached
-         * after the house exits, and drop it with a forced mount failure and
-         * it is still attached after the _exit(72). */
-        struct loop_config cfg;
-        memset(&cfg, 0, sizeof cfg);
-        cfg.fd = (uint32_t)img;
-        cfg.info.lo_flags = LO_FLAGS_AUTOCLEAR | LO_FLAGS_READ_ONLY;
-        if (ioctl(ld, LOOP_CONFIGURE, &cfg) == 0)
-            break;              /* attached */
-        if (errno != EBUSY) die("loop configure");
-        /* Lost the race. Drop this device and ask for another index --
-         * re-CONFIGUREing the same one would lose again forever. */
-        close(ld);
-        ld = -1;
-    }
-    if (ld < 0) die("loop configure: no free device");
+    int ld = loop_attach(img, LO_FLAGS_READ_ONLY, dev, sizeof dev);
     close(img);
 
     if (mount(dev, NW_BRICK_MNT, "erofs", MS_RDONLY | MS_NODEV, NULL) < 0)
@@ -202,6 +225,46 @@ static void lid_brick(const char *brick, const char *layer,
     /* The mount holds the device now, so the descriptor can go. AUTOCLEAR
      * frees it when the mount does, which is when this namespace dies. */
     close(ld);
+
+    /* THE LAYER'S OWN CAPACITY, if the plan declared one. Loop-mounted
+     * onto NW_LAYER_DIR/<layer> itself -- which stage-layers.py created
+     * as an empty directory rather than the plain host directory it
+     * would otherwise be -- BEFORE the upper/work paths below are used,
+     * so they resolve inside this freshly mounted, fixed-size
+     * filesystem rather than on the machine root. Same family as the
+     * brick above: a project-quota approach was refused (docs/
+     * ENVIRONMENT.md already records project quota is off on this
+     * machine's root device), so capacity is a filesystem boundary
+     * instead, exactly like the brick already is one. Unlike the brick,
+     * this loop device is NOT read-only -- writing past `layer_bytes` is
+     * meant to fail with ENOSPC inside the house, not refuse the mount.
+     *
+     * NOT CREATED HERE, for the identical reason the brick and the
+     * upper/work directories are not: tools/stage-layers.py creates and
+     * sizes the backing file (truncate + mkfs.ext4 -d, pre-populated
+     * with empty upper/ and work/ so this mount needs no mkdir of its
+     * own) before the boot that needs it. A missing or wrong-sized
+     * backing file is a loud die() here, not a supervisor quietly
+     * making room for it. */
+    if (layer && layer[0] && layer_bytes) {
+        char img_path[sizeof(NW_LAYER_DIR) + 1 + NW_NAME_LEN
+                      + sizeof(NW_LAYER_STORE_SUFFIX)];
+        int n = snprintf(img_path, sizeof img_path, "%s/%s%s",
+                         NW_LAYER_DIR, layer, NW_LAYER_STORE_SUFFIX);
+        if (n < 0 || (size_t)n >= sizeof img_path) die("layer store path");
+        int simg = open(img_path, O_RDWR | O_CLOEXEC);
+        if (simg < 0) die("open layer store");
+        char sdev[32];
+        int sld = loop_attach(simg, 0, sdev, sizeof sdev);
+        close(simg);
+        char mnt[sizeof(NW_LAYER_DIR) + 1 + NW_NAME_LEN + 1];
+        n = snprintf(mnt, sizeof mnt, "%s/%s", NW_LAYER_DIR, layer);
+        if (n < 0 || (size_t)n >= sizeof mnt) die("layer mount path");
+        if (mount(sdev, mnt, "ext4", 0, NULL) < 0)
+            die("mount layer store");
+        close(sld);
+        say("lid layer store");
+    }
 
     /* THE WRITABLE LAYER, STACKED ON THE BRICK'S OWN MOUNTPOINT.
      *
@@ -671,6 +734,25 @@ int main(int argc, char **argv)
         }
     }
 
+    /* THE CAPACITY, RE-VALIDATED HERE for the same reason the hash and
+     * the layer id are: nw-sup reads its unit from the environment, so
+     * nothing the baker or nw-check did stands behind this value
+     * either. Decimal digits only, and must fit uint64_t -- a value
+     * nw-check already bounded to that width, so an env var claiming
+     * more is not a legal handoff and is refused rather than
+     * truncated. Empty or absent means 0 (unset), the same convention
+     * the field has in the blob. */
+    uint64_t layer_bytes = 0;
+    if ((e = getenv("NW_LAYER_BYTES")) && e[0]) {
+        for (const char *p = e; *p; p++)
+            if (*p < '0' || *p > '9') die("layer bytes not a number");
+        errno = 0;
+        char *endp = NULL;
+        unsigned long long v = strtoull(e, &endp, 10);
+        if (errno == ERANGE || !endp || *endp) die("layer bytes range");
+        layer_bytes = (uint64_t)v;
+    }
+
     /* Landlock grants beneath the house's root, which is only a restriction
      * if that root is a brick. nw-check returns NW_E_LLBRICK; re-checked here
      * because nw-sup reads its unit from the environment. */
@@ -738,7 +820,7 @@ int main(int argc, char **argv)
         if (p == 0) {
             if (lids & NW_LID_NEWNET) lid_netns();
             if (lids & NW_LID_NEWNS) lid_newns();
-            if (brick) lid_brick(brick, layer, binds, nbinds);
+            if (brick) lid_brick(brick, layer, layer_bytes, binds, nbinds);
             if (lids & NW_LID_LANDLOCK) lid_landlock(binds, nbinds);
             if (lids & NW_LID_SECCOMP) {
                 if (nw_apply_house_seccomp() < 0) die("house seccomp");

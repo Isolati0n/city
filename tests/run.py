@@ -467,6 +467,18 @@ def stage_layers(blob, reset=True):
             _LAYERS_RESET.add(lid)
             shutil.rmtree(os.path.join(_layer_dir(), lid),
                           ignore_errors=True)
+            # A SIZED layer's backing file is a SIBLING of the id's own
+            # directory, not something inside it (a mountpoint has to
+            # stay an empty directory) -- so the rmtree above never
+            # touches it. Without this a sized layer accumulates state
+            # across suite RUNS the exact way this whole reset exists
+            # to prevent for the plain-directory case; found by running
+            # a fresh test twice and reading "rrrr" where "rr" was
+            # expected.
+            img = os.path.join(_layer_dir(),
+                                lid + _blob_str("NW_LAYER_STORE_SUFFIX"))
+            if os.path.exists(img):
+                os.unlink(img)
     r = run(["python3", os.path.join(ROOT, "tools", "stage-layers.py"),
              blob, "--quiet"])
     expect(r.returncode == 0, f"stage-layers failed\n{r.out}{r.err}")
@@ -3990,8 +4002,8 @@ def test_the_layer_reset_fires_once_per_run():
 
     print(f"ok layer-reset-once-per-run (planted state removed on the "
           f"first sighting of {lid} and kept on the second; the id is "
-          f"read from a two-field sidecar, which is the reading a fresh "
-          f"machine cannot otherwise check)")
+          f"read from a three-field sidecar, which is the reading a "
+          f"fresh machine cannot otherwise check)")
 
 
 def test_layer_survives_a_restart():
@@ -4085,6 +4097,153 @@ def test_layer_survives_a_restart():
     print(f"ok layer-survives-a-restart (state {states} across "
           f"{len(states)} runs, /id read from the brick every time, and "
           f"{kept} holds {got!r} -- the DECLARED id, checked from outside)")
+
+
+def test_layer_bytes_enforces_capacity():
+    """`layer_bytes` (`layer-bytes=` in a city) is enforced as a real
+    filesystem boundary, not merely validated and then ignored --
+    closing runtime.md's own "nothing applies it" kind-3 item for this
+    one field. Project-quota enforcement was refused (docs/
+    ENVIRONMENT.md already records project quota off on this machine's
+    root device, quotactl answering ESRCH); instead a house's layer
+    becomes a fixed-size file, loop-mounted and ext4-formatted by
+    tools/stage-layers.py at staging time (mkfs.ext4 -d, pre-populated
+    with empty upper/ and work/, the same "build from a directory tree"
+    shape mkfs.erofs already uses for bricks), then loop-mounted by
+    nw-sup at NW_LAYER_DIR/<id> itself, before the existing overlay
+    logic even runs -- so upper/work resolve inside it rather than on
+    the machine root.
+
+    TWO HOUSES, ONE BOOT, because "does not affect any other house's
+    storage" needs a second house to have something to not affect.
+    `filler` (unit-layer-fill) writes until the mount refuses; `keeper`
+    (unit-layer, the same fixture test_layer_survives_a_restart already
+    uses) runs its own restart-and-persist cycle on an equally-capped
+    but entirely separate layer.
+
+    THREE PROPERTIES, each its own assertion below:
+      - capacity_bytes (read via statvfs(2) from INSIDE the house,
+        before any write) is bounded by the declared 1 MiB, not by the
+        host disk -- ext4 metadata overhead means it is somewhat under
+        1 MiB, never over, and never anywhere near this box's real
+        root filesystem size (checked directly, not assumed).
+      - the fill stops with ENOSPC (errno 28), not some other error,
+        not a silent short write nobody notices, and wrote is itself
+        bounded the same way capacity_bytes is.
+      - keeper's own budget-driven restart-and-persist cycle (identical
+        in kind to test_layer_survives_a_restart) is completely
+        unaffected by filler's exhaustion -- checked by requiring
+        keeper's own state to have grown exactly as it would alone, and
+        by checking keeper's own backing file from OUTSIDE the boot,
+        the same "declared id, checked from outside" pattern
+        test_layer_survives_a_restart already uses.
+
+    Control, run by hand: skip nwsup.c's layer-store mount (so
+    layer_bytes is validated at bake time but never applied at mount
+    time, the exact gap this test closes). staging pre-populates
+    upper/work INSIDE the sized image now rather than as plain host
+    directories, so without the mount neither exists at
+    NW_LAYER_DIR/<id> at all -- both houses die at the overlay's own
+    `FAIL mount layer errno=2` (upperdir missing) before the fixture
+    ever runs, and this test goes red at its first assertion
+    ("capacity_bytes line never printed") rather than at a wrong
+    number. Confirmed by running it, not assumed from reading the
+    mount sequence -- an earlier version of this docstring predicted
+    the wrong failure shape."""
+    fill_brick = make_brick("lb-cap-fill", exe="unit-layer-fill")
+    keep_brick = make_brick("lb-cap-keep", exe="unit-layer")
+    fill_lid, keep_lid = "l-cap-fill", "l-cap-keep"
+    cap = 1024 * 1024
+    city = f"{WORK}/layer-cap.city"
+    open(city, "w").write(
+        f"house filler /bin/brick kind=oneshot "
+        f"lids=newns brick={fill_brick} layer={fill_lid} "
+        f"layer-bytes={cap}\n"
+        f"house keeper /bin/brick kind=longrun budget=1 "
+        f"lids=newns brick={keep_brick} layer={keep_lid} "
+        f"layer-bytes={cap}\n")
+    blob = f"{WORK}/layer-cap.blob"
+    b = run(["python3", CC, "--city", city, "--out", blob])
+    expect(b.returncode == 0, f"bake\n{b.out}{b.err}")
+    rc, out = boot(plan=blob, hold=1800)
+    expect(city_closed(rc, out), f"layer-cap rc={rc}\n{out[-2000:]}")
+
+    m = re.search(r"\[fill\] capacity_bytes=(\d+)", out)
+    expect(m, f"capacity_bytes line never printed\n{out[-2000:]}")
+    capacity_bytes = int(m.group(1))
+    expect(0 < capacity_bytes <= cap,
+           f"reported capacity {capacity_bytes} is not bounded by the "
+           f"declared {cap} -- a house with no store mounted sees the "
+           f"machine root's own size instead, which is what this bound "
+           f"rules out\n{out[-2000:]}")
+    root_size = os.statvfs("/").f_blocks * os.statvfs("/").f_frsize
+    expect(capacity_bytes < root_size // 10,
+           f"reported capacity {capacity_bytes} is not clearly bounded "
+           f"away from this machine's own root filesystem size "
+           f"({root_size}) -- 'a fraction of the host disk' is still "
+           f"'as much as the host disk has'\n{out[-2000:]}")
+
+    wm = re.search(r"\[fill\] wrote=(\d+)", out)
+    expect(wm, f"wrote= line never printed\n{out[-2000:]}")
+    wrote = int(wm.group(1))
+    expect(0 < wrote <= cap,
+           f"the fill wrote {wrote} bytes against a {cap}-byte cap -- "
+           f"either it never started or it overran the declared "
+           f"capacity\n{out[-2000:]}")
+    em = re.search(r"\[fill\] stopped_errno=(-?\d+)", out)
+    expect(em, f"stopped_errno= line never printed\n{out[-2000:]}")
+    expect(int(em.group(1)) == 28,  # ENOSPC
+           f"the fill stopped for a reason other than ENOSPC "
+           f"(errno={em.group(1)}), or ran to this fixture's own "
+           f"internal safety ceiling without the mount ever refusing "
+           f"it\n{out[-2000:]}")
+
+    expect(out.count("[layer] write=ok") == 2,
+           f"keeper must write=ok on both its runs (initial, then one "
+           f"restart before its budget=1 is spent), unaffected by "
+           f"filler's own layer being full\n{out[-2000:]}")
+    expect("restart keeper death=1/1" in out and "spent keeper" in out,
+           f"keeper's own restart/spent accounting must be exactly what "
+           f"a budget=1 house alone produces\n{out[-2000:]}")
+
+    # UNLIKE THE UNSIZED CASE, a sized layer's upper/work live INSIDE the
+    # loop-mounted store, which is mounted in the HOUSE's own private
+    # mount namespace and torn down with it when the house exits -- so
+    # "checked from outside" here means mounting the backing file again,
+    # the same way a brick's own contents are only inspectable by
+    # mounting its image. test_layer_survives_a_restart's plain
+    # directories need no such step; this is the real difference a
+    # sized layer introduces and the test has to account for it rather
+    # than assume the old check still applies unmodified.
+    keep_img = os.path.join(
+        _layer_dir(), keep_lid + _blob_str("NW_LAYER_STORE_SUFFIX"))
+    expect(os.path.exists(keep_img),
+           f"keeper's own backing store {keep_img} does not exist")
+    expect(os.path.getsize(keep_img) == cap,
+           f"keeper's own backing store is not sized to the declared "
+           f"capacity ({cap}), checked from outside")
+    probe_mnt = tempfile.mkdtemp(dir=WORK)
+    r = run(["mount", "-o", "loop,ro", keep_img, probe_mnt])
+    expect(r.returncode == 0, f"mount keeper's own store for inspection\n"
+           f"{r.out}{r.err}")
+    try:
+        kept = os.path.join(probe_mnt, _blob_str("NW_LAYER_UPPER"), "state")
+        expect(os.path.exists(kept),
+               f"keeper's own declared layer has no {kept}, mounted "
+               f"read-only from {keep_img} the same way "
+               f"test_layer_survives_a_restart checks the unsized case "
+               f"from outside")
+        expect(open(kept).read() == "rr",
+               f"keeper's state must show exactly two marks (one per "
+               f"run), unaffected by filler exhausting its own, "
+               f"separate layer")
+    finally:
+        run(["umount", probe_mnt])
+        os.rmdir(probe_mnt)
+
+    print(f"ok layer-bytes-enforces-capacity (declared={cap} "
+          f"reported={capacity_bytes} wrote={wrote} errno=ENOSPC, "
+          f"keeper unaffected: state=rr, store size={cap})")
 
 
 def test_many_brick_houses_all_start():
@@ -6887,9 +7046,9 @@ def _candidate_stager_body(_sh, _ids_made):
     # disagreeing inside one `expect()`, which is the MAKE_BLOCK shape
     # from CLAUDE.md. The brick is compared to the one the city
     # declares.
-    expect(_side == [[lid, "ab" * 32], [lid_b, "cd" * 32]],
+    expect(_side == [[lid, "ab" * 32, "0"], [lid_b, "cd" * 32, "0"]],
            f"the layer sidecar must pair each id with the brick of the "
-           f"house that declares it: {_side}")
+           f"house that declares it and its layer_bytes: {_side}")
     # The .sha256 sidecar describes THIS candidate, not the previous one.
     import hashlib as _hl
     expect(os.path.exists(f"{slots}/B/plan.blob.sha256"),
@@ -7031,7 +7190,7 @@ def _candidate_stager_body(_sh, _ids_made):
     # the candidate's house sits on brick cd..cd, so a live sidecar
     # pairing the same id with ab..ab is the fold shape the guard names.
     open(f"{slots}/A/plan.blob.layers", "w").write(
-        f"{clash_lid} {'ab' * 32}\n")
+        f"{clash_lid} {'ab' * 32} 0\n")
     r = _stage(city=clash_city)
     expect(r.returncode != 0
            and "over a DIFFERENT brick" in (r.out + r.err),
@@ -7049,7 +7208,7 @@ def _candidate_stager_body(_sh, _ids_made):
     # candidate that must be ACCEPTED separates them.
     # `.claude/rules/plan.md`'s missing-DIRECTION lesson, in the stager.
     open(f"{slots}/A/plan.blob.layers", "w").write(
-        f"{clash_lid} {'cd' * 32}\n")
+        f"{clash_lid} {'cd' * 32} 0\n")
     r = _stage(city=clash_city)
     expect(r.returncode == 0,
            f"a candidate reusing a live layer over the SAME brick must "
@@ -7103,7 +7262,7 @@ def _candidate_stager_body(_sh, _ids_made):
         f"house mover {BIN}/unit-probe kind=oneshot "
         f"lids=newns,seccomp brick={'ef' * 32} layer={move_lid}\n")
     open(f"{slots}/A/plan.blob.layers", "w").write(
-        f"{keep_lid} {'cd' * 32}\n{move_lid} {'ab' * 32}\n")
+        f"{keep_lid} {'cd' * 32} 0\n{move_lid} {'ab' * 32} 0\n")
     r = _stage(city=two_city)
     expect(r.returncode != 0 and move_lid in (r.out + r.err),
            f"the candidate reuses {move_lid} over a different brick and "
@@ -7139,7 +7298,7 @@ def _candidate_stager_body(_sh, _ids_made):
         f"house sw2 {BIN}/unit-probe kind=oneshot "
         f"lids=newns,seccomp brick={'aa' * 32} layer={swap_b}\n")
     open(f"{slots}/A/plan.blob.layers", "w").write(
-        f"{swap_a} {'aa' * 32}\n{swap_b} {'bb' * 32}\n")
+        f"{swap_a} {'aa' * 32} 0\n{swap_b} {'bb' * 32} 0\n")
     r = _stage(city=swap_city)
     expect(r.returncode != 0, f"a candidate that SWAPS two houses' bricks "
            f"while both keep their live layer ids was staged; each layer "
@@ -7165,7 +7324,7 @@ def _candidate_stager_body(_sh, _ids_made):
     # stage-layers failed`. So the input is written HERE, where the
     # guard is the first reader to see it.
     open(f"{slots}/A/plan.blob.layers", "w").write(
-        f"{'cd' * 32} {clash_lid}\n")
+        f"{'cd' * 32} {clash_lid} 0\n")
     r = _stage(city=clash_city)
     expect(r.returncode != 0
            and "lowercase hex brick" in (r.out + r.err),
@@ -7179,7 +7338,8 @@ def _candidate_stager_body(_sh, _ids_made):
     # field 1 every clash case above would pass for the wrong reason.
     open(f"{slots}/A/plan.blob.layers", "w").write(clash_lid + "\n")
     r = _stage(city=clash_city)
-    expect(r.returncode != 0 and "not an id and a brick" in (r.out + r.err),
+    expect(r.returncode != 0
+           and "not an id, a brick and a layer_bytes" in (r.out + r.err),
            f"a live sidecar with no brick field must refuse rather than "
            f"guess whether the shared id is a fold\n{r.out}{r.err}")
 
@@ -9313,6 +9473,7 @@ def main():
         test_brick_is_a_root, test_brick_image_is_sealed,
         test_the_layer_reset_fires_once_per_run,
         test_layer_survives_a_restart,
+        test_layer_bytes_enforces_capacity,
         test_many_brick_houses_all_start, test_brick_needs_newns,
         test_baker_refuses_bad_layers,
         test_baker_refuses_bad_resources,

@@ -76,26 +76,33 @@ def _blob_h(name):
 def _layer_bricks(path):
     """`{layer-id: brick}` from a `.layers` sidecar.
 
-    A ONE-FIELD LINE IS FATAL, and that is not symmetry with
-    `tools/stage-layers.py`, which accepts one. That tool asks which
-    directories to create and field 0 answers it completely. This one
-    asks whether a shared id sits over a different brick, and without
-    field 1 there is no answer -- so it refuses rather than guessing,
-    which is the same rule as the unreadable sidecars either side of
-    this.
+    A LINE THAT IS NOT EXACTLY THREE FIELDS IS FATAL, and that is not
+    symmetry with `tools/stage-layers.py`, which reads field 0 alone
+    and tolerates anything after it. That tool asks which directories
+    to create and field 0 answers it completely. This one asks whether
+    a shared id sits over a different brick, and without field 1 there
+    is no answer -- so it refuses rather than guessing, which is the
+    same rule as the unreadable sidecars either side of this. Field 2
+    (layer_bytes) is not used by this tool at all -- it exists for
+    tools/stage-layers.py to size a writable layer's backing store --
+    but the count is still exactly 3, because "at least 2" is what the
+    plan.md rule this docstring already cites was written to refuse:
+    the next field added breaks this reader until it is updated, on
+    purpose, rather than silently reading a line the baker no longer
+    writes.
     """
     out = {}
     for n, line in enumerate(open(path), 1):
         if not line.strip():
             continue
         f = line.split()
-        if len(f) != 2:
+        if len(f) != 3:
             raise SystemExit(
                 f"stage-candidate: {path}:{n} has {len(f)} field(s), not "
-                f"an id and a brick. A sidecar the baker wrote pairs "
-                f"them; this tool needs the brick to tell a reused layer "
-                f"from a folded one, and will not guess. Re-bake the "
-                f"plan.")
+                f"an id, a brick and a layer_bytes. A sidecar the baker "
+                f"wrote pairs them; this tool needs the brick to tell a "
+                f"reused layer from a folded one, and will not guess. "
+                f"Re-bake the plan.")
         # FIELD 1 IS SHAPE-CHECKED. Removing this turns the
         # reversed-sidecar case in `test_candidate_stager_never_touches_
         # the_live_slot` red, which is the evidence; the paragraph below

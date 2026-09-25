@@ -15,10 +15,27 @@ stager did not exist yet, for a day after it landed -- and survived a
 round that edited the next sentence of the same paragraph.)
 
 The ids come from the `.layers` sidecar the baker writes beside the blob,
-one per line, as `<layer-id> <brick>`; this tool reads the id and ignores
-the brick. That is why this tool does not parse the blob: a third copy
+one per line, as `<layer-id> <brick> <layer_bytes>`; this tool reads the
+id and, when layer_bytes is nonzero, the capacity, and ignores the
+brick. That is why this tool does not parse the blob: a third copy
 of the unit layout (after blob.h and the baker) is the drift class
-invariant 3 is about, and the baker already knows every id it packed.
+invariant 3 is about, and the baker already knows every id (and every
+capacity) it packed.
+
+A DECLARED CAPACITY MAKES <id> A LOOP-MOUNT TARGET, not a plain
+directory. `nw-sup` loop-mounts a fixed-size, ext4-formatted backing
+file (`<id>.img`, a SIBLING of `<id>/` so the mountpoint stays an empty
+directory) at `NW_LAYER_DIR/<id>` before it ever builds the overlay's
+upper/work paths -- so `upper` and `work` are created HERE, baked into
+that filesystem via `mkfs.ext4 -d`, rather than as plain host
+directories. Project-quota enforcement was refused (docs/ENVIRONMENT.md
+already records project quota off on this machine's root device);
+capacity is a filesystem boundary instead, the same way a brick already
+is one.
+
+Idempotent the same way the plain-directory case already is: an
+existing backing file is left alone, whatever its declared size was
+when it was built. This tool creates; it does not resize or repair.
 
     python3 tools/stage-layers.py <blob> [--root DIR]
 
@@ -29,7 +46,10 @@ from __future__ import annotations
 
 import argparse
 import os
+import shutil
+import subprocess
 import sys
+import tempfile
 
 
 def layer_dir(root=""):
@@ -112,24 +132,30 @@ def stage(blob_path, root=""):
                 f"there. Refusing. Write the hexdigest alone into that "
                 f"file if you are repairing it -- `sha256sum` emits "
                 f"'<hash>  <name>', which this compares whole.")
-    # FIELD 0 IS THE ID; field 1 is the brick it stacks over, and this
-    # tool has no use for it -- it creates directories. A one-field
-    # sidecar (the format before the brick was added) therefore still
-    # answers this tool's question completely, and is accepted.
+    # FIELD 0 IS THE ID; field 1 is the brick it stacks over and field 2
+    # is layer_bytes, and this tool has no use for the brick -- it
+    # creates directories or a sized store, and the brick does not bear
+    # on either. A one- or two-field sidecar (the format before the
+    # brick, then before layer_bytes, was added) therefore still
+    # answers this tool's question completely for the fields it has:
+    # missing layer_bytes reads as 0 (unset), the plain-directory case,
+    # which is what every such sidecar meant before this field existed.
     #
     # That is NOT the two-readers-disagreeing defect `control` found
     # above, which was this tool and the stager answering the SAME
     # question differently. `tools/stage-candidate.py` refuses a
-    # one-field sidecar because the question it asks -- does this
+    # short sidecar because the question it asks -- does this
     # candidate reuse a live layer over a DIFFERENT brick -- has no
     # answer without field 1. Different question, different verdict.
     try:
-        ids = [l.split()[0] for l in open(side) if l.strip()]
+        rows = [l.split() for l in open(side) if l.strip()]
     except OSError as e:
         raise SystemExit(
             f"stage-layers: no layer sidecar beside {blob_path} ({e}). The "
             f"baker writes it; a blob baked by something else has to say "
             f"which layers it wants some other way.")
+    ids = [r[0] for r in rows]
+    sizes = {r[0]: (int(r[2]) if len(r) >= 3 else 0) for r in rows}
     base = layer_dir(root)
     upper, work = _names("NW_LAYER_UPPER"), _names("NW_LAYER_WORK")
     for i in ids:
@@ -150,9 +176,85 @@ def stage(blob_path, root=""):
             raise SystemExit(
                 f"stage-layers: {i!r} is not a layer id. It names a "
                 f"directory this tool creates, so it is checked here too.")
-        for leaf in (upper, work):
-            os.makedirs(os.path.join(base, i, leaf), exist_ok=True)
+        nbytes = sizes.get(i, 0)
+        if nbytes < 0:
+            raise SystemExit(
+                f"stage-layers: {i!r} has a negative layer_bytes "
+                f"({nbytes}) in the sidecar -- the baker never writes "
+                f"one, so this is a hand-edited or corrupt file.")
+        # The MOUNTPOINT is created either way -- a sized layer's own
+        # <id>/ must exist and be empty for nw-sup to loop-mount onto,
+        # exactly like the unsized case's plain directory. What differs
+        # is whether upper/work are created HERE as plain subdirectories
+        # (unsized) or baked into a sized backing file nw-sup mounts
+        # there instead (sized) -- never both, or the sized mount would
+        # hide stray plain-directory writes underneath it.
+        os.makedirs(os.path.join(base, i), exist_ok=True)
+        if nbytes:
+            _make_sized_store(base, i, nbytes, upper, work)
+        else:
+            for leaf in (upper, work):
+                os.makedirs(os.path.join(base, i, leaf), exist_ok=True)
     return ids
+
+
+def _make_sized_store(base, layer_id, nbytes, upper, work):
+    """Create <base>/<layer_id><suffix>, a fixed-size ext4 image
+    pre-populated with empty upper/ and work/ directories, unless one
+    is already there -- idempotent the same way the plain-directory
+    case already is: this tool creates, it does not resize or repair.
+
+    Built exactly like bakery/mkbrick.py builds a brick image: into a
+    temp name in the same directory, then os.replace()'d into place, so
+    a half-written store can never occupy the path nw-sup will open.
+    mkfs.ext4's own -d flag populates the new filesystem directly from
+    a template directory tree, the same "build from a directory" shape
+    mkfs.erofs already uses for bricks -- no mount/unmount needed here
+    at all.
+    """
+    suffix = _names("NW_LAYER_STORE_SUFFIX")
+    final = os.path.join(base, layer_id + suffix)
+    if os.path.exists(final):
+        return
+    # BOTH questions, not the tool alone -- the same pairing
+    # bakery/test_fold.py's _erofs_ok() already makes for mkfs.erofs
+    # (harness.md's "detect the capability, not a tool that implies
+    # it"). The tool can be installed on a kernel with no ext4 driver,
+    # and a kernel can drive ext4 through a build with no mkfs.ext4
+    # installed to format one; either alone answers only half the
+    # question this function needs answered.
+    if not shutil.which("mkfs.ext4"):
+        raise SystemExit(
+            "stage-layers: mkfs.ext4 is not installed. This is a SKIP, "
+            "not a pass: no sized layer store was created.")
+    try:
+        if "ext4" not in open("/proc/filesystems").read():
+            raise SystemExit(
+                "stage-layers: the kernel has no ext4 driver. This is a "
+                "SKIP, not a pass: no sized layer store was created.")
+    except OSError as e:
+        raise SystemExit(f"stage-layers: cannot read /proc/filesystems "
+                          f"({e})")
+    with tempfile.TemporaryDirectory(prefix=".stage-layers-tmpl-") as tmpl:
+        os.makedirs(os.path.join(tmpl, upper))
+        os.makedirs(os.path.join(tmpl, work))
+        fd, tmp = tempfile.mkstemp(
+            prefix=".stage-layers-", suffix=".img", dir=base)
+        os.close(fd)
+        try:
+            os.truncate(tmp, nbytes)
+            cmd = ["mkfs.ext4", "-q", "-F", "-d", tmpl, tmp]
+            r = subprocess.run(cmd, capture_output=True, text=True)
+            if r.returncode != 0:
+                raise SystemExit(
+                    f"stage-layers: mkfs.ext4 failed ({r.returncode}) "
+                    f"sizing {layer_id!r} to {nbytes} bytes\n"
+                    f"  {' '.join(cmd)}\n{r.stdout}{r.stderr}")
+            os.replace(tmp, final)
+            tmp = None
+        finally:
+            if tmp and os.path.exists(tmp):
+                os.unlink(tmp)
 
 
 def main(argv=None):

@@ -106,7 +106,9 @@ The boundary that does matter here is not between files, it is **trust**:
   not a path — `nw-sup` composes `NW_LAYER_DIR "/" <id> "/" upper` itself,
   so the same argument that retired the brick path applies.
 - **The `.layers` sidecar pairs each id with its brick, and the pairing
-  is load-bearing.** The baker writes `<layer-id> <brick>` per line;
+  is load-bearing.** The baker writes `<layer-id> <brick> <layer_bytes>`
+  per line (the third field joined 2026-09-25, when `tools/stage-layers.py`
+  gained a reader for it -- see the layer-capacity bullet below);
   `tools/stage-candidate.py` reads field 1 to tell a candidate that
   reuses a live layer over the SAME brick -- an unchanged house keeping
   its data across a plan change, which is what keying a layer by a
@@ -158,19 +160,23 @@ The boundary that does matter here is not between files, it is **trust**:
   `plan.blob.layers` — `stage-layers` exits 1 naming the missing hash.
   `claims`.
 
-  **`tools/stage-candidate.py` refuses a line that is not exactly an id and a
-  brick — not "at least".** So the next field added breaks it for every
-  plan that declares a layer, loudly and with a message naming the file
-  and the line, until that reader is updated. A brickless plan has an
+  **`tools/stage-candidate.py` refuses a line that is not exactly an id, a
+  brick and a layer_bytes — not "at least".** So the next field added
+  breaks it for every plan that declares a layer, loudly and with a
+  message naming the file and the line, until that reader is updated —
+  which is exactly what happened when `layer_bytes` joined as the third
+  field: the count moved from 2 to 3 in the same change that gave it a
+  reader. A brickless plan has an
   empty sidecar and no line to refuse. Deliberate, and the consequence to know:
   adding a field is a change to that tool, not only to the baker.
 
-  **A live slot staged before 2026-09-13 has a one-field sidecar** if
-  its plan declares a layer, and `tools/stage-candidate.py` then refuses
-  every candidate against it until the live plan is re-baked. A
-  brickless live plan is unaffected, which is the common case in the
-  suite — so this will not show up there. The refusal says so; `claims` found it by reading
-  the guard rather than by hitting it.
+  **A live slot staged before 2026-09-25 has a two-field sidecar** (and
+  one staged before 2026-09-13 has one field) if its plan declares a
+  layer, and `tools/stage-candidate.py` then refuses every candidate
+  against it until the live plan is re-baked. A brickless live plan is
+  unaffected, which is the common case in the suite — so this will not
+  show up there. The refusal says so; `claims` found the one-field case
+  by reading the guard rather than by hitting it.
 
   The reason it is a sidecar field rather than an argument from the
   caller is that the fold helper knows which ids it did not fold and

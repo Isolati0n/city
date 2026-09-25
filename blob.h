@@ -88,6 +88,11 @@
 #define NW_LAYER_DIR    "/nw/layers"
 #define NW_LAYER_UPPER  "upper"
 #define NW_LAYER_WORK   "work"
+/* A sized layer's backing file is a SIBLING of NW_LAYER_DIR/<id>, not
+   nested under it: <id> itself becomes a loop-mount target when
+   layer_bytes is set, and a mountpoint must be an empty directory, not
+   a directory that already holds a file. */
+#define NW_LAYER_STORE_SUFFIX ".img"
 #define NW_BRICK_DIR    "/nw/bricks"
 #define NW_BRICK_SUFFIX ".img"
 #define NW_BRICK_HASH   32    /* raw sha256, not hex */

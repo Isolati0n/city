@@ -810,3 +810,17 @@ unpaired-absence	tests/run.py	the SECOND expect() (the one checking "pidfd_open"
 # under the fallback path specifically before this absence (no
 # waitpid(-1) among them) means anything.
 unpaired-absence	tests/run.py	expect("WAITPID_ANY" not in out,
+# false positive: "2026-09-13" is a date, not a count -- the same
+# established exemption dates already get throughout this file
+# (2026-09-25 five lines above it is not flagged for the same reason).
+prose-count	.claude/rules/plan.md	one staged before 2026-09-13 has one field) if its plan declares a
+# `_ext4_ok`-shaped pairing, same reason bakery/test_fold.py's
+# _erofs_ok() is acked: this asks BOTH shutil.which("mkfs.ext4") and
+# /proc/filesystems on the next few lines, and the matcher sees only
+# the first. harness.md's "detect the capability, not a tool that
+# implies it" -- the code already draws the distinction.
+tool-presence	tools/stage-layers.py	if not shutil.which("mkfs.ext4"):
+# false positive: "one field" names the specific field (layer_bytes),
+# checkable directly against the code beside it -- not an anonymous
+# count that can go stale silently.
+prose-count	.claude/rules/runtime.md	"resource block, nothing applies it" gap above for this one field.**

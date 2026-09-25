@@ -263,6 +263,38 @@ through to the sealed image; writes land in `upper` and survive a restart.
   name, with nothing reporting anything.
 - `/nw/stores` is **gone**, not renamed: the store concept was this
   mechanism under another name.
+- **A declared `layer-bytes=N` makes the layer a fixed-size, loop-mounted
+  filesystem instead of a plain host directory, closing the
+  "resource block, nothing applies it" gap above for this one field.**
+  Project-quota enforcement was refused -- `docs/ENVIRONMENT.md` records
+  project quota off on this machine's root device, `quotactl` answering
+  `ESRCH` -- so capacity is a filesystem boundary instead, the same way
+  a brick's seal already is one. `tools/stage-layers.py` truncates a
+  backing file (`<id>.img`, a SIBLING of `<id>/` so the mountpoint stays
+  an empty directory) to `layer_bytes` and formats it with
+  `mkfs.ext4 -d`, pre-populated with empty `upper`/`work` directories --
+  the same "build from a directory tree" shape `mkfs.erofs` already
+  uses for bricks, so nw-sup mounts what staging built rather than
+  creating anything itself. `nw-sup` loop-mounts that file at
+  `NW_LAYER_DIR/<id>` -- `loop_attach()` is the brick's own loop-attach
+  retry loop, extracted so this second loop-mounted image reuses it
+  rather than duplicating it, and the loop device fd itself is
+  opened `O_RDWR` here (not `O_RDONLY` as the brick's is): the seal is
+  over-determined either way, and read-write needs BOTH the backing fd
+  and the device fd to agree. Landing before that, the overlay's
+  `upperdir`/`workdir` resolve inside this mount instead of on the
+  machine root, so the rest of `lid_brick()` is unchanged.
+  `layer_bytes=0` (unset) is the plain-directory case, exactly as
+  before -- `test_layer_survives_a_restart` is that regression check,
+  unmodified. `test_layer_bytes_enforces_capacity` boots two houses on
+  separate, equally-capped layers: one fills its own to `ENOSPC`
+  (confirmed via `statvfs(2)` from inside the house that the reported
+  capacity is bounded by the declared size, not the host disk), the
+  other's independent restart-and-persist cycle is unaffected, checked
+  by mounting its own backing file read-only after the boot -- a sized
+  layer's contents are NOT visible from outside while the house is
+  running, unlike the plain-directory case, because they live inside a
+  mount torn down with the house's own private namespace.
 
 A unit declares `brick=<hash of an erofs image>` and `layer=<id>`. `lid_brick()` makes mount
 propagation private, attaches the image to a loop device, mounts it on
@@ -469,18 +501,25 @@ and pairs the refusal with an accepting run.
 
 ## The resource block is in the plan and nothing applies it
 
-**Kind 3: a real rule with no subject in this territory yet.** As of
+**Kind 3: a real rule with no subject in this territory yet, EXCEPT for
+`layer_bytes`, which moved to Hard rules on 2026-09-25.** As of
 2026-09-13 `struct nw_res` is a field of every unit — CPU affinity and
 share, a memory throttle and a memory backstop, read and write
 bandwidth, a layer capacity, scheduler policy and nice. The baker
-refuses a malformed block, `nwcheck.c` validates one independently, and
-`nw-sup` does not read the field at all: `grep -n "res\." nwsup.c`
-returns nothing.
+refuses a malformed block and `nwcheck.c` validates one independently
+for the whole struct; `grep -n "res\." nwsup.c` still returns nothing,
+and that remains true rather than becoming stale, because `layer_bytes`
+never crosses into `nw-sup` as a `struct nw_res` field access at all --
+it travels the same way the brick hash and the layer id already do, as
+a plain decimal string in its own env var (`NW_LAYER_BYTES`,
+`nwspawn.c` reading `u[i].res.layer_bytes` and forwarding it), parsed
+locally in `nwsup.c` with no `res.` anywhere in this file.
 
-So a plan can declare a limit that no process enforces. That is a gap,
-not a lie, only because nothing in this tree says otherwise — and the
-moment `nwsup.c` grows the first write, the rule below becomes live and
-belongs in Hard rules rather than here.
+So a plan can still declare most of these limits with no process
+enforcing them. That is a gap, not a lie, only because nothing in this
+tree says otherwise — and the moment `nwsup.c` grows the next write,
+the rule below becomes live for that field too and belongs in Hard
+rules rather than here.
 
 **The rule, proposed and not yet ratified: a resource limit is not
 advisory.** If a declared limit cannot be applied, the house does not
@@ -495,9 +534,16 @@ opposite of what a container runtime usually does.
 **THIS MACHINE CANNOT EXERCISE THE CGROUP-BACKED FIELDS**, so do not
 write a test on them here that reads green. cgroup v2 is mounted with
 `hugetlb` as its only controller — `cpu`, `memory` and `io` are on v1
-hierarchies — and project quota is off on the root device (`quotactl`
-answers `ESRCH` for `/dev/vda`). That covers `mem_high`, `mem_max`,
-`io_rbps`, `io_wbps` and the layer capacity.
+hierarchies. That covers `mem_high`, `mem_max`, `io_rbps` and `io_wbps`.
+
+**The layer capacity is NOT one of them, and this list said otherwise
+for a year.** Project quota being off on the root device (`quotactl`
+answers `ESRCH` for `/dev/vda`) is exactly why that route was refused
+for `layer_bytes` rather than pursued — see Hard rules, below. The
+mechanism built instead is a loop-mounted, ext4-formatted, fixed-size
+file, which needs no cgroup controller and no project quota at all;
+`test_layer_bytes_enforces_capacity` runs on this machine and passes
+for real, not on the unavailable branch.
 
 **It does NOT cover the whole block, and this said "any of it" until
 `claims` ran the rest.** `cpu_mask`, `sched_policy` and `nice` are
