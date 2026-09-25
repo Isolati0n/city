@@ -291,6 +291,17 @@ subvolumes.
 only option here that answers bit rot at all; snapshots give a genuine rollback
 primitive; subvolume quotas bound one store's growth.
 
+Caveat, decided independently of A vs B: house layer storage (the
+writable overlay each house gets) is a loop-mounted fixed-size file
+regardless of which of these is chosen as root. If B is ever chosen,
+layer contents are NOT checksummed by btrfs -- btrfs checksums the
+loop file's raw bytes, not the filesystem inside it, so corruption
+inside a layer is invisible to btrfs -- and layer snapshots are
+file-level only, not subvolume-level. Bit-rot protection and
+fine-grained rollback for layer data are explicitly out of scope
+under this design, even on B. The quota benefit above is unaffected:
+a fixed-size file is exactly what a subvolume quota bounds.
+
 *Cons, native:*
 - **Complexity in the boot path.** btrfs is a large, actively developed
   filesystem, and dawn must understand it before anything is trusted.
@@ -351,6 +362,12 @@ snapshots, quotas) are real, and every one of them is unmeasured on hardware
 this project has never run on. The migration A → B is a re-image, not a
 redesign: both are "ESP plus one root", and the paths do not change. Take B
 when bit rot is a measured problem rather than an anticipated one.
+
+That measured-problem case is about brick/store data. It does not
+extend to house layer data -- per the caveat under option B above,
+layer contents are never checksummed or snapshotted at the subvolume
+level regardless of A or B, so switching to B would not address bit
+rot in a layer specifically.
 
 Two things A does not solve, which should be written down now rather than
 discovered later:
