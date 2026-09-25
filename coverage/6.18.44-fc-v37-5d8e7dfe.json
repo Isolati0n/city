@@ -46,6 +46,8 @@
   "landlock-confines",
   "last-words-survive-group-term",
   "layer-bytes-enforces-capacity",
+  "layer-bytes-representation-switch-refused",
+  "layer-bytes-without-layer-dies-at-the-supervisor",
   "layer-survives-a-restart",
   "leading-zero-hash-is-a-brick",
   "leading-zero-hash-reaches-the-supervisor",
