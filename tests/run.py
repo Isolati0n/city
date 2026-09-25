@@ -1306,14 +1306,16 @@ def test_dawn_real_boot():
     # loudly where it cannot: docs/options/06 rules the ESP out for bricks on
     # FAT's absent execute bit, absent ownership and 4 GiB cap, and none of
     # that is exercised by an ext4 stand-in.
-    if fs_mountable("vfat"):
+    if fs_mountable("vfat") and shutil.which("mkfs.vfat"):
         esp_fs, esp_mb, esp_mkfs = "vfat", 64, ["mkfs.vfat", "-F", "32"]
     else:
         esp_fs, esp_mb, esp_mkfs = "ext4", 16, ["mkfs.ext4", "-q"]
+        why = ("mkfs.vfat is not installed" if fs_mountable("vfat")
+               else "kernel has no FAT driver (/proc/filesystems lists none)")
         skip("dawn-real-boot:vfat-esp",
-             "kernel has no FAT driver (/proc/filesystems lists none), so the "
-             "ESP is ext4 and FAT's execute bit, ownership and 4 GiB cap stay "
-             "untested -- which is what docs/options/06 reasons from")
+             f"{why}, so the ESP is ext4 and FAT's execute bit, ownership "
+             "and 4 GiB cap stay untested -- which is what docs/options/06 "
+             "reasons from")
 
     loops = []
     try:
@@ -3126,6 +3128,86 @@ def test_shutdown_does_not_restart():
     print(f"ok shutdown-no-restart (observed inside shutdown_city's "
           f"{PID1_GRACE_MS}ms grace; a restart later than that is invisible "
           f"to this test)")
+
+
+def test_pidfd_reaps_and_counts():
+    """House death is reaped on the pidfd path and counted against budget.
+
+    Direct nw-sup. /bin/false as longrun budget=2 must log death=1 and
+    death=2 as restarts, then spent on death=3. Control: waitpid(-1)
+    that reaped the wrong child would skip a death line or run on.
+    """
+    env = os.environ.copy()
+    env["NW_KIND"] = "1"
+    env["NW_BUDGET"] = "2"
+    env["NW_LIDS"] = "0"
+    p = subprocess.run(
+        [f"{BIN}/nw-sup", "/bin/false", "false"],
+        capture_output=True, text=True, env=env, timeout=10)
+    out = (p.stdout or "") + (p.stderr or "")
+    expect("restart false death=1/" in out, f"first death not counted\n{out}")
+    expect("restart false death=2/" in out, f"second death not counted\n{out}")
+    expect("spent false death=3/" in out, f"spent line missing\n{out}")
+    expect("restart false death=3" not in out, f"third restart\n{out}")
+    n = out.count("restart false death=")
+    expect(n == 2, f"expected 2 restarts, got {n}\n{out}")
+    print("ok pidfd-reaps-and-counts")
+
+
+def test_wait_is_poll_not_spin():
+    """The blocking primitive is poll(), not a busy non-blocking wait."""
+    import resource, time
+    env = os.environ.copy()
+    env["NW_KIND"] = "0"
+    env["NW_BUDGET"] = "0"
+    env["NW_LIDS"] = "0"
+    helper = f"{WORK}/onesleep"
+    open(helper, "w").write("#!/bin/sh\nexec /bin/sleep 1\n")
+    os.chmod(helper, 0o755)
+    so_src = os.path.join(ROOT, "tests", "count_wait.so.c")
+    so = f"{WORK}/count_wait.so"
+    if os.path.exists(so_src):
+        c = subprocess.run(
+            ["gcc", "-shared", "-fPIC", "-O2", "-o", so, so_src, "-ldl"],
+            capture_output=True, text=True)
+        expect(c.returncode == 0, f"count_wait.so\n{c.stderr}")
+        env["LD_PRELOAD"] = so
+    proc = subprocess.Popen(
+        [f"{BIN}/nw-sup", helper, "onesleep"],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
+    time.sleep(0.15)
+    sc = ""
+    try:
+        sc = open(f"/proc/{proc.pid}/syscall").read().strip()
+    except FileNotFoundError:
+        sc = "gone"
+    ru0 = resource.getrusage(resource.RUSAGE_CHILDREN)
+    out, err = proc.communicate(timeout=15)
+    ru1 = resource.getrusage(resource.RUSAGE_CHILDREN)
+    cpu = (ru1.ru_utime - ru0.ru_utime) + (ru1.ru_stime - ru0.ru_stime)
+    err = err or ""
+    expect(proc.returncode == 0, f"oneshot sleep rc={proc.returncode}\n{err}")
+    expect(sc.split()[0] == "7", f"not blocked in poll(); syscall={sc}")
+    expect(cpu < 0.20, f"CPU {cpu:.3f}s looks like a spin\n{err}")
+    expect("WAITPID_ANY" not in err, f"waitpid(-1) used\n{err}")
+    print(f"ok wait-is-poll-not-spin syscall={sc.split()[0]} cpu={cpu:.3f}")
+
+
+def test_poll_set_takes_a_second_fd():
+    """Adding a second poll member does not require restructuring wait_house."""
+    src = os.path.join(ROOT, "tests", "poll_shape.c")
+    binp = f"{WORK}/poll_shape"
+    if not os.path.exists(src):
+        skip("poll-set-takes-a-second-fd", "tests/poll_shape.c missing")
+        return
+    c = subprocess.run(
+        ["gcc", "-O2", "-std=gnu11", "-Wall", "-o", binp, src],
+        capture_output=True, text=True)
+    expect(c.returncode == 0, f"compile poll_shape\n{c.stderr}")
+    r = subprocess.run([binp], capture_output=True, text=True, timeout=5)
+    expect(r.returncode == 0, f"poll_shape rc={r.returncode}\n{r.stderr}")
+    expect("extra=1" in r.stderr and "house=1" in r.stderr, r.stderr)
+    print("ok poll-set-takes-a-second-fd")
 
 
 def test_seccomp_kills():
@@ -9067,7 +9149,10 @@ def main():
         test_last_words_survive_group_term,
         test_orphans_across_restarts,
         test_crash_does_not_halt, test_budget_is_hard_total,
-        test_shutdown_does_not_restart, test_term_signal, test_dawn_real_boot,
+        test_shutdown_does_not_restart,
+        test_pidfd_reaps_and_counts, test_wait_is_poll_not_spin,
+        test_poll_set_takes_a_second_fd,
+        test_term_signal, test_dawn_real_boot,
         test_kind_required, test_kind_exit0, test_seccomp_kills,
         test_brick_is_a_root, test_brick_image_is_sealed,
         test_the_layer_reset_fires_once_per_run,

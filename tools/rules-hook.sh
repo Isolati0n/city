@@ -164,6 +164,12 @@ UNOWNED = [
      "the fold suite. make test runs it beside tests/run.py, but "
      "harness.md's scope is the put-together suite and the fixture "
      "houses, which this is not."),
+    ("tests/poll_shape.c",
+     "shape control for nw-sup's poll set: two fds, not TCB. "
+     "harness.md owns tests/run.py and the fixture houses, not this."),
+    ("tests/count_wait.so.c",
+     "LD_PRELOAD counter used by test_wait_is_poll_not_spin. "
+     "Not TCB; not a house. The assertion lives in tests/run.py."),
     ("install-agents.sh",
      "the brief gate, and the caller of this file's --check. No rules "
      "file OWNS the gate tooling; what they say about it is a sentence "

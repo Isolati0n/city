@@ -15,6 +15,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <signal.h>
+#include <poll.h>
 #include <sys/ioctl.h>
 #include <sys/mount.h>
 #include <sys/prctl.h>
@@ -23,6 +24,10 @@
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
+
+#ifndef SYS_pidfd_open
+#define SYS_pidfd_open 434
+#endif
 
 static void die(const char *s)
 {
@@ -519,6 +524,64 @@ static void on_term(int sig)
         kill(child, SIGTERM);
 }
 
+/*
+ * Block until house `p` exits, by poll() on its pidfd.
+ *
+ * extra_fd, if >= 0, is a second poll member. This round nothing
+ * real lives there (no start/stop socket, no log pipe). The slot
+ * exists so the next fd is an array entry, not a rewrite of the
+ * wait. A ready extra fd does not reap the house; we loop.
+ *
+ * Reap is waitpid(p, ...) after poll says the pidfd is readable.
+ * That waitpid does not block. It is not waitpid(-1): the pid is
+ * the one we opened the pidfd on.
+ *
+ * Lids still run in the child after fork, before exec. fork is
+ * unchanged; clone3(CLONE_PIDFD) would change how the child is
+ * born and is not used.
+ */
+static int wait_house(pid_t p, int extra_fd)
+{
+    int pfd = (int)syscall(SYS_pidfd_open, p, 0U);
+    if (pfd < 0)
+        die("pidfd_open");
+
+    struct pollfd pf[2];
+    nfds_t n = 1;
+    pf[0].fd = pfd;
+    pf[0].events = POLLIN;
+    pf[0].revents = 0;
+    if (extra_fd >= 0) {
+        pf[1].fd = extra_fd;
+        pf[1].events = POLLIN;
+        pf[1].revents = 0;
+        n = 2;
+    }
+
+    for (;;) {
+        int pr = poll(pf, n, -1);
+        if (pr < 0) {
+            if (errno == EINTR)
+                continue;
+            close(pfd);
+            die("poll house");
+        }
+        if (pf[0].revents & (POLLIN | POLLHUP | POLLERR))
+            break;
+        pf[0].revents = 0;
+        if (n == 2)
+            pf[1].revents = 0;
+    }
+
+    int st = 0;
+    if (waitpid(p, &st, 0) < 0) {
+        close(pfd);
+        die("wait house");
+    }
+    close(pfd);
+    return st;
+}
+
 int main(int argc, char **argv)
 {
     if (argc < 3) die("argv");
@@ -652,18 +715,18 @@ int main(int argc, char **argv)
             die("exec house");
         }
         /* child = p is set before this point so a TERM that arrives
-         * between fork returning and waitpid can still signal the
-         * house. If stopping is already set, do not block in waitpid
-         * on a house that was never asked to stop. */
+         * between fork returning and wait_house can still signal the
+         * house. If stopping is already set, do not block on a house
+         * that was never asked to stop: TERM it, then wait via pidfd. */
         int st = 0;
         if (stopping) {
             if (p > 0)
                 kill(p, SIGTERM);
-            if (waitpid(p, &st, 0) < 0) die("wait house");
+            st = wait_house(p, -1);
             child = 0;
             _exit(WIFEXITED(st) ? WEXITSTATUS(st) : 0);
         }
-        if (waitpid(p, &st, 0) < 0) die("wait house");
+        st = wait_house(p, -1);
         child = 0;
 
         /* Same TERM that PID 1 sent to start shutdown. Restarting here
