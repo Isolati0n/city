@@ -772,6 +772,18 @@ int main(int argc, char **argv)
      * as the reason the other checks exist. `tcb-review`. */
     if (brick && !(layer && layer[0])) die("brick without layer");
     if (!brick && layer && layer[0]) die("layer without brick");
+    /* THE CAPACITY'S OWN PAIRING, missed by the first version of this
+     * re-validation block: nw-check's NW_E_CAPNOLAYER is
+     * `r->layer_bytes && !has_layer`, and neither "brick without layer"
+     * nor "layer without brick" above covers it -- a forged or buggy
+     * environment with NW_LAYER empty and NW_LAYER_BYTES nonzero fell
+     * through to `lid_brick()`'s
+     * `if (layer && layer[0] && layer_bytes)` guard, which simply
+     * skipped the capacity block rather than dying. Fails safe (no
+     * capacity silently means no enforcement, not a wrong one), but
+     * inconsistent with its two neighbours here, which die rather than
+     * silently drop the field they can't act on. `tcb-review`. */
+    if (layer_bytes && !(layer && layer[0])) die("layer bytes without layer");
     char *binds[NW_MAX_BINDS];
     int nbinds = 0;
     if (brick) {

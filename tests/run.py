@@ -4246,6 +4246,135 @@ def test_layer_bytes_enforces_capacity():
           f"keeper unaffected: state=rr, store size={cap})")
 
 
+def test_layer_bytes_representation_switch_refused():
+    """`tcb-review`'s HIGH finding on the layer_bytes commit, reproduced
+    and closed: the first version of tools/stage-layers.py judged only
+    what the CURRENT plan asked for, never what was already on disk, so
+    re-baking an unchanged (id, brick) pair with a DIFFERENT
+    `layer-bytes=` silently built a second, disjoint representation
+    beside the first -- a sized store mounts OVER a plain directory's
+    contents at boot, and the reverse leaves a sized store's data
+    behind an unmounted mountpoint -- with nothing anywhere reporting
+    it. Exactly invariant 6 / plan.md's "renamed house, orphaned data"
+    failure, reached through a second identity axis (sized vs. unsized)
+    the keying design never accounted for. No boot needed to observe
+    this: it is a staging-time property, so this test calls
+    tools/stage-layers.py directly, the same way
+    test_candidate_stager_never_touches_the_live_slot's third reader
+    check does.
+
+    THREE TRANSITIONS MUST REFUSE, each a genuinely different starting
+    state on disk, and one MUST NOT (the overcorrection risk):
+      - sized N -> sized M (M != N): a plain resize.
+      - sized N -> unsized (0): would strand the sized store's data.
+      - unsized -> sized N: would mount over the plain directory's data.
+      - sized N -> sized N again (unchanged): must stay idempotent, or
+        the fix would break the ordinary re-bake-unchanged case that
+        test_layer_bytes_enforces_capacity's own reset relies on.
+
+    Control: revert the disk-inspection added to stage()'s per-id loop
+    in tools/stage-layers.py (so it goes back to only ever consulting
+    `nbytes` and never `has_img`/`has_plain`). Every `expect(returncode
+    != 0, ...)` below goes red -- each transition succeeds silently and
+    builds the second representation the finding describes -- while the
+    unchanged-size case stays green throughout, which is exactly the
+    asymmetry a version that refused unconditionally would have hidden.
+    """
+    fake_brick = "56" * 32
+    cap = 1024 * 1024
+
+    def bake(lid, layer_bytes):
+        # 0 is not how a plan asks for "unsized" -- it is the byte an
+        # omitted field already holds, and plan.md's own rule refuses a
+        # DECLARED zero at bake time precisely because the two would be
+        # indistinguishable in the blob. Omit the field entirely instead.
+        opt = f" layer-bytes={layer_bytes}" if layer_bytes else ""
+        city = f"{WORK}/switch-{lid}-{layer_bytes}.city"
+        open(city, "w").write(
+            f"house h /bin/brick kind=oneshot lids=newns "
+            f"brick={fake_brick} layer={lid}{opt}\n")
+        blob = f"{WORK}/switch-{lid}-{layer_bytes}.blob"
+        b = run(["python3", CC, "--city", city, "--out", blob])
+        expect(b.returncode == 0, f"bake layer-bytes={layer_bytes}\n{b.out}{b.err}")
+        return blob
+
+    def stage_direct(blob):
+        return run(["python3", f"{ROOT}/tools/stage-layers.py", blob, "--quiet"])
+
+    # --- sized-first id: resize and sized->unsized both refuse ---
+    lid = f"l-switch-{os.getpid()}"
+    shutil.rmtree(os.path.join(_layer_dir(), lid), ignore_errors=True)
+    img = os.path.join(_layer_dir(), lid + _blob_str("NW_LAYER_STORE_SUFFIX"))
+    if os.path.exists(img):
+        os.unlink(img)
+    try:
+        r = stage_direct(bake(lid, cap))
+        expect(r.returncode == 0, f"initial sized stage failed\n{r.out}{r.err}")
+        expect(os.path.exists(img), "sized store was not created")
+        size0 = os.path.getsize(img)
+
+        # Unchanged size: idempotent, must NOT refuse.
+        r = stage_direct(bake(lid, cap))
+        expect(r.returncode == 0,
+               f"re-staging an UNCHANGED layer-bytes was refused -- the "
+               f"fix must not overcorrect into refusing the ordinary "
+               f"re-bake-unchanged case\n{r.out}{r.err}")
+        expect(os.path.getsize(img) == size0,
+               "an unchanged re-stage altered the existing store")
+
+        # Resize: must refuse, and must not touch the existing store.
+        r = stage_direct(bake(lid, cap * 2))
+        expect(r.returncode != 0
+               and "already has a sized store of" in (r.out + r.err),
+               f"stage-layers.py silently resized {lid} instead of "
+               f"refusing\n{r.out}{r.err}")
+        expect(os.path.getsize(img) == size0,
+               "a refused resize must not have touched the existing store")
+
+        # sized -> unsized: must refuse, and must not delete the store.
+        r = stage_direct(bake(lid, 0))
+        expect(r.returncode != 0
+               and "declares no layer-bytes (unsized)" in (r.out + r.err),
+               f"stage-layers.py silently accepted sized->unsized for "
+               f"{lid}, which would strand the store's data behind an "
+               f"unmounted mountpoint\n{r.out}{r.err}")
+        expect(os.path.exists(img),
+               "a refused sized->unsized must leave the store in place")
+    finally:
+        shutil.rmtree(os.path.join(_layer_dir(), lid), ignore_errors=True)
+        if os.path.exists(img):
+            os.unlink(img)
+
+    # --- unsized-first id: switching to sized refuses too ---
+    lid2 = f"l-switch2-{os.getpid()}"
+    shutil.rmtree(os.path.join(_layer_dir(), lid2), ignore_errors=True)
+    try:
+        r = stage_direct(bake(lid2, 0))
+        expect(r.returncode == 0, f"initial unsized stage failed\n{r.out}{r.err}")
+        upper_path = os.path.join(_layer_dir(), lid2,
+                                   _blob_str("NW_LAYER_UPPER"))
+        expect(os.path.exists(upper_path), "plain layer was not created")
+
+        r = stage_direct(bake(lid2, cap))
+        expect(r.returncode != 0
+               and "already has an unsized (plain-directory) store"
+               in (r.out + r.err),
+               f"stage-layers.py silently mounted a sized store over "
+               f"{lid2}'s existing plain directory instead of refusing\n"
+               f"{r.out}{r.err}")
+        expect(os.path.exists(upper_path) and not os.path.exists(
+                   os.path.join(_layer_dir(),
+                                lid2 + _blob_str("NW_LAYER_STORE_SUFFIX"))),
+               "a refused unsized->sized must not create a sized store "
+               "beside the plain directory it would have shadowed")
+    finally:
+        shutil.rmtree(os.path.join(_layer_dir(), lid2), ignore_errors=True)
+
+    print("ok layer-bytes-representation-switch-refused "
+          "(resize, sized->unsized and unsized->sized all refused; "
+          "unchanged re-stage stayed idempotent)")
+
+
 def test_many_brick_houses_all_start():
     """Every brick house in a city starts. Concurrency is the test.
 
@@ -4384,6 +4513,38 @@ def test_brick_hash_revalidated_at_the_supervisor():
           "from the environment and not from the sealed blob; a "
           "well-formed hash gets past the guard and fails at the open "
           "instead -- the path itself is not visible here, see the note)")
+
+
+def test_layer_bytes_without_layer_dies_at_the_supervisor():
+    """`tcb-review`'s LOW finding: nw-sup's pairing re-checks (brick
+    without layer, layer without brick) did not cover `layer_bytes`
+    without a layer, even though nw-check's own NW_E_CAPNOLAYER is
+    exactly that condition (`r->layer_bytes && !has_layer`). nw-sup
+    reads its unit from the environment rather than from the sealed
+    blob, so nothing the baker or nw-check did stands behind a forged
+    or buggy NW_LAYER_BYTES -- the same argument this file's own
+    comments give for its two neighbours, which is why the missing
+    third case is a defect and not an oversight to leave standing.
+
+    Failed SAFE before this fix (no capacity declared reads as no
+    capacity enforced, not a wrong one), so this is not a HIGH finding
+    on its own; it is fixed for consistency with the pattern its two
+    neighbours already establish, and to stop `lid_brick()`'s own
+    capacity block from being the one place in this file that silently
+    drops a value it cannot act on instead of dying.
+
+    Driven directly, the same way brick-hash-revalidated is: no plan
+    can carry this state (nw-check refuses it as NW_E_CAPNOLAYER before
+    a blob can exist), so the guard is exercised against a value no
+    plan produced."""
+    r = run([f"{BIN}/nw-sup", f"{BIN}/unit-probe", "probe"],
+            env=dict(os.environ, NW_LAYER_BYTES="1048576",
+                     NW_LIDS="0", NW_KIND="0"))
+    out = r.out + r.err
+    expect("layer bytes without layer" in out,
+           f"nw-sup did not refuse a declared capacity with no layer\n{out}")
+    print("ok layer-bytes-without-layer-dies-at-the-supervisor "
+          "(NW_LAYER_BYTES set, NW_LAYER unset, refused by name)")
 
 
 def test_leading_zero_hash_is_a_brick():
@@ -9474,12 +9635,14 @@ def main():
         test_the_layer_reset_fires_once_per_run,
         test_layer_survives_a_restart,
         test_layer_bytes_enforces_capacity,
+        test_layer_bytes_representation_switch_refused,
         test_many_brick_houses_all_start, test_brick_needs_newns,
         test_baker_refuses_bad_layers,
         test_baker_refuses_bad_resources,
         test_baker_constants_match_the_header,
         test_leading_zero_hash_is_a_brick,
         test_brick_hash_revalidated_at_the_supervisor,
+        test_layer_bytes_without_layer_dies_at_the_supervisor,
         test_path_traversal_refused, test_dupname_refused,
         test_blob_size_ceiling,
         test_checker_rejects_crafted_fields,

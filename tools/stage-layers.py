@@ -34,8 +34,23 @@ capacity is a filesystem boundary instead, the same way a brick already
 is one.
 
 Idempotent the same way the plain-directory case already is: an
-existing backing file is left alone, whatever its declared size was
-when it was built. This tool creates; it does not resize or repair.
+existing backing file of the SAME declared size is left alone. This
+tool creates; it does not resize or repair -- and, as of 2026-09-25,
+it does not silently switch an id's representation either. Redeclaring
+`layer-bytes` for an id that already has a *different* on-disk
+representation (a sized store at another size, or a plain directory
+where a sized store is now declared, or the reverse) is refused rather
+than acted on: `tcb-review` found that the earlier version of this
+tool judged only by what the CURRENT plan asked for, not by what was
+already on disk, so re-baking an unchanged (id, brick) pair with a
+changed `layer-bytes=` silently built a second, disjoint
+representation next to the first -- the sized case mounts OVER the
+plain directory's contents at boot, and the reverse leaves a sized
+store's data behind an unmounted mountpoint -- with nothing anywhere
+reporting it. That is invariant 6's "renamed house, orphaned data"
+failure reached through a second identity axis the keying design never
+accounted for. Reported at stage time now, by name, rather than
+reached at boot as an empty layer nobody explained.
 
     python3 tools/stage-layers.py <blob> [--root DIR]
 
@@ -158,6 +173,7 @@ def stage(blob_path, root=""):
     sizes = {r[0]: (int(r[2]) if len(r) >= 3 else 0) for r in rows}
     base = layer_dir(root)
     upper, work = _names("NW_LAYER_UPPER"), _names("NW_LAYER_WORK")
+    suffix = _names("NW_LAYER_STORE_SUFFIX")
     for i in ids:
         # The ids came from the baker, which validated them, and nw-check
         # and nw-sup each validate them again. Checked a fourth time here
@@ -190,19 +206,74 @@ def stage(blob_path, root=""):
         # there instead (sized) -- never both, or the sized mount would
         # hide stray plain-directory writes underneath it.
         os.makedirs(os.path.join(base, i), exist_ok=True)
+        # WHICH REPRESENTATION IS ALREADY ON DISK, asked before acting --
+        # not "what does this plan ask for", which is the question the
+        # earlier version answered alone and got wrong. `<id>.img`
+        # existing means a sized store was built here before; the plain
+        # `upper` subdirectory existing (with no `.img` beside it) means
+        # this id was staged unsized before. An id can be neither (never
+        # staged) but never both -- the branch below never creates one
+        # while the other is present.
+        img = os.path.join(base, i + suffix)
+        has_img = os.path.exists(img)
+        upper_path = os.path.join(base, i, upper)
+        has_plain = os.path.exists(upper_path)
         if nbytes:
-            _make_sized_store(base, i, nbytes, upper, work)
+            if has_img:
+                existing = os.path.getsize(img)
+                if existing != nbytes:
+                    raise SystemExit(
+                        f"stage-layers: {i!r} already has a sized store "
+                        f"of {existing} bytes on disk; this plan declares "
+                        f"layer-bytes={nbytes}. Refusing rather than "
+                        f"silently keeping the old size or resizing in "
+                        f"place -- this tool creates, it does not resize. "
+                        f"Delete {img} first if the resize is intentional "
+                        f"(this discards the layer's data; see "
+                        f".claude/rules/runtime.md's THE RECOVERY).")
+                # same size as what is already built: idempotent, as the
+                # plain-directory case already is.
+            elif has_plain:
+                raise SystemExit(
+                    f"stage-layers: {i!r} already has an unsized "
+                    f"(plain-directory) store on disk; this plan declares "
+                    f"layer-bytes={nbytes}. Refusing rather than silently "
+                    f"orphaning the existing data under a new sized mount "
+                    f"-- see .claude/rules/runtime.md's THE RECOVERY if "
+                    f"converting it is intentional.")
+            else:
+                _make_sized_store(base, i, nbytes, upper, work)
         else:
-            for leaf in (upper, work):
-                os.makedirs(os.path.join(base, i, leaf), exist_ok=True)
+            if has_img:
+                raise SystemExit(
+                    f"stage-layers: {i!r} already has a sized store "
+                    f"({os.path.getsize(img)} bytes) on disk; this plan "
+                    f"declares no layer-bytes (unsized). Refusing rather "
+                    f"than silently stranding the sized store's data "
+                    f"behind an unsized mountpoint -- see "
+                    f".claude/rules/runtime.md's THE RECOVERY if "
+                    f"converting it is intentional.")
+            else:
+                for leaf in (upper, work):
+                    os.makedirs(os.path.join(base, i, leaf), exist_ok=True)
     return ids
 
 
 def _make_sized_store(base, layer_id, nbytes, upper, work):
     """Create <base>/<layer_id><suffix>, a fixed-size ext4 image
-    pre-populated with empty upper/ and work/ directories, unless one
-    is already there -- idempotent the same way the plain-directory
-    case already is: this tool creates, it does not resize or repair.
+    pre-populated with empty upper/ and work/ directories.
+
+    `stage()` is `_make_sized_store`'s only caller and calls it only when
+    it has already established that nothing is on disk for this id yet
+    -- a same-size existing store is left alone by `stage()` itself
+    without calling this function at all, and a different-size or
+    wrong-representation one is refused before reaching here. The
+    early-return guard below is defence in depth against a second
+    caller reappearing, not the mechanism that makes staging idempotent
+    -- that mechanism moved to `stage()`, where the disk is actually
+    inspected, after `tcb-review` found this function's own idempotency
+    checked only its own output and not what else was already staged
+    for the same id.
 
     Built exactly like bakery/mkbrick.py builds a brick image: into a
     temp name in the same directory, then os.replace()'d into place, so

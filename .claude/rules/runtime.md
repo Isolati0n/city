@@ -296,6 +296,40 @@ through to the sealed image; writes land in `upper` and survive a restart.
   running, unlike the plain-directory case, because they live inside a
   mount torn down with the house's own private namespace.
 
+  **Redeclaring `layer-bytes` for an id that already has a DIFFERENT
+  on-disk representation is refused at stage time, not acted on.**
+  `tcb-review` found the first version judged only what the current
+  plan asked for and never consulted what was already on disk, so
+  re-baking an unchanged `(id, brick)` pair with a changed
+  `layer-bytes=` silently built a second, disjoint representation next
+  to the first -- a sized store mounted OVER a plain directory's
+  contents, or the reverse left a sized store's data behind an
+  unmounted mountpoint -- with nothing anywhere reporting it. Exactly
+  the "renamed house, orphaned data" failure the layer-id keying design
+  above exists to rule out, reached through a second identity axis
+  (sized vs. unsized) that design never accounted for. `stage()` now
+  inspects the disk before acting -- `<id>.img` existing means sized,
+  a plain `<id>/upper` existing with no `.img` beside it means unsized
+  -- and refuses a request that disagrees with what it finds, by name,
+  rather than choosing a winner. A REQUEST THAT AGREES stays idempotent
+  exactly as before. `test_layer_bytes_representation_switch_refused`
+  pins all three refusing transitions and the one that must not refuse.
+
+  **`nw-sup`'s own pairing re-checks missed the capacity's half of the
+  pairing too**, a LOW finding from the same review: `brick without
+  layer` and `layer without brick` were re-validated (nw-sup reads its
+  unit from the environment, not the sealed blob, so nothing upstream
+  stands behind these values), but a forged or buggy `NW_LAYER_BYTES`
+  with no `NW_LAYER` fell through `lid_brick()`'s guard and simply
+  skipped the capacity block -- failing safe, but inconsistently with
+  its two neighbours, which die rather than silently drop a field they
+  cannot act on. `die("layer bytes without layer")` closes it, mirroring
+  `nwcheck.c`'s own `NW_E_CAPNOLAYER`.
+  `test_layer_bytes_without_layer_dies_at_the_supervisor` drives it
+  directly, the same way `test_brick_hash_revalidated_at_the_supervisor`
+  drives its neighbours: no plan can carry this state, so the guard is
+  exercised against a value no plan produced.
+
 A unit declares `brick=<hash of an erofs image>` and `layer=<id>`. `lid_brick()` makes mount
 propagation private, attaches the image to a loop device, mounts it on
 `NW_BRICK_MNT` (`/nw/mnt`, which **dawn creates** — that is a precondition
