@@ -26,6 +26,28 @@ measurement, not the gap.
 
 Machine: `ulimit -n` 20000, `pid_max` 32768, 4 CPUs.
 
+**History below this line, kept rather than deleted — read "Corrected
+model" first.** This section was written against the pre-interleave
+pipe handling and the pre-`e29f107` boot-time pre-flight, neither of
+which this tree still has.
+
+### Corrected model
+
+`e29f107` (2026-09-20) fixed both the arithmetic and the check: `pid1.c`
+now compares `need = NW_FD_RESERVED + n_houses` — one descriptor per
+house, not two — against the HARD `RLIMIT_NOFILE` ceiling (raising soft
+toward it), not an inferred soft-derived one. A refusal names
+`HALT: fd need=<N> hard=<N> shortfall=<N>`; `HALT: log pipe` is a
+different, narrower failure (the `pipe2()` call itself failing) and was
+never the pre-flight's own message under the corrected model. The proof
+that the old model below was wrong, not just superseded: cities of 15
+and 29 houses opened where `(ulimit − reserved) / 2` said they would
+break. Arithmetically, not re-measured at this scale, the corrected
+formula implies a break on the machine below at n > 20000 − 8 = 19992,
+roughly double the old estimate.
+
+### As originally measured (history)
+
 - **Clean at 8192 units.** Every unit ran, reported exactly once, held no
   ungranted descriptor, was reaped.
 - **Breaks at 10240**, loudly and by name:
@@ -35,13 +57,16 @@ Machine: `ulimit -n` 20000, `pid_max` 32768, 4 CPUs.
        why: city did not open with 10240 houses; last: [nw-root] HALT: log pipe
 ```
 
-  PID 1 holds two log pipes per house, so `2·10240 + 8 = 20488`
-  descriptors is past `ulimit -n` 20000. **Predicted break:
-  `n > (20000 − 8) / 2 ≈ 9996`**, and the measurement agrees.
+  On the theory current at the time, PID 1 held two log pipes per
+  house, so `2·10240 + 8 = 20488` descriptors was past `ulimit -n`
+  20000, predicting a break at `n > (20000 − 8) / 2 ≈ 9996`. **That
+  theory was wrong** — see "Corrected model" above — but the 8192/10240
+  measurement itself is a real historical data point, kept as one.
 
-  Controlled by moving the limit: at `ulimit -n 2000` the break moves to
-  n = 1024 with the same message, and 512 still passes. So the model is
-  the descriptor budget, not a coincidence at one size.
+  Controlled by moving the limit: at `ulimit -n 2000` the break moved to
+  n = 1024 with the same message, and 512 still passed. So *some*
+  descriptor budget was the model, even though the specific arithmetic
+  above it was wrong.
 
 - **Boot cost is quadratic.** `close_others` reads `/proc/self/fd` in
   each spawned house and the spawner inherits PID 1's ~2n log pipes, so

@@ -237,10 +237,17 @@ Costs to state plainly rather than discover:
   limit.
 
   This is not the resource that runs out first, and the scale ladder already
-  says which is: PID 1 holds two log pipes per house, so the descriptor
-  budget breaks at n > (`ulimit -n` − reserved) / 2 — about 9,996 on the
-  machine in `tools/HANDOFF-scale.md`. That is ~2.4× below the loop figure
-  measured here and it binds first.
+  says which is — **though the arithmetic below is history, not the current
+  model; see `tools/HANDOFF-scale.md`'s "Corrected model" and
+  `.claude/rules/harness.md`'s "Where it breaks and why," both fixed by
+  `e29f107`.** The descriptor budget was once thought to break at
+  n > (`ulimit -n` − reserved) / 2 — about 9,996 on the machine in
+  `tools/HANDOFF-scale.md` — on the theory that PID 1 held two log pipes
+  per house; the corrected model is one descriptor per house against the
+  HARD limit, giving roughly double that break point on the same
+  machine. Either way it is the descriptor budget that binds first here,
+  ~2× or more below the loop figure measured above, not the loop figure
+  itself.
 - Everything on the failure path is `die()`, per invariant 6: a declared lid
   or a declared brick that cannot be applied stops that house.
 

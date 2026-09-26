@@ -332,14 +332,32 @@ list of what the probe checks and leaving the same wrong reason standing
 in the section's closing paragraph — so the correction had to be made
 twice, and the second time by moving it out of the sentence it broke.)
 
-**Where it breaks and why.** On this machine (`ulimit -n` 20000,
-`pid_max` 32768, 4 CPUs): clean at 8192 units; at 10240 PID 1 stops with
-`HALT: log pipe`, because it holds two log pipes per house and
-2·10240 + 8 = 20488 descriptors is past the limit. The predicted break is
-therefore n > (20000 − 8) / 2 ≈ 9996. Controlled by lowering the limit
-tenfold: at `ulimit -n 2000` the break moves to n = 1024 with the same
-message and 512 still passes. **It fails loudly** — a named halt, not a
-crash and not silent misrouting.
+**Where it breaks and why.** **History, not the current model** — this
+paragraph described the pre-interleave code and the pre-`e29f107`
+pre-flight, neither of which this tree still has, and it is kept rather
+than deleted per this file's own rule for a retired claim. On this
+machine (`ulimit -n` 20000, `pid_max` 32768, 4 CPUs): clean at 8192
+units; at 10240 PID 1 stopped with `HALT: log pipe`, on the theory that
+it held two log pipes per house and 2·10240 + 8 = 20488 descriptors was
+past the limit, giving a predicted break of n > (20000 − 8) / 2 ≈ 9996.
+
+**That model was wrong, not merely superseded, and `e29f107` names the
+proof: cities of 15 and 29 houses opened where this formula said they'd
+break.** The `2n` term never matched what the tree does after the pipes
+are interleaved (`pid1.c`'s own comment: "After this, only write ends
+remain here" — one descriptor per house, not two), and the pre-flight
+itself was checking the wrong thing regardless. The current model, in
+`pid1.c`: `need = NW_FD_RESERVED + n_houses`, compared against the HARD
+limit (`rl.rlim_max`, not soft, and soft is then raised toward it) — one
+per house, not two, and hard rather than an inferred soft-derived
+ceiling. A refusal now reads `HALT: fd need=<N> hard=<N> shortfall=<N>`,
+not `HALT: log pipe` — that message is still real, but it now means the
+`pipe2()` call itself failed, an unrelated, much narrower failure mode.
+Arithmetically (not re-measured at this scale — this is what the
+corrected formula implies for the SAME machine above, not a fresh ladder
+run), the break on that machine would be n > 20000 − 8 = 19992, not
+~9996. **It fails loudly** — a named halt, not a crash and not silent
+misrouting.
 
 **Boot cost is quadratic, and that shape is the only part of it worth
 writing down here.** `close_others` reads `/proc/self/fd` in each
@@ -372,9 +390,12 @@ apart.** Its wait loop ends when every house has reported, when the
 deadline expires, or when PID 1 exits on its own — and the last is what
 the break above *is*. Collapsing the last two into "timed out" relabels
 the tool's headline result as a hang: verified 2026-09-11 by running the
-breaking rung, which returns in seconds with
+breaking rung, which returned in seconds with
 `why: city did not open with 10240 houses; last: [nw-root] HALT: log
-pipe`. A timeout message there would have been both wrong and slow.
+pipe` — **the exact quoted line from that run, kept as history**; a
+rung breaking today would name `HALT: fd`, per the corrected model
+above, not `HALT: log pipe`. A timeout message there would have been
+both wrong and slow.
 Conversely the deadline branch must not require that the city never
 opened: one that opens and is then too slow falls through to the content
 checks and reads as lost units. Set a flag at each exit; do not infer
@@ -435,10 +456,12 @@ per-unit loop devices, namespaces or seccomp filters at scale. `control`
 caught the mismatch between the tool and the sentence justifying it.
 
 **Handed over 2026-09-11:** `tools/HANDOFF-scale.md` carries the ladder
-result — clean at 8192, a named `HALT: log pipe` at 10240, the
-`(ulimit − reserved) / 2` model and its control, and the quadratic shape
-— for whoever takes scale on better hardware. It says plainly that the
-measurement is done and **the test is not**.
+result — clean at 8192, a named `HALT: log pipe` at 10240 — and the
+quadratic shape, for whoever takes scale on better hardware. **The
+`(ulimit − reserved) / 2` model it also carried is the same retired
+model corrected above, not a separate finding**; `tools/HANDOFF-scale.md`
+itself now says so. It says plainly that the measurement is done and
+**the test is not**.
 
 **Still open:** nothing in `make test` runs above `NW_MAX_UNITS`. Not
 because of the rebuild — that is under a second, see the top of this

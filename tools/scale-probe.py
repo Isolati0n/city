@@ -188,9 +188,15 @@ def probe(n_units, work, hold_ms=None):
     # so at n >= 10000 the names go to five digits while the readers
     # below matched `\d{4}` exactly -- every unit from index 10000 up
     # would be counted as never reported. The direction is safe (a false
-    # FAIL) but the documented break is n ~ 9996 and the next rung after
-    # 8192 is 10240, so the format breaks inside the interval this tool
-    # exists to characterise. `control`.
+    # FAIL). At the time this was found, the documented break was
+    # believed to be n ~ 9996 (a pre-interleave, pre-`e29f107` estimate,
+    # since corrected -- see .claude/rules/harness.md's "Where it breaks
+    # and why") and the next rung after 8192 was 10240, so the width bug
+    # bit inside the interval this tool existed to characterise. The
+    # corrected break is roughly double that estimate, well clear of the
+    # 10240 rung, but the width bug itself does not depend on where the
+    # break is -- any city of 10000 or more units still needs five-digit
+    # names regardless. `control`.
     w = max(4, len(str(n_units - 1)))
     open(city, "w").write("".join(
         f"house u{i:0{w}d} {probe_bin} kind=oneshot lids=none\n"
@@ -259,11 +265,18 @@ def probe(n_units, work, hold_ms=None):
             # written against, surviving on the far side of t_open.
             # `control`. But the loop has THREE exits, not two, and
             # `not completed` alone made the third one lie: PID 1
-            # exiting on its own is how the documented break at ~10k
-            # presents (`HALT: log pipe`), and calling that "the city
-            # did not open within Ns" would have relabelled this tool's
-            # own headline result as a timeout. A death falls through to
-            # the content checks, which quote the halt line.
+            # exiting on its own is how a break presents (at the time
+            # this was found, the documented break was believed to be
+            # ~10k and the halt named was `HALT: log pipe` -- a
+            # pre-interleave, pre-`e29f107` estimate, since corrected;
+            # a break found today would name `HALT: fd` at a break point
+            # roughly double that. Neither the exact break point nor the
+            # halt message this comment illustrates with matters to the
+            # bug it is about: any death, whatever it names, must not
+            # relabel as "the city did not open within Ns", which would
+            # have relabelled this tool's own headline result as a
+            # timeout. A death falls through to the content checks,
+            # which quote the halt line.
             timed_out = not completed and not died
             work_s = time.time() - t1
             # The city may already be gone -- at sizes past a real limit
