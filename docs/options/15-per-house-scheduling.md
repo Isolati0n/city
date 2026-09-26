@@ -206,10 +206,95 @@ safety argument.
 
 **Deferred, named as kind 3**: an actual policy being loaded and
 attached, and any assertion about `/sys/kernel/sched_ext`'s state
-changing as a result. No environment available to this project can
-exercise that direction yet; when one is, `sched_ext_supported()`'s
-reject branch does not need to change, only a new accept branch needs
-adding beside it, and a new named policy beyond `default`.
+changing as a result. No environment available to this project could
+exercise that direction at the time this was written; that has narrowed
+since — see the next section — but not closed: when a working policy
+binary is available, `sched_ext_supported()`'s reject branch does not
+need to change, only a new accept branch needs adding beside it, and a
+new named policy beyond `default`.
+
+## A free, real-kernel environment exists for the accept path — measured, not assumed
+
+Measured 2026-09-26, outside this sandbox: a one-off GitHub Actions
+workflow (`.github/workflows/sched-ext-probe.yml`, pushed, triggered,
+its real job logs read back and reported, then deleted once the
+question was answered either way — not kept, per the same "a proof kept
+outside the tree is a sentence" reasoning `CLAUDE.md` applies to
+`proofs/`, and this was never a proof, only a measurement tool with a
+one-time job). The workflow file itself is gone, but the runs it
+produced are not this project's to keep or delete — GitHub retains a
+run's history and logs independently of whether the workflow that
+produced it still exists in the tree, so the claims below are named by
+run rather than left to rest on this note's paraphrase alone: three
+runs on GitHub-hosted `ubuntu-24.04` (kernel `6.17.0-1022-azure`, image
+`20260920.314.1`), run ids `36274019998`, `36274390526` and
+`36274470200` in that order on `isolati0n/city`:
+
+- **`/proc/config.gz` is unreadable on that runner** — not a negative
+  answer, an absent one. The FIRST run's workflow gated its branching on
+  this check alone, read "unreadable" as "no", and printed a false
+  "does NOT have sched_ext" conclusion without ever attempting the next
+  step. Caught by reading the run's own raw log rather than its printed
+  conclusion, and fixed by gating on the next check instead — the same
+  "a success/failure signal confirms the step that ran, not the step
+  that mattered" shape `CLAUDE.md` names for `proofs/run.sh`'s
+  `--show-loops` guard, here with an *inconclusive* signal read as a
+  negative one instead of a passing one.
+- **`/sys/kernel/sched_ext` exists**, populated: `ls -la` on it there
+  shows `enable_seq`, `hotplug_seq`, `nr_rejected`, `state` and
+  `switch_all`. The local measurement above only asserts that this
+  directory would exist at all if the feature were compiled in — it
+  names no files inside it, because on this sandbox's kernel the
+  directory itself is absent and there was nothing to list. The
+  directory's mere existence is the kernel's own unconditional signal
+  that `CONFIG_SCHED_CLASS_EXT` is compiled in and the feature
+  initialized — more direct than the config file, and independent of
+  it; the five filenames are what a populated instance of that same
+  signal looks like, not a prediction this note made in advance.
+- **`sched_ext_ops` is present in that kernel's own exported BTF**
+  (`/sys/kernel/btf/vmlinux`), the same decisive signal this project's
+  local measurement used to establish absence, here confirming presence.
+
+So **GitHub Actions' free, hosted `ubuntu-24.04` runner has a genuine
+`sched_ext`-capable kernel**, confirmed two independent ways, with the
+one inconclusive check (`config.gz`) correctly set aside rather than
+misread as a third vote. This falsifies the assumption that a capable
+environment requires self-hosting: it does not — nothing about this
+measurement addresses cost, so no claim about payment is made either
+way.
+
+**What is still missing is a scheduler binary, not the environment.**
+`apt-cache show scx` succeeds on that runner, but the package is
+Microsoft's OMI-based System Center monitoring agent
+(`packages.microsoft.com`) — confirmed by installing it and reading its
+file list, which contains no `scx_simple` anywhere, only
+`/opt/microsoft/scx/...` and `omi` service files. A pure name collision,
+not sched_ext's scheduler suite. `scx-scheds` — the real package name on
+distros that carry one — was checked independently, not assumed absent
+because the first name matched something: `apt-cache show scx-scheds`
+fails outright; it is not in that runner's apt sources at all. Per this
+round's own instructions, the probe stopped there rather than building
+one from source, so no policy was ever loaded. The script exits
+immediately once it fails to find a `scx_simple` binary, so only one of
+its three planned checkpoints ever ran: `/sys/kernel/sched_ext/state`
+read `disabled` at that single "before" checkpoint, in both runs that
+reached it (the run before the gating fix never got this far at all).
+The "during" and "after" checkpoints the script also prints are dead
+code on every run so far, for the same reason nothing loaded — naming
+that rather than implying all three ran and agreed.
+
+**What this narrows, precisely.** The accept path's blocker was never
+"no environment exists" in the sense of "the kernel feature is
+unreachable anywhere this project can get to" — it is "no working
+policy artifact exists yet", which is a smaller, different gap: closed
+by a scheduler binary (built from source, or vendored, or found
+packaged on some other distro's runner), not by finding or paying for a
+different kernel. Nothing about this changes what was built this round
+or its scope; it only means the deferred accept path in the paragraph
+above has a real, free, currently-idle place to eventually run, rather
+than none. Not pursued further right now — this round's task was the
+measurement, and the reject path it supports is already built and
+reviewed above.
 
 ## Review findings, and what changed because of them
 
