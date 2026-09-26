@@ -92,19 +92,23 @@ jobs:
           echo "bpftool on PATH ................... ${{ steps.bpftool.outputs.answer }}"
 
       - name: If NOT supported, report and stop here
-        if: steps.config.outputs.answer != 'yes'
+        if: steps.sysfs.outputs.answer != 'yes'
         run: |
           echo "CONCLUSION: this ubuntu-24.04 GitHub-hosted runner does NOT"
-          echo "have CONFIG_SCHED_CLASS_EXT compiled in, despite running a"
-          echo "kernel newer than sched_ext's 6.12 floor. That falsifies the"
-          echo "assumption cheaply: the search for a capable environment"
-          echo "moves to a different distro's GitHub-hosted runner, or"
-          echo "self-hosting, rather than assuming this one works."
+          echo "have sched_ext available -- /sys/kernel/sched_ext is absent,"
+          echo "which only happens when CONFIG_SCHED_CLASS_EXT is off or the"
+          echo "feature never initialised. That falsifies the assumption"
+          echo "cheaply: the search for a capable environment moves to a"
+          echo "different distro's GitHub-hosted runner, or self-hosting,"
+          echo "rather than assuming this one works."
           echo "uname -r: $(uname -r)"
+          echo "(/proc/config.gz answer was: ${{ steps.config.outputs.answer }}"
+          echo " -- unreadable on this runner either way, so it cannot be"
+          echo " used as the gate; /sys/kernel/sched_ext is the real signal.)"
 
       - name: If supported, check for the scx package
         id: scxpkg
-        if: steps.config.outputs.answer == 'yes'
+        if: steps.sysfs.outputs.answer == 'yes'
         run: |
           set +e
           sudo apt-get update -qq
@@ -118,14 +122,14 @@ jobs:
           fi
 
       - name: Install scx package
-        if: steps.config.outputs.answer == 'yes' && steps.scxpkg.outputs.found != 'none'
+        if: steps.sysfs.outputs.answer == 'yes' && steps.scxpkg.outputs.found != 'none'
         run: |
           sudo apt-get install -y ${{ steps.scxpkg.outputs.found }}
           echo "Installed package contents:"
           dpkg -L ${{ steps.scxpkg.outputs.found }} | grep -i scx
 
       - name: Run scx_simple briefly and prove it engaged
-        if: steps.config.outputs.answer == 'yes' && steps.scxpkg.outputs.found != 'none'
+        if: steps.sysfs.outputs.answer == 'yes' && steps.scxpkg.outputs.found != 'none'
         run: |
           set +e
           echo "=== state BEFORE ==="
@@ -154,10 +158,11 @@ jobs:
           cat /sys/kernel/sched_ext/state 2>&1
 
       - name: If supported but no packaged scx, report and stop
-        if: steps.config.outputs.answer == 'yes' && steps.scxpkg.outputs.found == 'none'
+        if: steps.sysfs.outputs.answer == 'yes' && steps.scxpkg.outputs.found == 'none'
         run: |
-          echo "CONFIG_SCHED_CLASS_EXT=y on this runner, but no scx /"
-          echo "scx-scheds package is available via apt-cache show -- not"
-          echo "building from source in this probe, per instructions."
+          echo "sched_ext is available on this runner (/sys/kernel/sched_ext"
+          echo "present, sched_ext_ops in BTF), but no scx / scx-scheds"
+          echo "package is available via apt-cache show -- not building from"
+          echo "source in this probe, per instructions."
           echo "This still confirms the KERNEL capability; a real policy"
           echo "load is unconfirmed here."
