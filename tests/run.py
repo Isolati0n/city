@@ -3572,6 +3572,299 @@ def test_evidence_ring_buffer_is_bounded():
           f"against a {ceiling_kb} KiB ceiling, 64 MiB written)")
 
 
+def _load_relaunch_house():
+    """tools/relaunch-house.py (item #4, docs/options/13-crash-relaunch.md),
+    imported by path -- the same pattern this file already uses for
+    every hyphenated tool name it needs (tools/fold-house.py,
+    bakery/mkbrick.py). Not TCB; no boot-time caller links it in."""
+    import importlib.util
+    sp = importlib.util.spec_from_file_location(
+        "relaunch_house_t", os.path.join(ROOT, "tools", "relaunch-house.py"))
+    m = importlib.util.module_from_spec(sp)
+    sp.loader.exec_module(m)
+    return m
+
+
+def _relaunch_slots(blob, work_dir):
+    """A scratch `<slots>` directory holding exactly `blob` as the live
+    slot A -- the layout `tools/stage-candidate.py`'s `live_slot()`
+    (which `relaunch-house.py` calls, not re-derives) requires."""
+    slots = os.path.join(work_dir, "slots")
+    os.makedirs(os.path.join(slots, "A"), exist_ok=True)
+    shutil.copy(blob, os.path.join(slots, "A", "plan.blob"))
+    open(os.path.join(slots, "current"), "w").write("A")
+    return slots
+
+
+def test_relaunch_reproduces_a_real_crash():
+    """A house that reliably crashes the same way on every run reports
+    'reproduced' on relaunch -- the positive control the brief itself
+    asks for. unit-boom writes "boom\\n" then exits 99, every time,
+    deterministically, so a throwaway relaunch of it must too.
+
+    This asserts on captured TAIL CONTENT (not just reason/value), which
+    makes it subject to the same accepted, quantified evidence-capture
+    race #8's own tests already absorb with `_retry_evidence_race` --
+    the relaunch boots through the identical real chain (`nw-root`'s
+    per-unit logger, `write_evidence()`'s bounded wait), so the same
+    race applies here too. Wrapped the same way, for the same reason:
+    a test that fails on a real, accepted ~1-in-10 chance is not an
+    acceptable `make test` gate."""
+    rl = _load_relaunch_house()
+
+    def attempt():
+        name = f"rlboom{os.getpid()}"
+        city = f"{WORK}/relaunch-boom.city"
+        open(city, "w").write(f"house {name} {BIN}/unit-boom kind=longrun budget=1 lids=none\n")
+        blob = f"{WORK}/relaunch-boom.blob"
+        b = run(["python3", CC, "--city", city, "--out", blob])
+        expect(b.returncode == 0, f"bake\n{b.out}{b.err}")
+
+        before = _evidence_files()
+        rc, out = boot(plan=blob, hold=1500)
+        expect(city_closed(rc, out), f"boot failed\n{out}")
+        new = [p for p in (_evidence_files() - before)
+               if _read_evidence(p)[0].get("unit") == name]
+        expect(len(new) >= 1, f"expected at least one evidence package for "
+               f"{name}, found {len(new)}")
+        original = sorted(new)[0]
+
+        slots = _relaunch_slots(blob, f"{WORK}/relaunch-boom-slots-{os.getpid()}")
+        result = rl.relaunch(original, slots, False, 1500, BIN, False)
+        expect(result["verdict"] == "reproduced",
+               f"expected reproduced, got {result['verdict']!r}: {result}")
+        expect(result["throwaway_tail"] == b"boom\n",
+               f"throwaway tail should be the house's own real output, "
+               f"got {result['throwaway_tail']!r}")
+
+        # `control` found this comparison itself was never exercised:
+        # every path through the rest of this file's relaunch tests
+        # reaches a verdict via an earlier branch (no evidence at all,
+        # or still running), never by actually comparing two evidence
+        # packages that both exist and disagree. unit-boom is
+        # deterministic (always value=99), so a doctored ORIGINAL
+        # claiming a different value, fed against a perfectly real
+        # throwaway crash, must report did-not-reproduce specifically
+        # because the values differ -- not because nothing was
+        # captured.
+        doctored = f"{WORK}/relaunch-boom-doctored.evt"
+        orig_fields, orig_tail = rl.read_evidence(original)
+        expect(orig_fields["value"] == "99", f"sanity: {orig_fields}")
+        doctored_fields = dict(orig_fields)
+        doctored_fields["value"] = "42"
+        header = "NWEVT1\n" + "".join(
+            f"{k}={v}\n" for k, v in doctored_fields.items()) + "--\n"
+        open(doctored, "wb").write(header.encode() + orig_tail)
+
+        result2 = rl.relaunch(doctored, slots, False, 1500, BIN, False)
+        expect(result2["verdict"] == "did-not-reproduce",
+               f"a genuinely different value must report did-not-reproduce "
+               f"via the comparison itself, got {result2['verdict']!r}: "
+               f"{result2}")
+        expect(result2["throwaway_evidence"] is not None,
+               f"this verdict must come from a real comparison, not from "
+               f"the no-evidence branch: {result2}")
+        expect(result2["throwaway_evidence"]["value"] == "99",
+               f"the throwaway crash itself should still be the real, "
+               f"unmodified value: {result2}")
+
+    _retry_evidence_race(attempt)
+    print("ok relaunch-reproduces-a-real-crash")
+
+
+def test_relaunch_layer_copy_and_isolation():
+    """Question 1's layer-copy default, both directions, plus question
+    3's isolation guarantee -- one fixture, because they share the same
+    setup and the two directions are what makes either one meaningful
+    (`CLAUDE.md`: a test at one end of a comparison is not a test of
+    the comparison).
+
+    `unit-firstfail` fails (exit 17) exactly once against a given
+    layer -- it creates /ff-marker on its first run and succeeds ever
+    after -- baked into a brick (make_brick(..., exe='unit-firstfail'))
+    so its marker lives in a layer's own writable upper, isolated per
+    layer id and copyable the way question 1 requires.
+
+    A relaunch with the DEFAULT (copy-as-was) layer must NOT reproduce:
+    the marker the original crash itself created carries over in the
+    copy, so the throwaway attempt finds it already there and succeeds
+    -- 'did-not-reproduce', not because the tool failed to try, but
+    because the copied state genuinely no longer fails.
+
+    A relaunch with --fresh-layer, same original evidence, MUST
+    reproduce: a fresh layer has no marker, so firstfail fails again
+    exactly like its first-ever run did.
+
+    Both runs must leave the REAL layer's /ff-marker untouched --
+    checked by content, not merely by re-reading `mine`, the same
+    "don't assert on state the test itself created" standard
+    harness.md asks of every test here."""
+    tag = f"relaunchff{os.getpid()}"
+    brick = make_brick(tag, exe="unit-firstfail")
+    layer_id = f"{tag}-orig"
+
+    name = f"rlff{os.getpid()}"
+    city = f"{WORK}/relaunch-ff.city"
+    open(city, "w").write(
+        f"house {name} /bin/brick kind=oneshot budget=0 lids=newns "
+        f"brick={brick} layer={layer_id}\n")
+    blob = f"{WORK}/relaunch-ff.blob"
+    b = run(["python3", CC, "--city", city, "--out", blob])
+    expect(b.returncode == 0, f"bake\n{b.out}{b.err}")
+    stage_layers(blob)
+
+    before = _evidence_files()
+    rc, out = boot(plan=blob, hold=1500)
+    expect(city_closed(rc, out), f"boot failed\n{out}")
+    expect(f"spent {name} death=1/0 exit=17" in out,
+           f"expected the first-ever run to fail with 17\n{out}")
+    new = [p for p in (_evidence_files() - before)
+           if _read_evidence(p)[0].get("unit") == name]
+    expect(len(new) == 1, f"expected exactly one original package, "
+           f"found {len(new)}")
+    original = new[0]
+
+    upper_marker = os.path.join(_layer_dir(), layer_id, "upper", "ff-marker")
+    expect(os.path.exists(upper_marker),
+           f"the original crash should have left its marker at "
+           f"{upper_marker}")
+    real_marker_before = open(upper_marker, "rb").read()
+
+    rl = _load_relaunch_house()
+    slots = _relaunch_slots(blob, f"{WORK}/relaunch-ff-slots-{os.getpid()}")
+
+    r1 = rl.relaunch(original, slots, False, 1500, BIN, False)
+    expect(r1["verdict"] == "did-not-reproduce",
+           f"copy-as-was should carry the marker forward and succeed, "
+           f"got {r1['verdict']!r}: {r1}")
+    real_marker_mid = open(upper_marker, "rb").read()
+    expect(real_marker_mid == real_marker_before,
+           f"the REAL layer's marker changed after a copy-as-was "
+           f"relaunch -- the throwaway copy must never touch it")
+
+    r2 = rl.relaunch(original, slots, True, 1500, BIN, False)
+    expect(r2["verdict"] == "reproduced",
+           f"--fresh-layer should have no marker and fail again, "
+           f"got {r2['verdict']!r}: {r2}")
+    real_marker_after = open(upper_marker, "rb").read()
+    expect(real_marker_after == real_marker_before,
+           f"the REAL layer's marker changed after a --fresh-layer "
+           f"relaunch -- the throwaway copy must never touch it")
+    print("ok relaunch-layer-copy-and-isolation")
+
+
+def test_relaunch_does_not_count_against_the_real_budget():
+    """A relaunch-for-reproduction is a wholly separate `nw-sup`
+    process (question 6) -- verified here by reading the REAL house's
+    own death count, before and after a relaunch, and finding it
+    unchanged, which is the brief's own required check, not merely
+    reasoning that the mechanism should be isolated.
+
+    Also run with the relaunch OVERLAPPING the real city's own boot in
+    wall-clock time (not merely sequential), because the strongest form
+    of "does not touch shared state" is demonstrated while both are
+    live at once, not only before one starts and after the other
+    ends."""
+    name = f"rlbudget{os.getpid()}"
+    city = f"{WORK}/relaunch-budget.city"
+    open(city, "w").write(
+        f"house {name} {BIN}/unit-boom kind=longrun budget=3 lids=none\n")
+    blob = f"{WORK}/relaunch-budget.blob"
+    b = run(["python3", CC, "--city", city, "--out", blob])
+    expect(b.returncode == 0, f"bake\n{b.out}{b.err}")
+
+    before = _evidence_files()
+    proc = subprocess.Popen(
+        ["unshare", "--pid", "--fork", "--mount-proc", "--",
+         f"{BIN}/nw-root", "--hold-ms", "4000", blob],
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    time.sleep(1.0)  # let the real city die and restart at least once
+
+    new_so_far = [p for p in (_evidence_files() - before)
+                  if _read_evidence(p)[0].get("unit") == name]
+    expect(len(new_so_far) >= 1,
+           "expected the real city to have already produced at least "
+           "one death before the concurrent relaunch starts")
+    fake_original = sorted(new_so_far)[0]
+
+    rl = _load_relaunch_house()
+    slots = _relaunch_slots(blob, f"{WORK}/relaunch-budget-slots-{os.getpid()}")
+    result = rl.relaunch(fake_original, slots, False, 2000, BIN, False)
+    expect(result["verdict"] == "reproduced",
+           f"the concurrent relaunch of unit-boom should itself "
+           f"reproduce: {result}")
+
+    # `control` found the isolation this test's docstring claims to pin
+    # was not actually checked anywhere here: removing the budget=0
+    # override, or reusing the real unit's own name for the throwaway,
+    # both left this test green, because its assertions were entirely
+    # about the REAL house's console output, never about what the
+    # throwaway itself declared. Assert both directly.
+    expect(result["throwaway_name"] != name,
+           f"the throwaway must never reuse the real unit's own name "
+           f"-- got {result['throwaway_name']!r} for real name {name!r}")
+    expect(result["throwaway_evidence"] is not None,
+           f"expected a throwaway evidence package to check its budget "
+           f"field against: {result}")
+    expect(result["throwaway_evidence"]["budget"] == "0",
+           f"the throwaway plan must be baked with budget=0 regardless "
+           f"of the real unit's own budget=3, got: "
+           f"{result['throwaway_evidence']}")
+
+    out, _ = proc.communicate(timeout=15)
+    expect(city_closed(proc.returncode, out), f"real boot failed\n{out}")
+    expect(f"spent {name} death=4/3 exit=99" in out,
+           f"the REAL house's own death count must reach exactly "
+           f"death=4/3 (budget exhausted on its own schedule), "
+           f"unaffected by the concurrent relaunch\n{out}")
+    expect("death=5" not in out and "death=6" not in out,
+           f"the real house's death count went past what its OWN "
+           f"budget=3 crash loop alone accounts for -- the relaunch "
+           f"leaked into its counter\n{out}")
+    print("ok relaunch-does-not-count-against-the-real-budget")
+
+
+def test_relaunch_reports_inconclusive_when_still_running():
+    """A throwaway attempt still alive when the observation window
+    ends is reported as 'inconclusive', never as 'did-not-reproduce' --
+    the two are different facts (question 4) and this pins that they
+    are not collapsed into one. Uses a house that sleeps well past the
+    hold; `_sleeper` is the same tiny wrapper the ctl-channel tests
+    already use."""
+    name = f"rlsleep{os.getpid()}"
+    city = f"{WORK}/relaunch-sleep.city"
+    open(city, "w").write(f"house {name} {_sleeper(name)} kind=longrun budget=0 lids=none\n")
+    blob = f"{WORK}/relaunch-sleep.blob"
+    b = run(["python3", CC, "--city", city, "--out", blob])
+    expect(b.returncode == 0, f"bake\n{b.out}{b.err}")
+
+    # A fabricated stand-in "original": the sleeper itself never
+    # produces one (it never dies), so what matters here is only that
+    # the tool resolves the unit's own declared fields and observes the
+    # throwaway attempt directly -- the comparison against `original`
+    # is never reached for an inconclusive verdict.
+    boom_city = f"{WORK}/relaunch-sleep-origin.city"
+    open(boom_city, "w").write(f"house {name} {BIN}/unit-boom kind=longrun budget=0 lids=none\n")
+    boom_blob = f"{WORK}/relaunch-sleep-origin.blob"
+    b2 = run(["python3", CC, "--city", boom_city, "--out", boom_blob])
+    expect(b2.returncode == 0, f"bake\n{b2.out}{b2.err}")
+    before = _evidence_files()
+    rc0, out0 = boot(plan=boom_blob, hold=1200)
+    expect(city_closed(rc0, out0), f"origin boot failed\n{out0}")
+    new0 = [p for p in (_evidence_files() - before)
+            if _read_evidence(p)[0].get("unit") == name]
+    expect(len(new0) >= 1, "expected a stand-in original evidence package")
+    fake_original = sorted(new0)[0]
+
+    rl = _load_relaunch_house()
+    slots = _relaunch_slots(blob, f"{WORK}/relaunch-sleep-slots-{os.getpid()}")
+    result = rl.relaunch(fake_original, slots, False, 1500, BIN, False)
+    expect(result["verdict"] == "inconclusive",
+           f"a house still sleeping past the hold must report "
+           f"inconclusive, got {result['verdict']!r}: {result}")
+    print("ok relaunch-reports-inconclusive-when-still-running")
+
+
 def test_shutdown_does_not_restart():
     """A supervisor that sees SIGTERM must not restart the house.
 
@@ -9466,11 +9759,21 @@ def test_build_is_reproducible():
         for sub in ("a", "bbbbbbbbbbbb"):
             d = os.path.join(base, sub)
             os.makedirs(os.path.join(d, "houses"))
+            os.makedirs(os.path.join(d, "tools"))
             for f in srcs:
                 shutil.copy(os.path.join(ROOT, f), d)
             for f in os.listdir(os.path.join(ROOT, "houses")):
                 shutil.copy(os.path.join(ROOT, "houses", f),
                             os.path.join(d, "houses"))
+            # unit-info (tools/unit-info.c) joined the Makefile's `all:`
+            # the same round tools/ first gained a .c file this isolated
+            # build needs -- "No rule to make target 'tools/unit-info.c'"
+            # is what a missing copy here looks like, found by running
+            # this test, not by reading the Makefile.
+            for f in os.listdir(os.path.join(ROOT, "tools")):
+                if f.endswith((".c", ".h")):
+                    shutil.copy(os.path.join(ROOT, "tools", f),
+                                os.path.join(d, "tools"))
             b = run(["make", "-C", d, "-j4"])
             expect(b.returncode == 0, f"build in {sub} failed\n{b.err[-800:]}")
             got = {}
@@ -10433,6 +10736,10 @@ def main():
         test_evidence_silent_house_empty_tail,
         test_evidence_stop_produces_none,
         test_evidence_ring_buffer_is_bounded,
+        test_relaunch_reproduces_a_real_crash,
+        test_relaunch_layer_copy_and_isolation,
+        test_relaunch_does_not_count_against_the_real_budget,
+        test_relaunch_reports_inconclusive_when_still_running,
         test_shutdown_does_not_restart,
         test_pidfd_reaps_and_counts, test_pidfd_open_failure_falls_back,
         test_ctl_stop_does_not_count, test_ctl_start_relaunch_and_spent,

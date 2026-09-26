@@ -112,11 +112,12 @@ MAP = [
     ({"dawn.c", "pid1.c", "nwspawn.c", "nwsup.c", "lids.c", "lids.h",
       "sha256.c", "sha256.h",
       "rescue.c", "initrd-init.c", "mkboot.sh",
-      "landlock-assertions-dryrun.py", "stage-layers.py"}, "runtime"),
+      "landlock-assertions-dryrun.py", "stage-layers.py",
+      "relaunch-house.py", "unit-info.c"}, "runtime"),
     ({"blob.h", "nwcheck.c", "nwcheck_main.c", "nw-cc.py", "plan.als",
       "Plan.tla", "stage-candidate.py", "gen-spec-limits.py",
       "caller_nw_check.c", "leaf_name_dup.c", "leaf_name_ok.c",
-      "leaf_path_ok.c", "stage-layers.py"}, "plan"),
+      "leaf_path_ok.c", "stage-layers.py", "unit-info.c"}, "plan"),
     ({"console-boot-test.py", "run.py", "unit_probe.c", "scale-probe.py"}, "harness"),
 ]
 
@@ -142,6 +143,13 @@ SHARED = {
         "THE RECOVERY is a two-line procedure whose second line is this "
         "tool, and its \"nw-sup creates NEITHER\" rule says what it must "
         "create. Editing it wants both."),
+    "unit-info.c": (
+        ("runtime", "plan"),
+        "reads a sealed plan blob's fields (plan.md's territory: the "
+        "struct layout, nw_check(), the accessors) purely to feed the "
+        "crash-and-relaunch tool, which boots what it reads through the "
+        "real chain (runtime.md's territory). Editing it wants both, the "
+        "same reason stage-layers.py is dual-owned."),
 }
 
 # Tracked code files that no territory owns, each with the reason there is

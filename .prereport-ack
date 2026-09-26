@@ -963,3 +963,35 @@ prose-count	docs/options/12-crash-evidence.md	the code disproves, and states the
 # redundant but checkable against the named list, which CLAUDE.md's own
 # rule treats as the fine case.
 prose-count	docs/options/12-crash-evidence.md	a build copy) now returns five files, not two: `nwcheck.c` and
+
+# false positive: paired three lines above by
+# expect(f"spent {name} death=4/3 exit=99" in out, ...), which requires the
+# real house's own death sequence to have actually printed through to its
+# budget's exhaustion -- so this absence is not satisfied by a boot that
+# produced no output at all, only by one that reached exactly death=4/3
+# and no further.
+unpaired-absence	tests/run.py	expect("death=5" not in out and "death=6" not in out,
+
+# false positive: "COMMITMENT-5" is the operator's own label for a
+# specific named check, not a count of anything enumerated nearby --
+# same exemption already given to the item #8 note's COMMITMENT-5
+# mentions.
+prose-count	docs/options/13-crash-relaunch.md	were asked and the COMMITMENT-5 check. It started as design-only, was
+prose-count	docs/options/13-crash-relaunch.md	## 5. COMMITMENT-5 check
+
+# false positive: plain English idiom ("the one case" = the specific
+# case named in the same sentence), not a count of anything nearby.
+prose-count	docs/options/13-crash-relaunch.md	would only cover the one case (a still-running or merely-stopped
+
+# false positive: named rather than bare -- the sentence enumerates
+# all four tests by name in the words immediately following, which
+# CLAUDE.md's own rule treats as the fine case (a number beside a
+# named list is redundant but checkable).
+prose-count	docs/options/13-crash-relaunch.md	report "reproduced"). Four tests in `tests/run.py`:
+
+# false positive: refers back to the same fixed, already-named set of
+# four tests listed earlier in this same document ("What was built"),
+# not an independent count that could drift on its own.
+prose-count	docs/options/13-crash-relaunch.md	closed alphabet to prevent. None of the four tests exercised this path
+prose-count	docs/options/13-crash-relaunch.md	four tests reached a verdict via an earlier branch (no evidence at
+prose-count	docs/options/13-crash-relaunch.md	four tests. Fixed by adding a case to `test_relaunch_reproduces_a_real_crash`:

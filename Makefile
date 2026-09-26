@@ -13,7 +13,7 @@ CFLAGS = -Wall -Wextra -O2 -g -std=gnu11 -ffile-prefix-map=$(CURDIR)=.
 # the stage a parallel run is using.
 STAGE ?= /tmp/nw-init-run
 
-all: nw-dawn nw-root nw-spawn nw-check nw-sup nw-rescue unit-probe unit-boom unit-badcall unit-term unit-brick unit-slowdie unit-dieterm unit-lastwords unit-lastwordsmany unit-orphan unit-orphanslow unit-layer unit-layer-fill unit-bindfile unit-firehose
+all: nw-dawn nw-root nw-spawn nw-check nw-sup nw-rescue unit-probe unit-boom unit-badcall unit-term unit-brick unit-slowdie unit-dieterm unit-lastwords unit-lastwordsmany unit-orphan unit-orphanslow unit-layer unit-layer-fill unit-bindfile unit-firehose unit-info unit-firstfail
 
 # blob.h IS A PREREQUISITE, and leaving it off is not cosmetic. dawn now
 # includes it for NW_BRICK_MNT, and the whole justification for that include
@@ -44,6 +44,20 @@ nw-sup: nwsup.c lids.o sha256.c sha256.h blob.h lids.h
 nw-rescue: rescue.c
 	$(CC) $(CFLAGS) -o $@ rescue.c
 
+# NOT TCB -- no boot-time caller links this in, the same classification
+# tools/initrd-init.c already has despite also being C. Read-only
+# introspection for the crash-and-relaunch tooling
+# (docs/options/13-crash-relaunch.md): links nwcheck.c so it uses the
+# real nw_check()/nw_errstr() rather than trusting an unchecked blob,
+# and #includes blob.h directly rather than a second, hand-derived
+# struct layout -- the same rule tools/stage-layers.py's own docstring
+# states. In `all` so `make`/`make test` actually compiles it, rather
+# than repeating tools/initrd-init.c's own history (nothing gated that
+# file's compile for as long as it was built only inside mkboot.sh, and
+# a syntax error shipped undetected).
+unit-info: tools/unit-info.c nwcheck.c blob.h
+	$(CC) $(CFLAGS) -I. -o $@ tools/unit-info.c nwcheck.c
+
 unit-probe: unit_probe.c
 	$(CC) $(CFLAGS) -o $@ unit_probe.c
 
@@ -55,6 +69,9 @@ unit-badcall: houses/badcall.c
 
 unit-term: houses/term.c
 	$(CC) $(CFLAGS) -o $@ houses/term.c
+
+unit-firstfail: houses/firstfail.c
+	$(CC) $(CFLAGS) -static -o $@ houses/firstfail.c
 
 # Static: this one is copied *into* a brick, and a brick carries its own
 # libraries. A dynamic build would resolve its loader outside the brick and
@@ -154,7 +171,7 @@ stage: all
 	cp -f nw-dawn nw-root nw-spawn nw-check nw-sup nw-rescue \
 	      unit-probe unit-boom unit-badcall unit-term unit-brick unit-slowdie unit-dieterm \
 	      unit-lastwords unit-lastwordsmany unit-orphan unit-orphanslow \
-      unit-layer unit-layer-fill unit-bindfile unit-firehose $(STAGE)/nw/bin/
+      unit-layer unit-layer-fill unit-bindfile unit-firehose unit-info unit-firstfail $(STAGE)/nw/bin/
 	chmod +x $(STAGE)/nw/bin/*
 	# The sources the staged binaries were built from, staged with them.
 	# tests/run.py's hash probe compiles nwcheck.c to ask which slot a name

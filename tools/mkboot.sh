@@ -112,7 +112,8 @@ for f in dawn.c pid1.c nwcheck.c nwcheck_main.c nwspawn.c nwsup.c lids.c \
          lids.h blob.h rescue.c unit_probe.c sha256.c sha256.h \
          Makefile bakery/nw-cc.py \
          bakery/mkbrick.py \
-         $(cd "$ROOT" && ls houses/*.c)
+         $(cd "$ROOT" && ls houses/*.c) \
+         $(cd "$ROOT" && ls tools/*.c 2>/dev/null || true)
 do
     mkdir -p "$BUILD/$(dirname "$f")"
     cp -f "$ROOT/$f" "$BUILD/$f"
