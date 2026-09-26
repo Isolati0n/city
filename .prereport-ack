@@ -898,3 +898,68 @@ unpaired-absence	tests/run.py	expect("restart ctltier3" not in out, f"STOP count
 # about how a small write(2)/sendall() is delivered on this platform,
 # not a count of anything enumerated nearby that could grow stale.
 prose-count	docs/options/11-start-stop-channel.md	one syscall in practice), so this is a latent protocol gap rather than
+
+# false positives: plain English idioms ("the one place/case"), not a
+# count of anything enumerated nearby that could grow stale.
+prose-count	docs/options/12-crash-evidence.md	This is the one place this note's answers differ from what the brief
+prose-count	docs/options/12-crash-evidence.md	was silently defeating the one case this feature exists for, found by
+prose-count	houses/firehose.c	* possible, then exits. Exists for one control:
+prose-count	pid1.c	* which is the one case this feature exists for. The
+
+# false positive: "collapsing them to one file" describes the dedup
+# outcome in prose, not a count of anything enumerated nearby.
+prose-count	docs/options/12-crash-evidence.md	field this package records — collapsing them to one file is correct
+
+# false positive: "one line beside the two that already exist" is
+# checkable directly against dawn.c, which has exactly two mkpath calls
+# for NW_BRICK_DIR/NW_LAYER_DIR today; the proposed third line does not
+# change what it counts against, and this matches the "checkable code
+# structure" exemption rather than an instance-count nobody can verify.
+prose-count	docs/options/12-crash-evidence.md	a proposed `mkpath(NW_ROOT_MNT NW_EVIDENCE_DIR)`, one line beside the two
+
+# false positive: "COMMITMENT-5" is the operator's own label for this
+# check (given verbatim in their brief as "COMMITMENT-5 CHECK"), a name
+# rather than a count.
+prose-count	docs/options/12-crash-evidence.md	COMMITMENT-5 check below.
+prose-count	docs/options/12-crash-evidence.md	## 7. COMMITMENT-5 check
+
+# false positive: "FIPS 180-4" is the fixed, published name of the NIST
+# standard itself, not a count of test vectors or anything else nearby.
+prose-count	sha256.h	* checked against NIST's own FIPS 180-4 test vectors in the suite,
+prose-count	docs/options/12-crash-evidence.md	against NIST's own FIPS 180-4 test vectors, run in the suite, verifies
+
+# false positive: "exactly one evidence file per death" states a design
+# invariant the code enforces (one write_evidence() call per death-
+# accounting site), not a count of items enumerated nearby.
+prose-count	tests/run.py	"""A house that dies produces exactly one evidence file per death,
+
+# false positive: paired two lines above with
+# expect(live is not None, "sleeper never reached exec -- STOP would
+# have nothing to kill"), the same real-kill check the ctl channel
+# tests already use (test_ctl_stop_does_not_count and siblings).
+unpaired-absence	tests/run.py	expect(_comm(live) is None,
+
+# mechanism-claim: no test in this suite distinguishes "flush before
+# console write" from "flush after console write" -- both orderings
+# behave identically without a controlling terminal, and this harness
+# cannot construct one (same class as runtime.md's own SIGTTOU/TOSTOP
+# precondition, marked there as demonstrated on a pty rather than in
+# make test). The mechanism the comment leans on for WHY this matters
+# (console write blocking) is a real, cited precondition, not tested
+# here; what IS tested is the reorder+FIONREAD combination's effect on
+# an ordinary scheduling delay, via control's injected-delay mutation.
+mechanism-claim	pid1.c	* deliberately, and this ordering is load-bearing rather
+
+
+# false positive: "COMMITMENT-5" is the operator's own label for the
+# check named in section 7's heading, not a count of anything enumerated
+# nearby -- same exemption already given to the other COMMITMENT-5
+# mentions in this file.
+prose-count	docs/options/12-crash-evidence.md	the code disproves, and states the COMMITMENT-5 check explicitly rather
+
+# false positive: named rather than bare -- the sentence enumerates the
+# five files by name in the words immediately following ("nwcheck.c and
+# blob.h... plus nwsup.c, sha256.c and sha256.h"), so the number is
+# redundant but checkable against the named list, which CLAUDE.md's own
+# rule treats as the fine case.
+prose-count	docs/options/12-crash-evidence.md	a build copy) now returns five files, not two: `nwcheck.c` and

@@ -176,6 +176,12 @@ int main(void)
      * with its own commit. `tcb-review`. */
     mkpath(NW_ROOT_MNT NW_BRICK_DIR);
     mkpath(NW_ROOT_MNT NW_LAYER_DIR);
+    /* docs/options/12-crash-evidence.md. PID 1's per-unit logger writes
+     * its rolling tail file here, and loggers are forked before nw-sup
+     * exists to make its own idempotent mkdir the way it does for
+     * NW_CTL_DIR -- so this has to be dawn, the earliest thing that
+     * runs, not nw-sup. */
+    mkpath(NW_ROOT_MNT NW_EVIDENCE_DIR);
     /* Phase 2's mountpoint. An image is a file and cannot be bind-mounted
      * onto itself the way a directory brick is, so lid_brick() needs
      * somewhere to land it. One mkdir here, once, ever -- against a tmpfs

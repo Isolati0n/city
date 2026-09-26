@@ -241,6 +241,29 @@ static void shutdown_city(void)
         halt_now("reboot failed");
 }
 
+/* Write the ring's current LOGICAL content (oldest byte first) to
+ * tail_fd and truncate to exactly that length, so the file always
+ * holds exactly the tail and nothing older. Two segments when the ring
+ * has wrapped (the not-yet-overwritten tail, then the start), one
+ * otherwise. Best-effort: every return value here is advisory, per
+ * this feature's own rule that the capture path must never affect the
+ * one thing this process actually exists for. */
+static void flush_tail(int tail_fd, const unsigned char *ring,
+                       size_t cursor, int wrapped)
+{
+    off_t off = 0;
+    if (wrapped) {
+        size_t tail_seg = (size_t)NW_EVIDENCE_TAIL_MAX - cursor;
+        ssize_t r1 = pwrite(tail_fd, ring + cursor, tail_seg, 0);
+        (void)r1;
+        off = (off_t)tail_seg;
+    }
+    ssize_t r2 = pwrite(tail_fd, ring, cursor, off);
+    (void)r2;
+    size_t total = wrapped ? (size_t)NW_EVIDENCE_TAIL_MAX : cursor;
+    if (ftruncate(tail_fd, (off_t)total) < 0) { /* best-effort */ }
+}
+
 static void spawn_logger(uint32_t i)
 {
     pid_t p = fork();
@@ -326,15 +349,99 @@ static void spawn_logger(uint32_t i)
         char prefix[NW_NAME_LEN + 4];
         int pn = snprintf(prefix, sizeof prefix, "[%.*s] ",
                           NW_NAME_LEN - 1, houses[i].name);
+
+        /* docs/options/12-crash-evidence.md. This logger is the only
+         * process that already reads every byte of the house's own
+         * output, so it is where the last-N-bytes capture has to live --
+         * nw-sup only ever holds the pipe's WRITE end (see that note for
+         * why). A plain fixed-size array, nothing dynamically sized or
+         * allocated, and nothing here parses what it copies: invariant 1
+         * stays satisfied the same way the relay loop above it already
+         * does. Best-effort and never fatal to the one job this process
+         * actually has -- if the tail file cannot be opened, tail_fd
+         * stays -1 and every flush below is skipped for this unit's
+         * whole life. */
+        unsigned char ring[NW_EVIDENCE_TAIL_MAX];
+        size_t ring_cursor = 0;
+        int ring_wrapped = 0;
+        char tailpath[sizeof(NW_EVIDENCE_DIR) + NW_NAME_LEN + 8];
+        int tail_fd = -1;
+        if (snprintf(tailpath, sizeof tailpath, "%s/%.*s.tail",
+                     NW_EVIDENCE_DIR, NW_NAME_LEN - 1, houses[i].name)
+            < (int)sizeof tailpath) {
+            /* O_TRUNC: a name is reused across boots and across a
+             * unit's whole supervision history, and this file is
+             * machine-root, durable. Without truncating at logger
+             * startup, a house whose new life dies before writing
+             * anything inherits a PREVIOUS life's stale tail content,
+             * silently attributed to a death that never produced it --
+             * tcb-review reproduced this exactly (a same-named /bin/true
+             * death reporting 98 bytes of a prior boot's unrelated
+             * crash). Scoping the file to "since this logger opened it"
+             * makes that state unrepresentable rather than checked. */
+            tail_fd = open(tailpath,
+                           O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
+        }
+
         char buf[256];
         for (;;) {
             ssize_t n = read(houses[i].log_r, buf, sizeof buf);
             if (n <= 0) break;
+
+            /* Capture and flush BEFORE the console relay, not after --
+             * deliberately, and this ordering is load-bearing rather
+             * than cosmetic. nw-sup synchronizes with this flush by
+             * polling FIONREAD on its own copy of the pipe (see
+             * write_evidence()'s comment in nwsup.c), which only tells
+             * it "the logger has read the bytes", not "the logger has
+             * flushed them" -- so anything placed between the read()
+             * above and the flush below widens that gap. The console
+             * write is exactly such a thing: runtime.md's own
+             * precondition section already documents write(2) to a
+             * real console blocking under SIGTTOU/TOSTOP once a
+             * controlling terminal exists. Capturing first means a
+             * blocked console write can no longer delay the evidence
+             * capture behind it. */
+            if (tail_fd >= 0) {
+                /* n <= sizeof buf < NW_EVIDENCE_TAIL_MAX always, so one
+                 * chunk never wraps the ring more than once. */
+                size_t room = (size_t)NW_EVIDENCE_TAIL_MAX - ring_cursor;
+                size_t first = ((size_t)n < room) ? (size_t)n : room;
+                memcpy(ring + ring_cursor, buf, first);
+                if (first < (size_t)n) {
+                    memcpy(ring, buf + first, (size_t)n - first);
+                    ring_cursor = (size_t)n - first;
+                    ring_wrapped = 1;
+                } else {
+                    ring_cursor += first;
+                    if (ring_cursor == (size_t)NW_EVIDENCE_TAIL_MAX) {
+                        ring_cursor = 0;
+                        ring_wrapped = 1;
+                    }
+                }
+                /* Flush every chunk, not throttled. A typical crash's
+                 * whole output is a handful of short lines -- well
+                 * under any threshold worth having -- so throttling by
+                 * accumulated bytes left ordinary, small outputs never
+                 * flushed at all before the death that needed them,
+                 * which is the one case this feature exists for. The
+                 * cost is bounded regardless: at most one flush per
+                 * read() chunk, each O(NW_EVIDENCE_TAIL_MAX), and
+                 * chunks are already bounded by the pipe's own read
+                 * granularity. Found by running a real death, not by
+                 * reasoning about it -- see the note in the design doc. */
+                flush_tail(tail_fd, ring, ring_cursor, ring_wrapped);
+            }
+
             ssize_t w1 = write(2, prefix, (size_t)pn);
             ssize_t w2 = write(2, buf, (size_t)n);
             ssize_t w3 = 0;
             if (buf[n - 1] != '\n') w3 = write(2, "\n", 1);
             (void)w1; (void)w2; (void)w3;
+        }
+        if (tail_fd >= 0) {
+            flush_tail(tail_fd, ring, ring_cursor, ring_wrapped);
+            close(tail_fd);
         }
         _exit(0);
     }

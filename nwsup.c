@@ -1,6 +1,7 @@
 #define _GNU_SOURCE
 #include "blob.h"
 #include "lids.h"
+#include "sha256.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -776,6 +777,191 @@ static int wait_house(pid_t p, int extra_fd)
     return st;
 }
 
+/* NW_EVIDENCE_DRAIN_SPINS is the hard ceiling on waiting for the logger
+ * to drain the log pipe before nw-sup reads its tail file -- an
+ * ITERATION count, not a time bound, and that is not a style choice.
+ * runtime.md's Liveness section requires nwsup.c to never regain a
+ * timing primitive -- "a budget that can read a clock can reset on
+ * one" -- and tests/run.py's test_budget_no_reset enforces it by
+ * grepping this file for clock_gettime/now_ms/alarm/nanosleep/usleep
+ * and their relatives. A first version of this wait used nanosleep()
+ * between checks and that test caught it immediately (make test:
+ * "nwsup.c has regained a timing primitive: ['nanosleep']") -- not a
+ * near-miss on the letter of a denylist, a real instance of exactly
+ * what the rule refuses: this file reading elapsed time for any
+ * purpose, not only for the restart budget. The fix is not to phrase
+ * the wait so the grep misses it, it is to make the wait genuinely read
+ * no clock at all: sched_yield() gives up the remainder of a timeslice
+ * without reading or being told any duration, so a loop bounded by an
+ * iteration counter and built only from FIONREAD and sched_yield() has
+ * no way to compute elapsed wall-clock time even in principle, which is
+ * the actual property the rule protects, not merely its token list. */
+#define NW_EVIDENCE_DRAIN_SPINS 200000
+
+/* docs/options/12-crash-evidence.md. Called at the exact point this
+ * process already has every field the restart/spent line needs, but
+ * BEFORE say(line) writes that line -- deliberately the opposite order
+ * from the first version of this function, which called say(line)
+ * first. That order needed this wait to win a race against the
+ * logger's OWN handling of the very byte just written a moment
+ * earlier -- the tightest possible case, since nothing but a handful of
+ * kernel-then-userspace instructions separates "written" from
+ * "flushed", and FIONREAD only reports the former. Measured against
+ * that order: even after the logger had visibly drained the pipe
+ * (FIONREAD back to 0) and several dozen further sched_yield() calls,
+ * the tail was still empty in roughly 1 of 6 runs of the silent-house
+ * case -- not rare enough to accept, and no bound on yields closed it,
+ * because FIONREAD cannot observe "flushed", only "drained", so no
+ * amount of polling it proves the thing this needed to prove.
+ *
+ * Reordering removes the need to win that race at all. What this
+ * function has to wait for now is only the HOUSE's own prior output
+ * (and, for a second-or-later death, the previous death's own
+ * restart/spent line, written a full house-lifetime before this call) --
+ * both already sitting in the pipe with ordinary real wall-clock time
+ * behind them by the time nw-sup gets here, not written an instant ago.
+ * nw-sup's OWN line for the death being recorded right now is written
+ * AFTER this call returns, so it is never inside this package's own
+ * tail -- it shows up, if anything does, at the head of the NEXT
+ * death's tail for this unit, or not at all if there is no next death.
+ * That is a real, stated narrowing of what this feature captures, not
+ * an oversight: see docs/options/12-crash-evidence.md.
+ *
+ * Best-effort either way: every failure here is silent and never
+ * affects the restart/spent decision or its console line, which say()
+ * still prints immediately after this returns regardless of what
+ * happened here. */
+static void write_evidence(const char *name, int deaths, unsigned budget,
+                            int st)
+{
+    unsigned char tail[NW_EVIDENCE_TAIL_MAX];
+    size_t tail_n = 0;
+    char tailpath[sizeof(NW_EVIDENCE_DIR) + NW_NAME_LEN + 8];
+    if (snprintf(tailpath, sizeof tailpath, "%s/%s.tail",
+                 NW_EVIDENCE_DIR, name) < (int)sizeof tailpath) {
+        /* PID 1's logger is a separate process with no synchronization
+         * to nw-sup: nothing orders "the logger has processed every
+         * byte currently in the pipe" before "nw-sup reads what it
+         * wrote". tcb-review measured this unsynchronized read missing
+         * a death's own final output in ~1 of 8 runs under ordinary
+         * load, and in the large majority of runs under heavy load;
+         * `control` independently reproduced the same gap by
+         * deliberately delaying the logger. The reorder above (see this
+         * function's own comment) already removes the tightest instance
+         * of the race; this wait narrows what remains for output that
+         * predates this call by less comfortable a margin.
+         *
+         * FIONREAD on fd 2 -- nw-sup's OWN copy of the log pipe's write
+         * end -- answers precisely, not by inference from file
+         * metadata: it is the same pipe the logger reads, and FIONREAD
+         * on a pipe reports pending bytes from either end (measured). A
+         * stat()/mtime comparison was tried first here and was wrong:
+         * it cannot tell "nothing has been written yet" from "written
+         * but not yet flushed", so it declared quiescence after a
+         * single unchanged reading even when a flush was still pending.
+         *
+         * Zero means the logger has already READ everything written to
+         * this pipe so far -- not that it has flushed it. sched_yield()
+         * between checks gives the logger's own userspace a chance to
+         * actually run flush_tail() for what it just read, rather than
+         * nw-sup racing straight back into the ioctl (or the tail read
+         * below) on the same CPU. A "keep waiting while pending is
+         * decreasing, give up once it stalls" refinement was tried and
+         * rejected: FIONREAD's pending count stays perfectly FLAT for
+         * the logger's whole delay, whether that delay is a genuine
+         * permanent stall or an ordinary descheduling about to end,
+         * then drops all at once once it is next scheduled and drains
+         * everything in one read() -- "unchanged for N ticks" cannot
+         * tell those apart, so it is not a usable signal here.
+         *
+         * BOUNDED, NOT UNCONDITIONAL, and that is a stated limit, not an
+         * oversight: at most NW_EVIDENCE_DRAIN_SPINS checks, self-
+         * terminating the moment the pipe drains, never an indefinite
+         * wait -- this is a diagnostic write path, not a reopening of
+         * the refused freeze-detection question in runtime.md. A logger
+         * delayed past the ceiling still gets a stale/empty tail.
+         * Nothing here claims a fixed wall-clock equivalent for this
+         * spin count on any given machine -- there is no clock to make
+         * that claim against, which is the whole point; a spin count is
+         * a ceiling on how many times this checks, not a promise about
+         * how much wall-clock time that takes.
+         *
+         * fd 2's identity as the log pipe's write end is established by
+         * nwspawn.c's dup2() before this process's own exec and never
+         * re-verified here -- exactly the shape invariant 2 asks a
+         * reviewer to distrust, a fixed descriptor number trusted on an
+         * assumption maintained in another file (fd-auditor). The
+         * fstat/S_ISFIFO check below designs that out rather than
+         * documenting it: if fd 2 is ever not a pipe, this skips the
+         * wait entirely (falling back to no-wait, the same degraded-but-
+         * safe behaviour a FIONREAD failure already produces below,
+         * never a crash or a wait on the wrong descriptor). */
+        struct stat fd2st;
+        int fd2_is_pipe = (fstat(2, &fd2st) == 0) && S_ISFIFO(fd2st.st_mode);
+        for (int i = 0; fd2_is_pipe && i < NW_EVIDENCE_DRAIN_SPINS; i++) {
+            int pending = -1;
+            if (ioctl(2, FIONREAD, &pending) < 0 || pending == 0)
+                break;
+            sched_yield();
+        }
+        int tfd = open(tailpath, O_RDONLY | O_CLOEXEC);
+        if (tfd >= 0) {
+            ssize_t r = read(tfd, tail, sizeof tail);
+            if (r > 0) tail_n = (size_t)r;
+            close(tfd);
+        }
+    }
+    /* A read failure or a house that never wrote anything both mean
+     * "no tail available" and produce the identical, valid, empty-tail
+     * record -- no special case for either. */
+
+    unsigned char record[256 + NW_EVIDENCE_TAIL_MAX];
+    int hdr_len = snprintf((char *)record, 256,
+        "NWEVT1\nunit=%s\nreason=%s\nvalue=%d\ndeath=%d\nbudget=%u\n"
+        "tail_bytes=%zu\n--\n",
+        name, WIFEXITED(st) ? "exit" : "signal",
+        WIFEXITED(st) ? WEXITSTATUS(st) : WTERMSIG(st),
+        deaths, budget, tail_n);
+    if (hdr_len < 0 || hdr_len >= 256) return;
+    memcpy(record + hdr_len, tail, tail_n);
+    size_t total = (size_t)hdr_len + tail_n;
+
+    unsigned char hash[32];
+    nw_sha256(record, total, hash);
+    char hex[65];
+    for (int i = 0; i < 32; i++)
+        snprintf(hex + i * 2, 3, "%02x", hash[i]);
+
+    /* mkostemp, not ".tmp-<pid>": NW_EVIDENCE_DIR is a machine-root
+     * directory shared across every concurrent boot on this machine
+     * (the same caveat harness.md already states for NW_BRICK_DIR/
+     * NW_LAYER_DIR/NW_CTL_DIR), and each boot is typically its own
+     * `unshare --pid` namespace, where pid numbering restarts from 1 --
+     * so getpid() is unique within one boot and NOT across concurrent
+     * ones. Two boots colliding on the same small pid would race on
+     * the identical ".tmp-N" path. mkostemp's XXXXXX suffix is unique
+     * regardless of pid, and O_CLOEXEC is requested atomically at
+     * creation rather than added after with a separate fcntl. */
+    char tmppath[sizeof(NW_EVIDENCE_DIR) + 24];
+    char finalpath[sizeof(NW_EVIDENCE_DIR) + 72];
+    if (snprintf(tmppath, sizeof tmppath, "%s/.tmp-XXXXXX",
+                 NW_EVIDENCE_DIR) >= (int)sizeof tmppath)
+        return;
+    if (snprintf(finalpath, sizeof finalpath, "%s/%s.evt",
+                 NW_EVIDENCE_DIR, hex) >= (int)sizeof finalpath)
+        return;
+
+    int fd = mkostemp(tmppath, O_CLOEXEC);
+    if (fd < 0) return;
+    ssize_t w = write(fd, record, total);
+    close(fd);
+    if (w < 0 || (size_t)w != total) { unlink(tmppath); return; }
+    /* Unconditional: the target, if it already exists, is already known
+     * by the hash itself to hold identical content, so replacing it
+     * with a byte-identical copy is a no-op in every way that matters. */
+    if (rename(tmppath, finalpath) < 0) unlink(tmppath);
+}
+
 int main(int argc, char **argv)
 {
     if (argc < 3) die("argv");
@@ -1057,6 +1243,7 @@ int main(int argc, char **argv)
             else
                 snprintf(line, sizeof line, "spent %s death=%d/%u signal=%d",
                          name, deaths, (unsigned)budget, WTERMSIG(st));
+            write_evidence(name, deaths, budget, st);
             say(line);
             unlink(sockpath);
             _exit(WIFEXITED(st) ? WEXITSTATUS(st) : 71);
@@ -1067,6 +1254,7 @@ int main(int argc, char **argv)
         else
             snprintf(line, sizeof line, "restart %s death=%d/%u signal=%d",
                      name, deaths, (unsigned)budget, WTERMSIG(st));
+        write_evidence(name, deaths, budget, st);
         say(line);
     }
 }

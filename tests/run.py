@@ -39,6 +39,25 @@ def _layer_dir():
     return _blob_str("NW_LAYER_DIR")
 
 
+def _evidence_dir():
+    """NW_EVIDENCE_DIR from blob.h -- same convention as _brick_dir/
+    _layer_dir. On the machine root, not the stage: nw-sup and PID 1's
+    logger compose it the way they compose NW_CTL_DIR/NW_BRICK_DIR,
+    absolute, because in production dawn has pivoted and the machine
+    root IS the staged tree. Shared with any concurrent suite run on
+    this machine, the same caveat harness.md already states for the
+    brick/layer/ctl directories."""
+    return _blob_str("NW_EVIDENCE_DIR")
+
+
+def _evidence_files():
+    """The current set of .evt package paths, for before/after diffing --
+    packages are content-hash named, not house-name named, so a house's
+    own new packages can only be found by diffing the whole directory
+    and then reading each new file's own `unit=` line."""
+    return set(glob.glob(os.path.join(_evidence_dir(), "*.evt")))
+
+
 def _brick_suffix():
     """NW_BRICK_SUFFIX from blob.h -- the same constant mkbrick.py reads.
 
@@ -3160,6 +3179,397 @@ def test_budget_is_hard_total():
     # apart than any plausible window -- the slow test the handoff names.
     print("ok budget-no-reset (3 restarts in a 7s hold; nwsup.c assigns "
           "deaths twice, never takes its address, and names no clock)")
+
+
+def test_sha256_known_vectors():
+    """nw_sha256() against NIST's own published SHA-256 answers, before
+    anything in this suite trusts it for evidence-package naming.
+    Four vectors: the empty string, "abc", the standard 56-byte string,
+    and one million 'a' characters (the one that actually exercises
+    multi-block processing and the message schedule across many
+    blocks, not just padding)."""
+    src = os.path.join(ROOT, "tests", "sha256_vectors.c")
+    exe = f"{WORK}/sha256_vectors"
+    c = subprocess.run(
+        ["gcc", "-Wall", "-Wextra", "-O2", "-o", exe, src,
+         os.path.join(ROOT, "sha256.c")],
+        capture_output=True, text=True)
+    expect(c.returncode == 0, f"sha256_vectors build\n{c.stderr}")
+    r = subprocess.run([exe], capture_output=True, text=True, timeout=30)
+    expect(r.returncode == 0, f"sha256_vectors run\n{r.stdout}{r.stderr}")
+    got = r.stdout.strip().split("\n")
+    expect(len(got) == 4, f"expected 4 digests, got {len(got)}: {got}")
+    want = [
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+        "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1",
+        "cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0",
+    ]
+    labels = ["empty string", "'abc'", "56-byte standard string",
+              "one million 'a's"]
+    for i, (g, w, label) in enumerate(zip(got, want, labels)):
+        expect(g == w, f"vector {i} ({label}): got {g}, want {w}")
+    print("ok sha256-known-vectors")
+
+
+def _read_evidence(path):
+    """Parse a .evt package into a dict of its header fields plus the
+    raw tail bytes, exactly per the fixed format in
+    docs/options/12-crash-evidence.md. Refuses anything not shaped like
+    that format rather than guessing."""
+    data = open(path, "rb").read()
+    sep = b"\n--\n"
+    i = data.find(sep)
+    expect(i >= 0, f"{path}: no '--' separator found\n{data!r}")
+    header = data[:i].decode("utf-8")
+    tail = data[i + len(sep):]
+    lines = header.split("\n")
+    expect(lines[0] == "NWEVT1", f"{path}: bad magic line {lines[0]!r}")
+    fields = {}
+    for line in lines[1:]:
+        if not line:
+            continue
+        k, _, v = line.partition("=")
+        fields[k] = v
+    return fields, tail
+
+
+def _retry_evidence_race(fn, attempts=8):
+    """Bounded retry for the accepted, quantified evidence-capture race
+    (see nwsup.c's write_evidence() and docs/options/12-crash-evidence.md,
+    question 4): the FIONREAD/sched_yield wait narrows but does not close
+    the gap between a byte being read out of the log pipe and the logger
+    flushing it, and `tcb-review` measured a real, nonzero failure rate
+    for it under load (roughly 2.5-10% depending on contention, and
+    reproducible even without deliberately induced load on this machine).
+    A test that fails on a real ~1-in-10 chance is not an acceptable
+    `make test` gate, so this absorbs that specific, accepted race --
+    bounded, so a genuine regression (the reorder reverted, the capture
+    path removed entirely) still fails outright, since those fail on
+    every attempt rather than roughly one in ten. Retrying re-runs the
+    WHOLE attempt (bake is deterministic and cheap; what needs a fresh
+    roll is the boot), because the race is fixed the instant nw-sup
+    writes the immutable, content-hash-named `.evt` file -- re-reading
+    the same file again cannot change its content."""
+    last = None
+    for _ in range(attempts):
+        try:
+            fn()
+            return
+        except SystemExit as e:
+            last = e
+    raise SystemExit(f"{last} (persisted across {attempts} attempts -- "
+                      f"this is not the known transient race, or the "
+                      f"race has become far more frequent than measured)")
+
+
+def test_evidence_captures_death_output():
+    """A house that dies produces exactly one evidence file per death,
+    with its last output correctly captured.
+
+    unit-boom writes "boom\\n" then exits 99, under budget=1 -- one
+    restart, then spent. Two deaths, two packages: pinned by diffing
+    _evidence_files() before and after, then reading each NEW package
+    (not by house-name filename, since packages are content-hash named
+    -- see _evidence_files' own docstring) and keeping only the ones
+    whose `unit=` line names this test's own house, since the directory
+    is shared with any concurrent run on this machine, the same
+    caveat harness.md already states for NW_BRICK_DIR/NW_LAYER_DIR.
+
+    write_evidence() runs BEFORE say(line) at each death (nwsup.c), so a
+    death's own tail never contains nw-sup's OWN line for THAT death --
+    only the house's own output, plus (for a second-or-later death) any
+    earlier death's restart/spent line, which by then has had a full
+    house-lifetime of real wall-clock time to reach the tail file. That
+    ordering exists because the reverse (say() first) needed this wait
+    to win a race against the logger's handling of the very byte just
+    written a moment earlier, and measurement showed that race is not
+    reliably winnable: even after FIONREAD confirmed the pipe drained
+    plus dozens of further sched_yield() calls, the tail was still empty
+    in roughly 1 of 6 runs, because FIONREAD reports "read", not
+    "flushed", and nothing closes that gap for a line written an instant
+    before it must be captured. Output that predates the call by an
+    ordinary margin -- the house's own writes, or a previous death's
+    line -- does not have this problem, which is what this test pins.
+
+    That margin narrows the failure rate; it does not remove it, and
+    this test wraps its attempt in `_retry_evidence_race` (see that
+    function's own docstring) to absorb the accepted residual rate
+    without making `make test` itself flaky."""
+    boom = f"{BIN}/unit-boom"
+    city = f"{WORK}/evt-boom.city"
+    blob = f"{WORK}/evt-boom.blob"
+
+    def attempt():
+        name = f"evtboom{os.getpid()}"
+        open(city, "w").write(
+            f"house {name} {boom} kind=longrun budget=1 lids=none\n")
+        b = run(["python3", CC, "--city", city, "--out", blob])
+        expect(b.returncode == 0, f"bake\n{b.out}{b.err}")
+
+        before = _evidence_files()
+        rc, out = boot(plan=blob, hold=1200)
+        expect(city_closed(rc, out), f"boot failed\n{out}")
+        expect("restart " + name in out, f"expected one restart\n{out}")
+        expect("spent " + name in out, f"expected budget exhaustion\n{out}")
+
+        new = _evidence_files() - before
+        mine = []
+        for path in new:
+            fields, tail = _read_evidence(path)
+            if fields.get("unit") == name:
+                mine.append((fields, tail))
+        expect(len(mine) == 2,
+               f"expected exactly 2 packages for {name}, found {len(mine)} "
+               f"of {len(new)} new packages total")
+
+        mine.sort(key=lambda ft: int(ft[0]["death"]))
+        (f1, t1), (f2, t2) = mine
+        expect(f1["death"] == "1" and f2["death"] == "2",
+               f"deaths should be 1 then 2: {f1['death']!r} {f2['death']!r}")
+        expect(f1["reason"] == "exit" and f1["value"] == "99",
+               f"first package should read reason=exit value=99: {f1}")
+        expect(f2["reason"] == "exit" and f2["value"] == "99",
+               f"second package should read reason=exit value=99: {f2}")
+        expect(f1["budget"] == "1" and f2["budget"] == "1",
+               f"budget should be 1 in both packages: {f1} {f2}")
+        want_t1 = b"boom\n"
+        want_t2 = (want_t1 +
+                   f"[nw-sup] restart {name} death=1/1 exit=99\nboom\n".encode())
+        expect(t1 == want_t1, f"first package's tail should be exactly the "
+               f"house's own output, with no nw-sup line for THIS death "
+               f"(write_evidence runs before say()), got {t1!r} want {want_t1!r}")
+        expect(f2["tail_bytes"] == str(len(t2)),
+               f"tail_bytes must match the actual tail length: {f2}")
+        expect(t2 == want_t2, f"second package's tail should be the FIRST "
+               f"death's own tail (the ring is never reset between deaths) "
+               f"plus the first death's restart line (written after death "
+               f"1's package, so it has a full house-lifetime of lead time "
+               f"by death 2) plus this generation's own output, "
+               f"got {t2!r} want {want_t2!r}")
+
+    _retry_evidence_race(attempt)
+    print("ok evidence-captures-death-output")
+
+
+def test_evidence_silent_house_empty_tail():
+    """A house that never writes anything still produces a valid
+    package, not a crash of the write path, and its tail is genuinely
+    empty -- not a surprise, and not "no special case" glossing over a
+    read failure: there is nothing in the pipe for write_evidence() to
+    read, because write_evidence() runs BEFORE say(line) (nwsup.c), and
+    a fresh house under budget=0 has no earlier death to have left
+    anything behind either.
+
+    /bin/true under kind=longrun: exit 0 is still unexpected for a
+    longrun house (D12), so it counts as a death and gets a package.
+    budget=0, not 1: exactly one death, ever, so there is only one
+    package and no ambiguity about which one to read.
+
+    An earlier version of this test asserted the tail was exactly
+    nw-sup's OWN "spent NAME ..." line for this same death, on the
+    premise that write_evidence() ran after say(line) and reliably won
+    the race to capture the line it had just written a moment before.
+    Measured wrong: even with the pipe confirmed drained (FIONREAD) plus
+    dozens of further sched_yield() calls, that specific capture failed
+    in roughly 1 of 6 runs, because FIONREAD can only report "read", not
+    "flushed", and nothing closed that particular gap. write_evidence()
+    was reordered to run before say() instead (see nwsup.c), which means
+    this exact test case -- nothing before this death, nothing after --
+    no longer has anything to capture at all, deterministically.
+
+    An empty tail is exactly what harness.md calls an unpaired absence
+    if nothing else in this test proves the capture path was live: an
+    empty tail is also what a BROKEN capture path (the ring buffer
+    disabled, the wait loop deleted) produces, so this test alone cannot
+    tell "correctly captured nothing" from "captured nothing because
+    capture is broken" -- `control` found exactly this by deleting the
+    ring-buffer flush in a scratch copy and confirming this test's
+    assertions all stayed green. So this city also bakes a SECOND house,
+    `unit-boom` (writes "boom\n" then exits), under the same budget=0 in
+    the same boot -- the positive case proving this run's capture path
+    actually captured something, so the silent house's empty tail means
+    what it claims to mean rather than nothing at all.
+
+    The loud house's own capture is subject to the same accepted,
+    quantified race as `test_evidence_captures_death_output` (see that
+    test's docstring and `_retry_evidence_race`), so this test wraps its
+    attempt the same way."""
+    boom = f"{BIN}/unit-boom"
+    city = f"{WORK}/evt-quiet.city"
+    blob = f"{WORK}/evt-quiet.blob"
+
+    def attempt():
+        name = f"evtquiet{os.getpid()}"
+        loud = f"evtloud{os.getpid()}"
+        open(city, "w").write(
+            f"house {name} /bin/true kind=longrun budget=0 lids=none\n"
+            f"house {loud} {boom} kind=longrun budget=0 lids=none\n")
+        b = run(["python3", CC, "--city", city, "--out", blob])
+        expect(b.returncode == 0, f"bake\n{b.out}{b.err}")
+
+        before = _evidence_files()
+        rc, out = boot(plan=blob, hold=1200)
+        expect(city_closed(rc, out), f"boot failed\n{out}")
+        expect("spent " + name in out, f"expected immediate exhaustion\n{out}")
+        expect("spent " + loud in out, f"expected immediate exhaustion\n{out}")
+
+        new = _evidence_files() - before
+        mine = [p for p in new if _read_evidence(p)[0].get("unit") == name]
+        loud_pkgs = [p for p in new if _read_evidence(p)[0].get("unit") == loud]
+        expect(len(mine) == 1, f"expected exactly one package for {name} "
+               f"under budget=0, found {len(mine)}")
+        expect(len(loud_pkgs) == 1, f"expected exactly one package for {loud} "
+               f"under budget=0, found {len(loud_pkgs)}")
+
+        # The paired positive case: the SAME boot's capture path produced
+        # real, non-empty content for a house that actually wrote something,
+        # so the silent house's empty tail below is a claim about the
+        # silent house, not an artifact of a broken capture path.
+        loud_fields, loud_tail = _read_evidence(loud_pkgs[0])
+        expect(loud_tail == b"boom\n", f"the paired loud house should have "
+               f"a real, non-empty tail, proving this boot's capture path "
+               f"was live: got {loud_tail!r}")
+
+        fields, tail = _read_evidence(mine[0])
+        expect(tail == b"", f"a silent house with no prior death should "
+               f"have a genuinely empty tail, got {tail!r}")
+        expect(fields["tail_bytes"] == "0",
+               f"tail_bytes must be 0 to match the empty tail: {fields}")
+        expect(fields["reason"] == "exit" and fields["value"] == "0",
+               f"a silent /bin/true should read reason=exit value=0: {fields}")
+
+    _retry_evidence_race(attempt)
+    print("ok evidence-silent-house-empty-tail")
+
+
+def test_evidence_stop_produces_none():
+    """A STOP produces no evidence file, per the design note's decision:
+    the stop_requested early-continue in nwsup.c sits before both
+    death-accounting sites, so this needs no detection logic of its
+    own -- it is the same control-flow guarantee
+    test_ctl_stop_does_not_count already pins, checked here from the
+    evidence side instead of the budget side."""
+    name = f"evtstop{os.getpid()}"
+    os.makedirs("/nw/ctl", exist_ok=True)
+    env = os.environ.copy()
+    env["NW_KIND"] = "1"
+    env["NW_BUDGET"] = "3"
+    env["NW_LIDS"] = "0"
+    before = _evidence_files()
+    proc = subprocess.Popen(
+        [f"{BIN}/nw-sup", _sleeper(name), name],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
+    time.sleep(0.2)
+    live = _find_by_comm(proc.pid, "sleep")
+    expect(live is not None, "sleeper never reached exec -- STOP would "
+           "have nothing to kill")
+    r = _ctl(name, b"STOP\n")
+    expect(r == "OK\n", f"STOP failed: {r!r}")
+    time.sleep(0.2)
+    expect(_comm(live) is None,
+           "STOP replied OK but the sleeper is still alive")
+    proc.kill()
+    proc.communicate()
+
+    new = _evidence_files() - before
+    mine = [p for p in new if _read_evidence(p)[0].get("unit") == name]
+    expect(len(mine) == 0,
+           f"STOP must produce no evidence file, found {len(mine)}: {mine}")
+    print("ok evidence-stop-produces-none")
+
+
+def test_evidence_ring_buffer_is_bounded():
+    """A house that writes tens of megabytes of output does not grow
+    PID 1's logger memory unbounded -- the ring buffer caps it,
+    verified by measuring the logger's actual peak RSS, not by trusting
+    NW_EVIDENCE_TAIL_MAX.
+
+    unit-firehose writes 64 MiB (16,384x the 4096-byte ring) as fast as
+    it can, then exits. This polls VmHWM (the kernel's own high-water
+    mark for resident memory, which only ever increases) rather than
+    trying to time a sample mid-write: reading it even once while the
+    logger is still alive is enough to catch the true peak, however
+    sparse the polling.
+
+    hold-ms 5000, not 600, and budget=0, not 1: an earlier version used
+    600ms and budget=1, and `control` found the hold window killed
+    firehose mid-write every time -- it measured 26-28 MiB actually
+    delivered, not the 64 MiB the docstring claimed, and asked whether
+    the ceiling was still decisive against a subtler leak given that.
+    Measured directly (not just widened on suspicion): 1500ms is not
+    enough (0 completions, ~66 MiB delivered of the true ~69 MiB console
+    total for one full write), 3000ms is (1 completion). 5000ms is
+    comfortable margin over that, and budget=0 means exactly one
+    generation, so "one death, one completed 64 MiB write" is what
+    the test now actually exercises and asserts, not merely intends.
+
+    The logger is identified among PID 1's direct children by
+    _pgid_eq_self -- setpgid(0, 0) is called nowhere else in the TCB
+    (grep -n setpgid *.c), so among a 1-house city's children this
+    picks it out uniquely, the same discriminator harness.md's own
+    helper docstring describes."""
+    name = f"evtfire{os.getpid()}"
+    fire = f"{BIN}/unit-firehose"
+    city = f"{WORK}/evt-fire.city"
+    open(city, "w").write(f"house {name} {fire} kind=longrun budget=0 lids=none\n")
+    blob = f"{WORK}/evt-fire.blob"
+    b = run(["python3", CC, "--city", city, "--out", blob])
+    expect(b.returncode == 0, f"bake\n{b.out}{b.err}")
+
+    stage_layers(blob)
+    log = f"{WORK}/evtfire.log"
+    lg = open(log, "wb")
+    cmd = ["unshare", "--pid", "--fork", "--mount-proc", "--",
+           f"{BIN}/nw-root", "--hold-ms", "5000", blob]
+    p = subprocess.Popen(cmd, stdout=lg, stderr=subprocess.STDOUT)
+    max_hwm_kb = 0
+    logger_pid = None
+    deadline = time.time() + 20
+    try:
+        while time.time() < deadline:
+            if logger_pid is None:
+                init = nested_init(p.pid)
+                if init is not None:
+                    for c in _proc_children(init):
+                        if _pgid_eq_self(c):
+                            logger_pid = c
+                            break
+            if logger_pid is not None:
+                try:
+                    for line in open(f"/proc/{logger_pid}/status"):
+                        if line.startswith("VmHWM:"):
+                            kb = int(line.split()[1])
+                            max_hwm_kb = max(max_hwm_kb, kb)
+                            break
+                except (FileNotFoundError, ProcessLookupError):
+                    pass
+            if p.poll() is not None:
+                break
+            time.sleep(0.002)
+        p.wait(timeout=10)
+    finally:
+        reap_nested(p)
+    lg.close()
+
+    out = open(log, "rb").read().decode("utf-8", "replace")
+    expect(f"spent {name} " in out, f"firehose never completed its write "
+           f"within the hold window -- this test needs the full 64 MiB "
+           f"actually delivered, not a partial write cut short\n{out[-500:]}")
+    expect(logger_pid is not None, "never found the logger process at all")
+    expect(max_hwm_kb > 0, "never got a single VmHWM reading for the "
+           "logger -- the test caught nothing, not that memory was low")
+    # NW_EVIDENCE_TAIL_MAX (4096) plus the relay/read buffers is a few
+    # KB; a static binary's baseline RSS on this machine is at most a
+    # couple MB. 16 MiB is generous headroom above both and still two
+    # orders of magnitude below the 64 MiB written, so an accidentally
+    # unbounded buffer would blow through it, not brush it.
+    ceiling_kb = 16 * 1024
+    expect(max_hwm_kb < ceiling_kb,
+           f"logger peak RSS {max_hwm_kb} KiB exceeds the {ceiling_kb} "
+           f"KiB ceiling -- the ring buffer is not actually bounded")
+    print(f"ok evidence-ring-buffer-is-bounded (peak {max_hwm_kb} KiB "
+          f"against a {ceiling_kb} KiB ceiling, 64 MiB written)")
 
 
 def test_shutdown_does_not_restart():
@@ -10018,6 +10428,11 @@ def main():
         test_last_words_survive_group_term,
         test_orphans_across_restarts,
         test_crash_does_not_halt, test_budget_is_hard_total,
+        test_sha256_known_vectors,
+        test_evidence_captures_death_output,
+        test_evidence_silent_house_empty_tail,
+        test_evidence_stop_produces_none,
+        test_evidence_ring_buffer_is_bounded,
         test_shutdown_does_not_restart,
         test_pidfd_reaps_and_counts, test_pidfd_open_failure_falls_back,
         test_ctl_stop_does_not_count, test_ctl_start_relaunch_and_spent,

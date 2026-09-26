@@ -13,7 +13,7 @@ CFLAGS = -Wall -Wextra -O2 -g -std=gnu11 -ffile-prefix-map=$(CURDIR)=.
 # the stage a parallel run is using.
 STAGE ?= /tmp/nw-init-run
 
-all: nw-dawn nw-root nw-spawn nw-check nw-sup nw-rescue unit-probe unit-boom unit-badcall unit-term unit-brick unit-slowdie unit-dieterm unit-lastwords unit-lastwordsmany unit-orphan unit-orphanslow unit-layer unit-layer-fill unit-bindfile
+all: nw-dawn nw-root nw-spawn nw-check nw-sup nw-rescue unit-probe unit-boom unit-badcall unit-term unit-brick unit-slowdie unit-dieterm unit-lastwords unit-lastwordsmany unit-orphan unit-orphanslow unit-layer unit-layer-fill unit-bindfile unit-firehose
 
 # blob.h IS A PREREQUISITE, and leaving it off is not cosmetic. dawn now
 # includes it for NW_BRICK_MNT, and the whole justification for that include
@@ -38,8 +38,8 @@ nw-check: nwcheck_main.c nwcheck.c blob.h
 lids.o: lids.c lids.h
 	$(CC) $(CFLAGS) -c -o $@ lids.c
 
-nw-sup: nwsup.c lids.o blob.h lids.h
-	$(CC) $(CFLAGS) -o $@ nwsup.c lids.o
+nw-sup: nwsup.c lids.o sha256.c sha256.h blob.h lids.h
+	$(CC) $(CFLAGS) -o $@ nwsup.c lids.o sha256.c
 
 nw-rescue: rescue.c
 	$(CC) $(CFLAGS) -o $@ rescue.c
@@ -73,6 +73,9 @@ unit-lastwords: houses/lastwords.c
 
 unit-orphan: houses/orphan.c
 	$(CC) $(CFLAGS) -o $@ houses/orphan.c
+
+unit-firehose: houses/firehose.c
+	$(CC) $(CFLAGS) -o $@ houses/firehose.c
 
 # Same source, a child that outlives any hold the suite uses. Two
 # binaries rather than one configurable at runtime: a house is exec'd
@@ -143,12 +146,15 @@ stage: all
 	# on a real boot; this line is the lab standing in for dawn, not a
 	# second creator of the per-house children -- those come from
 	# tools/stage-layers.py, which is the only thing that makes them.
-	mkdir -p /nw/mnt /nw/layers
+	# /nw/evidence is the same story a third time: PID 1's per-unit
+	# logger writes its rolling tail file there and runs before nw-sup
+	# even exists, so nothing else in the suite creates it either.
+	mkdir -p /nw/mnt /nw/layers /nw/evidence
 	mkdir -p $(STAGE)/efi/slots/A $(STAGE)/efi/slots/B $(STAGE)/work
 	cp -f nw-dawn nw-root nw-spawn nw-check nw-sup nw-rescue \
 	      unit-probe unit-boom unit-badcall unit-term unit-brick unit-slowdie unit-dieterm \
 	      unit-lastwords unit-lastwordsmany unit-orphan unit-orphanslow \
-      unit-layer unit-layer-fill unit-bindfile $(STAGE)/nw/bin/
+      unit-layer unit-layer-fill unit-bindfile unit-firehose $(STAGE)/nw/bin/
 	chmod +x $(STAGE)/nw/bin/*
 	# The sources the staged binaries were built from, staged with them.
 	# tests/run.py's hash probe compiles nwcheck.c to ask which slot a name

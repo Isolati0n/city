@@ -87,6 +87,17 @@
    field avoids it. */
 #define NW_LAYER_DIR    "/nw/layers"
 #define NW_CTL_DIR      "/nw/ctl"
+/* docs/options/12-crash-evidence.md. NW_EVIDENCE_DIR holds two kinds of
+   file: <name>.tail (PID 1's per-unit logger's rolling capture, not a
+   package) and <64-hex>.evt (one per real death, named by the sha256 of
+   its own content -- same width and hex spelling as NW_BRICK_HASH/
+   NW_BRICK_HEX below, reused rather than a second convention). Created
+   by dawn.c, like NW_BRICK_DIR/NW_LAYER_DIR, because PID 1's logger
+   needs it before nw-sup exists to create it the way NW_CTL_DIR does.
+   NW_EVIDENCE_TAIL_MAX bounds the ring buffer AND the tail file AND the
+   package's tail region -- one constant, not three. */
+#define NW_EVIDENCE_DIR      "/nw/evidence"
+#define NW_EVIDENCE_TAIL_MAX 4096
 #define NW_LAYER_UPPER  "upper"
 #define NW_LAYER_WORK   "work"
 /* A sized layer's backing file is a SIBLING of NW_LAYER_DIR/<id>, not

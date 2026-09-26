@@ -110,6 +110,7 @@ rooted = os.path.isdir(rules_dir)
 
 MAP = [
     ({"dawn.c", "pid1.c", "nwspawn.c", "nwsup.c", "lids.c", "lids.h",
+      "sha256.c", "sha256.h",
       "rescue.c", "initrd-init.c", "mkboot.sh",
       "landlock-assertions-dryrun.py", "stage-layers.py"}, "runtime"),
     ({"blob.h", "nwcheck.c", "nwcheck_main.c", "nw-cc.py", "plan.als",
@@ -179,6 +180,10 @@ UNOWNED = [
      "test_ctl_tier3_fallback_with_socket to exercise wait_house's "
      "third fallback tier. Not TCB; not a house. The assertion lives "
      "in tests/run.py."),
+    ("tests/sha256_vectors.c",
+     "standalone known-answer test for sha256.c against NIST's own "
+     "SHA-256 vectors, used by test_sha256_known_vectors. Not TCB; not "
+     "a house. The assertion lives in tests/run.py."),
     ("install-agents.sh",
      "the brief gate, and the caller of this file's --check. No rules "
      "file OWNS the gate tooling; what they say about it is a sentence "
