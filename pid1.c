@@ -28,7 +28,34 @@ static void say(const char *s, const char *a)
 static void halt_now(const char *why)
 {
     say("HALT:", why);
-    _exit(70);
+    /* PID 1 EXITING IS A KERNEL PANIC ON REAL HARDWARE -- "Attempted to
+     * kill init!" -- which `_exit(70)` unconditionally did. The same
+     * `getpid() == 1` rule shutdown_city() already uses for its own
+     * production reboot() is reused here rather than re-derived: a
+     * caller that is not PID 1 (every test in tests/run.py that runs
+     * this binary directly, without `unshare --pid --fork`, plus any
+     * future non-init caller) still gets the old, harmless `_exit(70)`.
+     * A caller that IS PID 1 -- production, and this project's own test
+     * harness alike, since `unshare --pid --fork` makes the child
+     * genuine PID 1 of its own namespace -- must never exit and instead
+     * powers off, exactly as shutdown_city()'s clean-shutdown path
+     * already does. Measured 2026-09-11 for that path, inside
+     * `unshare --pid --fork`: reboot() tears the namespace down and
+     * does not return; the outer `unshare` process exits 130 (SIGINT)
+     * or, via Python's WIFSIGNALED encoding, -2. Same shape here. */
+    if (getpid() != 1)
+        _exit(70);
+    sync();
+    reboot(RB_POWER_OFF);
+    /* reboot() returned: it failed, and is itself unsurvivable to
+     * retry sanely. Exiting here would be the exact panic this
+     * function exists to prevent, so it hangs instead -- a stuck
+     * machine is a worse outcome than none, but it is not a silent
+     * "Attempted to kill init!" panic, and it is the only choice left
+     * that keeps this function's one promise: PID 1 does not exit. */
+    say("HALT:", "reboot failed");
+    for (;;)
+        pause();
 }
 
 static long long now_ms(void)

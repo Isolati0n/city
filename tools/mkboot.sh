@@ -26,6 +26,15 @@
 #   sh tools/mkboot.sh              # write images under $OUT
 #   sh tools/mkboot.sh --run        # also boot and print the console
 #   sh tools/mkboot.sh --check      # boot and fail on panic / no city open
+#   sh tools/mkboot.sh --check-halt # deliberately corrupt the plan so
+#                                   # nw-check refuses it and PID 1
+#                                   # halts -- fail unless that halt
+#                                   # ends in a real poweroff, never a
+#                                   # panic or a hang. The real-hardware
+#                                   # counterpart to tests/run.py's
+#                                   # halted(), which only proves the
+#                                   # same code runs as PID 1, not that
+#                                   # it powers real hardware off.
 #
 set -eu
 
@@ -36,11 +45,13 @@ JOBS=${JOBS:-$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)}
 
 RUN=0
 CHECK=0
+CHECKHALT=0
 for a in "$@"; do
     case "$a" in
         --run) RUN=1 ;;
         --check) RUN=1; CHECK=1 ;;
-        *) echo "usage: $0 [--run|--check]" >&2; exit 2 ;;
+        --check-halt) RUN=1; CHECKHALT=1; NW_CORRUPT_HALT=1 ;;
+        *) echo "usage: $0 [--run|--check|--check-halt]" >&2; exit 2 ;;
     esac
 done
 
@@ -59,6 +70,16 @@ done
 NW_CITY=${NW_CITY:-}
 NW_EXTRA_BRICKS=${NW_EXTRA_BRICKS:-}
 NW_EXTRA_BIN=${NW_EXTRA_BIN:-}
+# NW_CORRUPT_HALT: deliberately flips a byte in the baked plan AFTER
+# tools/stage-layers.py has already run on the correct one (so layer
+# staging is unaffected), so nw-check refuses the corrupted copy that
+# actually boots and PID 1 calls halt_now() -- the only way to observe
+# real halt_now() behaviour on a genuine boot rather than inside this
+# project's own pid-namespace test harness, which unshare --pid --fork
+# CANNOT prove: see pid1.c's halt_now() and tests/run.py's halted()
+# for why a pid namespace's reboot() and a real system's are different
+# kernel paths sharing one syscall. Used only by --check-halt below.
+NW_CORRUPT_HALT=${NW_CORRUPT_HALT:-}
 
 need() {
     command -v "$1" >/dev/null 2>&1 || {
@@ -197,6 +218,22 @@ python3 "$ROOT/tools/stage-layers.py" \
 # brick this script never sees.
 if [ -n "$NW_EXTRA_BRICKS" ]; then
     cp -f "$NW_EXTRA_BRICKS"/*.img "$MNT/root/nw/bricks/"
+fi
+# AFTER staging, not before: stage-layers.py above already ran on the
+# correct blob, so the city's layers (none, for the default probe city)
+# are staged correctly regardless. nw-check has not run yet -- that
+# happens on the GUEST at boot -- so corrupting the ESP's copy here is
+# what makes the guest's own boot hit the real refusal, the same single
+# byte flip test_bad_crc uses in tests/run.py.
+if [ -n "$NW_CORRUPT_HALT" ]; then
+    python3 -c "
+import sys
+p = '$esp_stage/slots/A/plan.blob'
+d = bytearray(open(p, 'rb').read())
+d[16] ^= 0xFF
+open(p, 'wb').write(d)
+"
+    echo "== NW_CORRUPT_HALT: flipped a byte in $esp_stage/slots/A/plan.blob =="
 fi
 sync
 umount "$MNT/root"
@@ -492,5 +529,49 @@ if [ "$CHECK" -eq 1 ]; then
         exit 1
     fi
     echo "== check: city open, stayed up, no panic, no HALT =="
+fi
+if [ "$CHECKHALT" -eq 1 ]; then
+    # THE INVERSE OF --check, DELIBERATELY: NW_CORRUPT_HALT above made
+    # nw-check refuse the plan it actually boots, so a real halt_now()
+    # call happens on a genuine boot -- the one thing tests/run.py's
+    # own unshare --pid --fork harness cannot prove, because that
+    # harness's reboot() and this guest's reboot() are different
+    # kernel paths sharing one syscall (see halted() in tests/run.py).
+    if grep -q '\[nw-root\] city open' "$LOG"; then
+        echo "FAIL: city opened -- NW_CORRUPT_HALT should have made" >&2
+        echo "      nw-check refuse before any house started" >&2
+        exit 1
+    fi
+    if ! grep -q '\[nw-root\] HALT:' "$LOG"; then
+        echo "FAIL: no HALT -- the corrupted plan was not refused, or" >&2
+        echo "      halt_now() was never reached" >&2
+        exit 1
+    fi
+    if ! grep -q 'nw-check reject: crc32' "$LOG"; then
+        echo "FAIL: HALT happened but not for the CRC corruption this" >&2
+        echo "      check deliberately introduced -- wrong refusal" >&2
+        exit 1
+    fi
+    if grep -q 'Attempted to kill init' "$LOG"; then
+        echo "FAIL: PID 1 returned -- this is the exact panic the" >&2
+        echo "      halt_now() fix exists to prevent" >&2
+        exit 1
+    fi
+    if grep -q 'Kernel panic' "$LOG"; then
+        echo "FAIL: kernel panic" >&2
+        exit 1
+    fi
+    if ! grep -q 'reboot: Power down\|reboot: System halted' "$LOG"; then
+        echo "FAIL: no poweroff message -- halt_now() did not reach" >&2
+        echo "      reboot(RB_POWER_OFF), or the guest hung instead" >&2
+        echo "      (rc=$rc: 124/137 is this observer's own timeout," >&2
+        echo "      not the guest exiting)" >&2
+        exit 1
+    fi
+    if [ "$rc" -ne 0 ]; then
+        echo "FAIL: qemu rc=$rc, expected 0 (guest powered itself off)" >&2
+        exit 1
+    fi
+    echo "== check-halt: plan refused, HALT printed, real poweroff, no panic, no hang =="
 fi
 exit 0

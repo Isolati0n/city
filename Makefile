@@ -304,6 +304,16 @@ qemu:
 	KERNEL=$(KERNEL) OUT=$(or $(QEMU_OUT),/tmp/nw-boot) \
 	    sh tools/mkboot.sh --run --check
 
+# The deliberate-halt counterpart to `qemu`: corrupts the plan so
+# nw-check refuses it and PID 1 halts for real, and fails unless that
+# halt ends in a genuine poweroff -- never a panic (Attempted to kill
+# init) and never a hang. Not `make test`, and not `make qemu` --
+# a healthy boot and a deliberately halted one are different claims,
+# checked by different flags, on purpose.
+qemu-halt:
+	KERNEL=$(KERNEL) OUT=$(or $(QEMU_OUT),/tmp/nw-boot-halt) \
+	    sh tools/mkboot.sh --run --check-halt
+
 KERNEL ?= /boot/vmlinuz
 
 clean:

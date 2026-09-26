@@ -720,6 +720,37 @@ def city_closed(rc, out):
     return rc in (0, 130, -2)
 
 
+def halted(rc, out):
+    """halt_now() fixed 2026-09-25 so PID 1 never exits, the same
+    defect city_closed()'s own reboot() call was fixed for earlier:
+    `_exit(70)` unconditionally was Attempted to kill init on real
+    hardware whenever anything called halt_now() as genuine PID 1. It
+    now takes the identical getpid()==1 branch shutdown_city() already
+    used -- sync() then reboot(RB_POWER_OFF), which does not return on
+    real hardware -- and only falls back to `_exit(70)` when it is not
+    PID 1 at all.
+
+    Measured inside THIS HARNESS's own `unshare --pid --fork` (boot()'s
+    cmd): the child is genuine PID 1 of its own new pid namespace, so
+    getpid() == 1 is true here too, and the exact same branch runs. rc
+    is never 70 in this suite for that reason -- reboot() tears the
+    namespace down instead of returning, the same 130/-2 encodings
+    city_closed() already tolerates for the same call.
+
+    STATE THIS EXPLICITLY, because a green result here is easy to
+    misread as covering more than it does: THIS PROVES THE CODE PATH
+    RUNS AS PID 1. IT DOES NOT PROVE REAL-HARDWARE POWEROFF BEHAVIOR.
+    reboot() tearing down a pid namespace and reboot() as literal
+    system init are different kernel paths that happen to share one
+    syscall -- unshare --pid gives PID 1 a namespace to be the init of,
+    not a BIOS to power off. `make qemu`'s halt-and-poweroff check
+    (tools/mkboot.sh's --check, extended to deliberately trigger a
+    halt) is what actually tests a real halt powers off the guest
+    instead of panicking; a green result here does not stand in for
+    that and must not be read as if it did."""
+    return "HALT:" in out and rc in (0, 130, -2)
+
+
 def expect(cond, msg):
     if not cond:
         raise SystemExit("FAIL: " + msg)
@@ -767,9 +798,38 @@ def test_halt_spawner():
     It requires a complete pid report and a clean exit instead. Kill it before
     it reports and boot must fail rather than come up short-staffed."""
     rc, out = boot(slot=f"{SLOTS}/A", extra=["--kill-spawner"], hold=400)
-    expect(rc == 70, f"halt rc={rc}\n{out}")
+    expect(halted(rc, out), f"halt rc={rc}\n{out}")
     expect("HALT: spawn report" in out, f"halt text\n{out}")
     print("ok halt-spawner")
+
+
+def test_halt_falls_back_to_exit_when_not_pid_1():
+    """halt_now() has two branches, split on getpid() == 1, the exact
+    condition shutdown_city()'s own reboot() call already used. Every
+    other HALT test in this suite runs through `unshare --pid --fork`,
+    which makes the child genuine PID 1 of its own namespace -- so
+    every one of them exercises the SAME branch (sync, reboot, never
+    exit), and the other branch -- the plain, harmless `_exit(70)` for
+    a caller that is not PID 1 at all -- had nothing exercising it
+    until this test.
+
+    Invoked directly, deliberately with no `unshare --pid`: this
+    process's own getpid() is an ordinary PID in the harness's own
+    namespace, never 1, so `if (getpid() != 1) _exit(70);` fires
+    before sync() or reboot() are ever reached. That is what makes
+    this SAFE to run directly on whatever machine runs this suite --
+    a bug that flipped the condition would call reboot(2) here instead
+    of exiting, and this test would show it rather than silently
+    surviving one accidental unshare-free invocation, per CLAUDE.md's
+    own rule that a check must be shown rejecting, not just accepting.
+    Confirmed by hand before writing this: no unshare, `rc=70`, no
+    hang, no reboot attempt, no process left behind."""
+    p = run([f"{BIN}/nw-root", "--hold-ms", "400",
+             "--slot", f"{SLOTS}/A", "--kill-spawner"])
+    out = p.out + p.err
+    expect(p.returncode == 70, f"not-PID-1 halt rc={p.returncode}\n{out}")
+    expect("HALT: spawn report" in out, f"halt text\n{out}")
+    print("ok halt-falls-back-to-exit-when-not-pid-1")
 
 
 def test_bad_crc():
@@ -780,7 +840,7 @@ def test_bad_crc():
     chk = run([f"{BIN}/nw-check", bad])
     expect(chk.returncode == 1 and "crc32" in (chk.err + chk.out), "check crc")
     rc, out = boot(plan=bad, hold=200)
-    expect(rc == 70 and "crc32" in out, f"boot crc\n{out}")
+    expect(halted(rc, out) and "crc32" in out, f"boot crc\n{out}")
     print("ok bad-crc")
 
 
@@ -851,7 +911,7 @@ def test_fd_preflight_names_the_shortfall():
     hard_lo = need - 1
     shortfall = need - hard_lo
     rc, out = boot(plan=blob, hold=200, nofile=(8, hard_lo))
-    expect(rc == 70, f"refusal rc={rc}\n{out}")
+    expect(halted(rc, out), f"refusal rc={rc}\n{out}")
     expect("plan sealed" in out,
            f"never reached the check (plan did not seal)\n{out}")
     expect("HALT: fd " in out,
@@ -9628,7 +9688,8 @@ def main():
         test_harness_runs_fresh_binaries, test_coverage_accounting,
         test_hash_pin, test_difftest, test_lids_are_not_advisory,
         test_baker_rejects, test_fuzz_checker, test_happy, test_slot_b,
-        test_rescue, test_halt_spawner, test_bad_crc,
+        test_rescue, test_halt_spawner,
+        test_halt_falls_back_to_exit_when_not_pid_1, test_bad_crc,
         test_fd_preflight_names_the_shortfall,
         test_log_pipe_peak_is_one_end_per_house,
         test_rules_hook_delivers_from_any_cwd,
