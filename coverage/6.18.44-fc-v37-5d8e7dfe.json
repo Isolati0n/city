@@ -36,6 +36,7 @@
   "fd-preflight-names-the-shortfall",
   "fold-house-refuses-a-house-that-is-not-closed",
   "fuzz-checker",
+  "halt-falls-back-to-exit-when-not-pid-1",
   "halt-spawner",
   "happy",
   "harness-runs-fresh-binaries",
