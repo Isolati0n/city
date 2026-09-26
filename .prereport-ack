@@ -995,3 +995,33 @@ prose-count	docs/options/13-crash-relaunch.md	report "reproduced"). Four tests i
 prose-count	docs/options/13-crash-relaunch.md	closed alphabet to prevent. None of the four tests exercised this path
 prose-count	docs/options/13-crash-relaunch.md	four tests reached a verdict via an earlier branch (no evidence at
 prose-count	docs/options/13-crash-relaunch.md	four tests. Fixed by adding a case to `test_relaunch_reproduces_a_real_crash`:
+
+# item #6 (shared content-addressed store): false positives, plain
+# English idioms or stable historical/quoted text, not counts of
+# anything that can drift silently.
+# "6" in "COMMITMENT-6" is a label like a bug number, not a count.
+prose-count	docs/options/14-shared-store.md	COMMITMENT-6 check explicitly.
+# idiom: "one file" describing the end state of a rename, not a count.
+prose-count	docs/options/14-shared-store.md	- **Both already produce exactly one file per hash on disk**, because
+# idiom: "the one place" = the single item just named in this sentence.
+prose-count	docs/options/14-shared-store.md	matters only for cost, not correctness — and it is the one place a
+prose-count	docs/options/14-shared-store.md	writes, not just that one file ends up on disk — the weaker assertion
+# refers to a fixed historical diff (the migration already landed by
+# the time this sentence is read), not a live count.
+prose-count	docs/options/14-shared-store.md	package is (and is not) produced — is unchanged; only the four lines
+prose-count	docs/options/14-shared-store.md	did, one file per distinct hash, forever. If that becomes a problem for
+prose-count	docs/options/14-shared-store.md	**The one place a judgment call was possible and was refused**: what
+prose-count	docs/options/14-shared-store.md	**1. Writing the same content twice results in exactly one file on
+prose-count	docs/options/14-shared-store.md	exactly one file exists afterward, and its bytes are exactly the
+prose-count	docs/options/14-shared-store.md	though this test's own two assertions (the racers' exit codes, and the
+# quoted make test/fold-suite output, not an assertion this file makes.
+prose-count	docs/options/14-shared-store.md	31 checks: 31 pass, 0 fail, 0 skip
+# "the three controls" correctly refers to the ORIGINAL three controls
+# this note described before the security-fix control was added --
+# historically accurate, not stale, and not expected to change again.
+prose-count	docs/options/14-shared-store.md	nor the three controls it originally described exercised the case
+prose-count	docs/options/14-shared-store.md	against the pre-existing three controls, which are unaffected by this
+# idiom: "one complete file" describing rename(2)'s atomicity guarantee.
+prose-count	store.c	* so the result is always one complete file with these exact
+# idiom: describes the CLI's own output shape, not a count of anything.
+prose-count	tests/store_probe.c	* Prints one line: RESULT rc=<rc> hex=<hex>

@@ -3212,6 +3212,232 @@ def test_sha256_known_vectors():
     print("ok sha256-known-vectors")
 
 
+def _build_store_probe():
+    """Compile tests/store_probe.c against store.c and sha256.c directly,
+    the same way test_sha256_known_vectors builds its own probe rather
+    than going through the Makefile."""
+    src = os.path.join(ROOT, "tests", "store_probe.c")
+    exe = f"{WORK}/store_probe"
+    c = subprocess.run(
+        ["gcc", "-Wall", "-Wextra", "-O2", "-o", exe, src,
+         os.path.join(ROOT, "store.c"), os.path.join(ROOT, "sha256.c")],
+        capture_output=True, text=True)
+    expect(c.returncode == 0, f"store_probe build\n{c.stderr}")
+    return exe
+
+
+def _store_put(exe, dir_, suffix, content, gate=None):
+    args = [exe, dir_, suffix, content]
+    if gate is not None:
+        args.append(gate)
+    r = subprocess.run(args, capture_output=True, text=True, timeout=30)
+    expect(r.returncode == 0, f"store_probe run\n{r.stdout}{r.stderr}")
+    m = re.search(r"RESULT rc=(-?\d+) hex=([0-9a-f]{64})", r.stdout)
+    expect(m is not None, f"store_probe output not parseable: {r.stdout!r}")
+    return int(m.group(1)), m.group(2)
+
+
+def test_store_dedup_writes_exactly_once():
+    """nw_store_put() writing the same content twice: real dedup, not
+    just convergent naming. A mechanism that always rewrites-and-
+    renames would still leave exactly one file with the right bytes on
+    disk either way -- the difference real dedup makes is whether the
+    SECOND call actually touches the file. rename(2) replaces the
+    directory entry with a NEW inode (the temp file's), so a write that
+    happened changes the destination's inode; a write that was skipped
+    does not. That is the one observable signal that tells "wrote it
+    again, converged to the same bytes" apart from "recognised it was
+    already there and did nothing" -- the distinction item #6's own
+    brief asked for."""
+    exe = _build_store_probe()
+    d = tempfile.mkdtemp(dir=WORK)
+    rc1, hex1 = _store_put(exe, d, ".dat", "the same content, twice")
+    expect(rc1 == 1, f"first write should report rc=1 (wrote it), got {rc1}")
+    path = os.path.join(d, hex1 + ".dat")
+    ino1 = os.stat(path).st_ino
+
+    rc2, hex2 = _store_put(exe, d, ".dat", "the same content, twice")
+    expect(hex2 == hex1, f"same content must hash the same: {hex1} vs {hex2}")
+    expect(rc2 == 0,
+           f"second write should report rc=0 (already present), got {rc2}")
+    ino2 = os.stat(path).st_ino
+    expect(ino2 == ino1,
+           f"inode changed ({ino1} -> {ino2}): the second call rewrote the "
+           f"file instead of recognising it was already there")
+
+    entries = os.listdir(d)
+    expect(entries == [hex1 + ".dat"],
+           f"expected exactly one file, found {entries}")
+    expect(open(path, "rb").read() == b"the same content, twice",
+           "stored content does not match what was written")
+    print("ok store-dedup-writes-exactly-once")
+
+
+def test_store_name_match_is_not_trusted_as_content_match():
+    """tcb-review's finding on this item: a name match at the content-
+    addressed path is not proof of a content match, so nw_store_put()
+    must not trust stat()'s success alone. The old hand-rolled code this
+    replaces (an unconditional write-then-rename) was self-healing
+    against exactly this -- it clobbered whatever was at the
+    destination every time. A first version of the shared primitive
+    lost that: it treated any existing file at the hash-named path as
+    "already this content," which nw-sup's real caller can reach for
+    real, because an evidence record's bytes are fully deterministic
+    and computable in advance from the plan a house was baked from, so
+    an unconfined co-resident house (no brick, no Landlock -- the
+    common case) can plant content at the exact path its own next
+    evidence record will land at, before that record is ever written.
+
+    This plants two poisons -- one the same length as the real content
+    but with different bytes (the case a size-only check would miss),
+    and one a different length entirely -- and asserts the real content
+    always wins: the write is real (rc=1, not a false rc=0 "already
+    present"), and the file on disk afterward holds the real bytes, not
+    the poison, in both cases."""
+    exe = _build_store_probe()
+    real = "the real content nobody has written yet"
+
+    d1 = tempfile.mkdtemp(dir=WORK)
+    h = hashlib.sha256(real.encode()).hexdigest()
+    poison_path = os.path.join(d1, h + ".dat")
+    same_length_poison = "x" * len(real)
+    open(poison_path, "w").write(same_length_poison)
+    rc, hexout = _store_put(exe, d1, ".dat", real)
+    expect(hexout == h, f"hash mismatch: {hexout} vs {h}")
+    expect(rc == 1,
+           f"a same-length content mismatch must be a real write (rc=1), "
+           f"got rc={rc} -- a name match was trusted as a content match")
+    expect(open(poison_path).read() == real,
+           "same-length poison was not overwritten with the real content")
+
+    d2 = tempfile.mkdtemp(dir=WORK)
+    poison_path2 = os.path.join(d2, h + ".dat")
+    open(poison_path2, "w").write("short")
+    rc2, hexout2 = _store_put(exe, d2, ".dat", real)
+    expect(rc2 == 1,
+           f"a different-length content mismatch must be a real write "
+           f"(rc=1), got rc={rc2}")
+    expect(open(poison_path2).read() == real,
+           "different-length poison was not overwritten with the real "
+           "content")
+
+    # And genuine dedup -- identical content really already present --
+    # must still be recognised and skip the write, or this control would
+    # be satisfied by a mutation that always rewrites (which is a real
+    # mechanism, just not the one being tested here; test_store_dedup_
+    # writes_exactly_once already pins that direction on its own, this
+    # just confirms the two behaviors coexist in one function).
+    rc3, _ = _store_put(exe, d1, ".dat", real)
+    expect(rc3 == 0,
+           f"identical content already on disk should be recognised "
+           f"(rc=0), got rc={rc3}")
+    print("ok store-name-match-is-not-trusted-as-content-match")
+
+
+def test_store_different_content_never_collides():
+    """Two different pieces of content, written into the same directory
+    with the same suffix: distinct hashes, distinct files, neither
+    write disturbs the other's bytes. The same class of check bricks
+    already have -- two different trees must content-address
+    differently -- applied to the shared primitive instead of to
+    mkbrick.py's own hashing."""
+    exe = _build_store_probe()
+    d = tempfile.mkdtemp(dir=WORK)
+    rc1, hex1 = _store_put(exe, d, ".dat", "first piece of content")
+    rc2, hex2 = _store_put(exe, d, ".dat", "second, different content")
+    expect(rc1 == 1 and rc2 == 1, f"both should be fresh writes: {rc1} {rc2}")
+    expect(hex1 != hex2, f"different content must not share a hash: {hex1}")
+    expect(sorted(os.listdir(d)) == sorted([hex1 + ".dat", hex2 + ".dat"]),
+           f"expected exactly two files, found {os.listdir(d)}")
+    expect(open(os.path.join(d, hex1 + ".dat"), "rb").read()
+           == b"first piece of content", "first file's content is wrong")
+    expect(open(os.path.join(d, hex2 + ".dat"), "rb").read()
+           == b"second, different content", "second file's content is wrong")
+    print("ok store-different-content-never-collides")
+
+
+def test_store_concurrent_double_write_is_safe():
+    """Two producers writing IDENTICAL content at nearly the same time
+    must not corrupt either copy or crash either writer -- the same
+    class of race #8 already found once, in the evidence-capture path
+    (an unsynchronized read racing an unsynchronized write), so it is
+    treated as a real risk here too rather than a theoretical one.
+
+    Neither process is told about the other, and neither is given a
+    fixed sleep to fake simultaneity: a sleep-based version of this test
+    was tried first and measured unreliable -- two processes given the
+    same usleep() duration wake up within the scheduler's own jitter of
+    each other, which is consistently WIDER than the microseconds
+    nw_store_put() itself takes for a small buffer, so one process's
+    whole stat-write-close sequence finished before the other's timer
+    even elapsed, and no real overlap occurred in any of several runs
+    tried by hand. Both children instead spin-poll a single gate path
+    this test creates only once both are confirmed alive, so they
+    unblock within the polling loop's own granularity of each other --
+    tight enough to force both into nw_store_put() close enough
+    together to interleave, without adding any delay inside store.c
+    itself (only inside store_probe.c, the fixture). The property under
+    test is not which one "wins"; it is that the race can never be seen
+    from outside as a crash or a corrupted file.
+
+    This test always passes against a correct nw_store_put() regardless
+    of scheduling. Its value as a REGRESSION CHECK (would it catch a
+    broken implementation) is honestly load-dependent, though, and
+    `control` measured this rather than assuming it: a mutation
+    dropping the atomic-rename shape for a direct O_EXCL create was
+    caught 10/10 on an otherwise-idle machine, but caught only 1/10,
+    then 0/10 on a repeat, under four CPU-bound busy loops on this same
+    4-core machine -- under that contention the two racing processes
+    are released together but then get scheduled far enough apart that
+    one runs its entire nw_store_put() call to completion before the
+    other is scheduled at all, so they serialize rather than interleave
+    and there is nothing left to catch. That is a property of THIS
+    control's reliability as a regression detector under load, not of
+    nw_store_put() itself, which is unaffected either way -- and it is
+    exactly the corollary CLAUDE.md names for a test whose outcome
+    depends on the environment: say so, rather than quote an
+    unqualified catch rate. Treat an `ok` here, on a busy machine, as
+    weaker evidence than the same line on an idle one."""
+    exe = _build_store_probe()
+    d = tempfile.mkdtemp(dir=WORK)
+    content = "raced by two producers at once"
+    gate = os.path.join(WORK, f"store-gate-{os.getpid()}-{time.time_ns()}")
+    if os.path.exists(gate):
+        os.remove(gate)
+    p1 = subprocess.Popen([exe, d, ".dat", content, gate],
+                          stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                          text=True)
+    p2 = subprocess.Popen([exe, d, ".dat", content, gate],
+                          stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                          text=True)
+    # Give both children time to reach the spin-wait before releasing
+    # them together; if either has not started yet it simply spins a
+    # little longer once it does, since the gate check is a loop.
+    time.sleep(0.2)
+    open(gate, "w").close()
+    out1, err1 = p1.communicate(timeout=30)
+    out2, err2 = p2.communicate(timeout=30)
+    os.remove(gate)
+    expect(p1.returncode == 0, f"writer 1 crashed or failed\n{out1}{err1}")
+    expect(p2.returncode == 0, f"writer 2 crashed or failed\n{out2}{err2}")
+    m1 = re.search(r"RESULT rc=(-?\d+) hex=([0-9a-f]{64})", out1)
+    m2 = re.search(r"RESULT rc=(-?\d+) hex=([0-9a-f]{64})", out2)
+    expect(m1 and m2, f"unparseable output: {out1!r} {out2!r}")
+    hex1, hex2 = m1.group(2), m2.group(2)
+    expect(hex1 == hex2, "identical content hashed differently")
+    rc1, rc2 = int(m1.group(1)), int(m2.group(1))
+    expect(rc1 >= 0 and rc2 >= 0,
+           f"a racing writer reported hard failure: rc1={rc1} rc2={rc2}")
+
+    entries = os.listdir(d)
+    expect(entries == [hex1 + ".dat"],
+           f"expected exactly one file after the race, found {entries}")
+    data = open(os.path.join(d, hex1 + ".dat"), "rb").read()
+    expect(data == content.encode(),
+           f"stored content corrupted by the race: {data!r}")
+    print("ok store-concurrent-double-write-is-safe")
+
+
 def _read_evidence(path):
     """Parse a .evt package into a dict of its header fields plus the
     raw tail bytes, exactly per the fixed format in
@@ -3250,7 +3476,23 @@ def _retry_evidence_race(fn, attempts=8):
     WHOLE attempt (bake is deterministic and cheap; what needs a fresh
     roll is the boot), because the race is fixed the instant nw-sup
     writes the immutable, content-hash-named `.evt` file -- re-reading
-    the same file again cannot change its content."""
+    the same file again cannot change its content.
+
+    A caveat `control` surfaced while mutation-testing the shared store
+    (docs/options/14-shared-store.md): each retry re-runs `attempt()`
+    under the SAME house name (fixed once, at the top of the wrapped
+    function, not re-derived per retry), so if the real mechanism is
+    broken outright rather than merely racy, retries 2..N can land on
+    evidence packages that are byte-identical to the ones a genuine
+    first failure already produced -- nw_store_put()'s real dedup then
+    correctly recognises them as already on disk, and the LAST
+    exception this raises (from the final attempt) can read "found 0 of
+    0 new packages" instead of the actual content mismatch the first
+    attempt hit. The retry still fails overall, so a real regression is
+    never masked as a pass -- only the diagnostic can point at the wrong
+    assertion. Debugging a failure here: isolate a single un-retried
+    call (call `fn()` directly, once) to see the real first failure
+    rather than trusting the message this wrapper raises."""
     last = None
     for _ in range(attempts):
         try:
@@ -10732,6 +10974,10 @@ def main():
         test_orphans_across_restarts,
         test_crash_does_not_halt, test_budget_is_hard_total,
         test_sha256_known_vectors,
+        test_store_dedup_writes_exactly_once,
+        test_store_name_match_is_not_trusted_as_content_match,
+        test_store_different_content_never_collides,
+        test_store_concurrent_double_write_is_safe,
         test_evidence_captures_death_output,
         test_evidence_silent_house_empty_tail,
         test_evidence_stop_produces_none,

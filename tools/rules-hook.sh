@@ -110,7 +110,7 @@ rooted = os.path.isdir(rules_dir)
 
 MAP = [
     ({"dawn.c", "pid1.c", "nwspawn.c", "nwsup.c", "lids.c", "lids.h",
-      "sha256.c", "sha256.h",
+      "sha256.c", "sha256.h", "store.c", "store.h",
       "rescue.c", "initrd-init.c", "mkboot.sh",
       "landlock-assertions-dryrun.py", "stage-layers.py",
       "relaunch-house.py", "unit-info.c"}, "runtime"),
@@ -192,6 +192,10 @@ UNOWNED = [
      "standalone known-answer test for sha256.c against NIST's own "
      "SHA-256 vectors, used by test_sha256_known_vectors. Not TCB; not "
      "a house. The assertion lives in tests/run.py."),
+    ("tests/store_probe.c",
+     "standalone probe for store.c's nw_store_put(): dedup, distinct-"
+     "content naming, and a forced concurrent double-write. Not TCB; "
+     "not a house. The assertions live in tests/run.py."),
     ("install-agents.sh",
      "the brief gate, and the caller of this file's --check. No rules "
      "file OWNS the gate tooling; what they say about it is a sentence "

@@ -38,8 +38,8 @@ nw-check: nwcheck_main.c nwcheck.c blob.h
 lids.o: lids.c lids.h
 	$(CC) $(CFLAGS) -c -o $@ lids.c
 
-nw-sup: nwsup.c lids.o sha256.c sha256.h blob.h lids.h
-	$(CC) $(CFLAGS) -o $@ nwsup.c lids.o sha256.c
+nw-sup: nwsup.c lids.o sha256.c sha256.h store.c store.h blob.h lids.h
+	$(CC) $(CFLAGS) -o $@ nwsup.c lids.o sha256.c store.c
 
 nw-rescue: rescue.c
 	$(CC) $(CFLAGS) -o $@ rescue.c

@@ -2,6 +2,7 @@
 #include "blob.h"
 #include "lids.h"
 #include "sha256.h"
+#include "store.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -926,40 +927,17 @@ static void write_evidence(const char *name, int deaths, unsigned budget,
     memcpy(record + hdr_len, tail, tail_n);
     size_t total = (size_t)hdr_len + tail_n;
 
-    unsigned char hash[32];
-    nw_sha256(record, total, hash);
+    /* Was: hash the record, compose a mkostemp temp name in
+     * NW_EVIDENCE_DIR, write, unconditional rename to <hex>.evt -- the
+     * same temp-then-rename shape mkbrick.py uses for bricks, hand-
+     * written here a second time. nw_store_put() (store.c) is that
+     * shape lifted out once. docs/options/14-shared-store.md: this is
+     * its first live-side caller, and the only change here is that a
+     * second write of a death this project has already seen once now
+     * skips the write instead of redoing it -- the on-disk result, the
+     * path, and the naming are all unchanged. */
     char hex[65];
-    for (int i = 0; i < 32; i++)
-        snprintf(hex + i * 2, 3, "%02x", hash[i]);
-
-    /* mkostemp, not ".tmp-<pid>": NW_EVIDENCE_DIR is a machine-root
-     * directory shared across every concurrent boot on this machine
-     * (the same caveat harness.md already states for NW_BRICK_DIR/
-     * NW_LAYER_DIR/NW_CTL_DIR), and each boot is typically its own
-     * `unshare --pid` namespace, where pid numbering restarts from 1 --
-     * so getpid() is unique within one boot and NOT across concurrent
-     * ones. Two boots colliding on the same small pid would race on
-     * the identical ".tmp-N" path. mkostemp's XXXXXX suffix is unique
-     * regardless of pid, and O_CLOEXEC is requested atomically at
-     * creation rather than added after with a separate fcntl. */
-    char tmppath[sizeof(NW_EVIDENCE_DIR) + 24];
-    char finalpath[sizeof(NW_EVIDENCE_DIR) + 72];
-    if (snprintf(tmppath, sizeof tmppath, "%s/.tmp-XXXXXX",
-                 NW_EVIDENCE_DIR) >= (int)sizeof tmppath)
-        return;
-    if (snprintf(finalpath, sizeof finalpath, "%s/%s.evt",
-                 NW_EVIDENCE_DIR, hex) >= (int)sizeof finalpath)
-        return;
-
-    int fd = mkostemp(tmppath, O_CLOEXEC);
-    if (fd < 0) return;
-    ssize_t w = write(fd, record, total);
-    close(fd);
-    if (w < 0 || (size_t)w != total) { unlink(tmppath); return; }
-    /* Unconditional: the target, if it already exists, is already known
-     * by the hash itself to hold identical content, so replacing it
-     * with a byte-identical copy is a no-op in every way that matters. */
-    if (rename(tmppath, finalpath) < 0) unlink(tmppath);
+    (void)nw_store_put(NW_EVIDENCE_DIR, record, total, ".evt", hex);
 }
 
 int main(int argc, char **argv)
