@@ -112,12 +112,26 @@ jobs:
         run: |
           set +e
           sudo apt-get update -qq
-          if apt-cache show scx >/dev/null 2>&1; then
-            echo "found=scx" >> "$GITHUB_OUTPUT"
-          elif apt-cache show scx-scheds >/dev/null 2>&1; then
+          # Checked independently, not first-match-wins: on this Ubuntu
+          # image "scx" is Microsoft's OMI-based System Center monitoring
+          # agent (packages.microsoft.com), an unrelated package that
+          # happens to share the name -- not sched_ext's scx-scheds.
+          # Prefer scx-scheds when it exists; only fall back to plain
+          # "scx" if scx-scheds isn't offered at all.
+          HAS_SCX=no; HAS_SCXSCHEDS=no
+          apt-cache show scx >/dev/null 2>&1 && HAS_SCX=yes
+          apt-cache show scx-scheds >/dev/null 2>&1 && HAS_SCXSCHEDS=yes
+          echo "apt-cache show scx ......... $HAS_SCX"
+          echo "apt-cache show scx-scheds ... $HAS_SCXSCHEDS"
+          if [ "$HAS_SCXSCHEDS" = yes ]; then
             echo "found=scx-scheds" >> "$GITHUB_OUTPUT"
+          elif [ "$HAS_SCX" = yes ]; then
+            echo "NOTE: only the plain 'scx' name is available, and on"
+            echo "Ubuntu that resolves to Microsoft's unrelated OMI/SCX"
+            echo "monitoring agent, not sched_ext's schedulers."
+            echo "found=scx" >> "$GITHUB_OUTPUT"
           else
-            echo "No scx / scx-scheds package available via apt-cache show."
+            echo "No scx-scheds (and no scx) package available via apt-cache show."
             echo "found=none" >> "$GITHUB_OUTPUT"
           fi
 
