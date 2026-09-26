@@ -19,8 +19,11 @@
 #include <sys/ioctl.h>
 #include <sys/mount.h>
 #include <sys/prctl.h>
+#include <sys/signalfd.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
+#include <sys/un.h>
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
@@ -625,30 +628,93 @@ static void on_term(int sig)
  * falls back to the exact pre-pidfd mechanism instead of dying:
  * ordinary blocking waitpid(p, &st, 0), which is what this function
  * replaced and what every death/restart/budget line downstream of
- * this call already expects to have happened. extra_fd has no real
- * caller yet -- both call sites below pass -1 -- so the fallback's
- * inability to also service a second fd costs nothing today; it
- * dies only if BOTH pidfd_open fails AND a real extra_fd caller
- * exists, which is not a case this tree has yet.
+ * this call already expects to have happened.
+ *
+ * THAT FALLBACK IS NO LONGER THE WHOLE STORY, since the start/stop
+ * control channel gave extra_fd a real caller: both call sites below
+ * now always pass the unit's listening control socket, live for the
+ * house's whole run rather than -1. A pidfd_open failure can no
+ * longer take the plain-waitpid early return above at all once a
+ * live socket exists to service -- dying here would mean a STOP
+ * request arriving during exactly this window blocks behind an
+ * unbounded waitpid the way invariant 1's Liveness section already
+ * refuses to reopen. So the fallback below tries signalfd(SIGCHLD)
+ * next, and only drops to a bounded 50ms poll()-plus-WNOHANG loop if
+ * that too fails -- never an unconditional die().
  */
+static int stop_requested;
+static unsigned ctl_budget;
+static const char *ctl_name;
+
+static void ctl_reply(int c, const char *s)
+{
+    ssize_t n = write(c, s, strlen(s));
+    (void)n;
+}
+
+/* Listen fd ready: one connection, one request, one reply, close.
+ * START/STOP while the child is live. START on a live house is OK
+ * (no second fork). STOP sets stop_requested and SIGTERMs. */
+static void handle_ctl_live(int listen_fd, pid_t live)
+{
+    int c = accept(listen_fd, NULL, NULL);
+    if (c < 0)
+        return; /* EAGAIN if poll raced a withdrawn connect */
+    char buf[16];
+    ssize_t n = read(c, buf, sizeof buf);
+    if (n == 6 && memcmp(buf, "START\n", 6) == 0) {
+        ctl_reply(c, "OK\n");
+    } else if (n == 5 && memcmp(buf, "STOP\n", 5) == 0) {
+        if (live > 0 && !stop_requested) {
+            stop_requested = 1;
+            kill(live, SIGTERM);
+        }
+        ctl_reply(c, "OK\n");
+    } else {
+        ctl_reply(c, "ERR bad request\n");
+    }
+    close(c);
+}
+
 static int wait_house(pid_t p, int extra_fd)
 {
     int pfd = (int)syscall(SYS_pidfd_open, p, 0U);
+    int wake = -1;
     if (pfd < 0) {
-        if (extra_fd >= 0)
-            die("pidfd_open");
-        int st = 0;
-        if (waitpid(p, &st, 0) < 0)
-            die("wait house");
-        return st;
+        /* Live socket cannot sit behind blocking waitpid: that
+         * re-enables the orphan-and-die path the last review closed.
+         * signalfd(SIGCHLD) is the second wakeup, no timeout.
+         * If signalfd also fails, poll the socket with a 50ms bound
+         * and waitpid WNOHANG. */
+        if (extra_fd < 0) {
+            int st = 0;
+            if (waitpid(p, &st, 0) < 0)
+                die("wait house");
+            return st;
+        }
+        sigset_t sc;
+        sigemptyset(&sc);
+        sigaddset(&sc, SIGCHLD);
+        sigprocmask(SIG_BLOCK, &sc, NULL);
+        wake = signalfd(-1, &sc, SFD_CLOEXEC);
     }
 
     struct pollfd pf[2];
     nfds_t n = 1;
-    pf[0].fd = pfd;
-    pf[0].events = POLLIN;
+    int timeout = -1;
+    if (pfd >= 0) {
+        pf[0].fd = pfd;
+        pf[0].events = POLLIN;
+    } else if (wake >= 0) {
+        pf[0].fd = wake;
+        pf[0].events = POLLIN;
+    } else {
+        pf[0].fd = extra_fd;
+        pf[0].events = POLLIN;
+        timeout = 50;
+    }
     pf[0].revents = 0;
-    if (extra_fd >= 0) {
+    if (extra_fd >= 0 && pf[0].fd != extra_fd) {
         pf[1].fd = extra_fd;
         pf[1].events = POLLIN;
         pf[1].revents = 0;
@@ -656,26 +722,59 @@ static int wait_house(pid_t p, int extra_fd)
     }
 
     for (;;) {
-        int pr = poll(pf, n, -1);
+        int pr = poll(pf, n, timeout);
         if (pr < 0) {
             if (errno == EINTR)
                 continue;
-            close(pfd);
+            if (pfd >= 0) close(pfd);
+            if (wake >= 0) close(wake);
             die("poll house");
         }
-        if (pf[0].revents & (POLLIN | POLLHUP | POLLERR))
-            break;
-        pf[0].revents = 0;
-        if (n == 2)
+        if (n == 2 && (pf[1].revents & (POLLIN | POLLHUP | POLLERR))) {
+            handle_ctl_live(extra_fd, p);
             pf[1].revents = 0;
+        }
+        if (timeout == 50) {
+            int st = 0;
+            pid_t r = waitpid(p, &st, WNOHANG);
+            if (r == p) {
+                if (pfd >= 0) close(pfd);
+                if (wake >= 0) close(wake);
+                return st;
+            }
+            if (pf[0].fd == extra_fd &&
+                (pf[0].revents & (POLLIN | POLLHUP | POLLERR))) {
+                handle_ctl_live(extra_fd, p);
+                pf[0].revents = 0;
+            }
+            continue;
+        }
+        if (pf[0].revents & (POLLIN | POLLHUP | POLLERR)) {
+            if (pfd >= 0)
+                break;
+            /* signalfd: drain and reap */
+            struct signalfd_siginfo si;
+            ssize_t ign = read(wake, &si, sizeof si);
+            (void)ign;
+            int st = 0;
+            pid_t r = waitpid(p, &st, WNOHANG);
+            if (r == p) {
+                close(wake);
+                return st;
+            }
+            pf[0].revents = 0;
+            continue;
+        }
+        pf[0].revents = 0;
     }
 
     int st = 0;
     if (waitpid(p, &st, 0) < 0) {
-        close(pfd);
+        if (pfd >= 0) close(pfd);
         die("wait house");
     }
-    close(pfd);
+    if (pfd >= 0) close(pfd);
+    if (wake >= 0) close(wake);
     return st;
 }
 
@@ -819,12 +918,67 @@ int main(int argc, char **argv)
     signal(SIGINT, on_term);
 
     int deaths = 0;
+    ctl_budget = budget;
+    ctl_name = name;
+    if (mkdir("/nw", 0755) < 0 && errno != EEXIST)
+        die("ctl parent");
+    if (mkdir(NW_CTL_DIR, 0755) < 0 && errno != EEXIST)
+        die("ctl dir");
+    char sockpath[sizeof(NW_CTL_DIR) + NW_NAME_LEN + 8];
+    if (snprintf(sockpath, sizeof sockpath, "%s/%s.sock",
+                 NW_CTL_DIR, name) >= (int)sizeof sockpath)
+        die("ctl path");
+    unlink(sockpath);
+    int lfd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC | SOCK_NONBLOCK, 0);
+    if (lfd < 0) die("ctl socket");
+    struct sockaddr_un addr;
+    memset(&addr, 0, sizeof addr);
+    addr.sun_family = AF_UNIX;
+    if (snprintf(addr.sun_path, sizeof addr.sun_path, "%s", sockpath)
+        >= (int)sizeof addr.sun_path)
+        die("ctl path");
+    if (bind(lfd, (struct sockaddr *)&addr, sizeof addr) < 0)
+        die("ctl bind");
+    if (listen(lfd, 4) < 0) die("ctl listen");
+
+    int stopped = 0;
 
     for (;;) {
         /* TERM during the previous house, or before this fork: do not
          * start another one so shutdown can finish. */
-        if (stopping)
+        if (stopping) {
+            unlink(sockpath);
             _exit(0);
+        }
+
+        if (stopped) {
+            struct pollfd pf;
+            pf.fd = lfd;
+            pf.events = POLLIN;
+            pf.revents = 0;
+            int pr = poll(&pf, 1, -1);
+            if (pr < 0) {
+                if (errno == EINTR) continue;
+                die("poll ctl");
+            }
+            int c = accept(lfd, NULL, NULL);
+            if (c < 0) continue; /* EAGAIN: poll readiness withdrawn */
+            char buf[16];
+            ssize_t n = read(c, buf, sizeof buf);
+            if (n == 6 && memcmp(buf, "START\n", 6) == 0) {
+                ctl_reply(c, "OK\n");
+                close(c);
+                stopped = 0;
+                continue;
+            } else if (n == 5 && memcmp(buf, "STOP\n", 5) == 0) {
+                ctl_reply(c, "OK\n");
+            } else {
+                ctl_reply(c, "ERR bad request\n");
+            }
+            close(c);
+            continue;
+        }
+
         pid_t p = fork();
         if (p < 0) die("fork house");
         if (p > 0)
@@ -850,25 +1004,36 @@ int main(int argc, char **argv)
         if (stopping) {
             if (p > 0)
                 kill(p, SIGTERM);
-            st = wait_house(p, -1);
+            st = wait_house(p, lfd);
             child = 0;
+            unlink(sockpath);
             _exit(WIFEXITED(st) ? WEXITSTATUS(st) : 0);
         }
-        st = wait_house(p, -1);
+        st = wait_house(p, lfd);
         child = 0;
 
         /* Same TERM that PID 1 sent to start shutdown. Restarting here
          * races the city closing: the house comes back after it was
          * asked to stop. No extra channel — the signal is the news. */
-        if (stopping)
+        if (stopping) {
+            unlink(sockpath);
             _exit(WIFEXITED(st) ? WEXITSTATUS(st) : 0);
+        }
+
+        if (stop_requested) {
+            stop_requested = 0;
+            stopped = 1;
+            continue;
+        }
 
         /* Only a oneshot is finished by a clean exit. For a longrun, exit 0
          * is as unexpected as any other exit and goes to the budget: a
          * compositor that quits or a daemon that reloads itself should come
          * back, not vanish silently. (D12) */
-        if (kind == NW_KIND_ONESHOT && WIFEXITED(st) && WEXITSTATUS(st) == 0)
+        if (kind == NW_KIND_ONESHOT && WIFEXITED(st) && WEXITSTATUS(st) == 0) {
+            unlink(sockpath);
             _exit(0);
+        }
 
         /* D18: budget is a hard total for the life of this supervisor.
          * There is no window. A death slower than the old window_s
@@ -897,6 +1062,7 @@ int main(int argc, char **argv)
                 snprintf(line, sizeof line, "spent %s death=%d/%u signal=%d",
                          name, deaths, (unsigned)budget, WTERMSIG(st));
             say(line);
+            unlink(sockpath);
             _exit(WIFEXITED(st) ? WEXITSTATUS(st) : 71);
         }
         if (WIFEXITED(st))

@@ -86,6 +86,7 @@
    13's shape applied to a house's data instead of its descriptors. One
    field avoids it. */
 #define NW_LAYER_DIR    "/nw/layers"
+#define NW_CTL_DIR      "/nw/ctl"
 #define NW_LAYER_UPPER  "upper"
 #define NW_LAYER_WORK   "work"
 /* A sized layer's backing file is a SIBLING of NW_LAYER_DIR/<id>, not
