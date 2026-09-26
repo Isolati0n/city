@@ -1,0 +1,163 @@
+name: sched_ext probe (one-off)
+
+# One-off measurement for docs/options/15-per-house-scheduling.md's
+# deferred accept-path: does a real GitHub-hosted ubuntu-24.04 runner
+# actually have CONFIG_SCHED_CLASS_EXT, and can a real scx scheduler be
+# loaded? Not part of this repo's own test suite -- meant to be deleted
+# once it has answered the question either way.
+
+on:
+  push:
+    paths:
+      - '.github/workflows/sched-ext-probe.yml'
+  workflow_dispatch: {}
+
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Kernel identity
+        run: |
+          echo "uname -a:"
+          uname -a
+          echo
+          echo "/etc/os-release:"
+          cat /etc/os-release
+
+      - name: 1. CONFIG_SCHED_CLASS_EXT in /proc/config.gz
+        id: config
+        run: |
+          set +e
+          if [ -r /proc/config.gz ]; then
+            LINE=$(zcat /proc/config.gz | grep -E "^CONFIG_SCHED_CLASS_EXT" )
+            if [ -z "$LINE" ]; then
+              LINE=$(zcat /proc/config.gz | grep -E "SCHED_CLASS_EXT")
+            fi
+            echo "raw line: ${LINE:-<no match at all, not even commented out>}"
+            if echo "$LINE" | grep -q "^CONFIG_SCHED_CLASS_EXT=y"; then
+              echo "answer=yes" >> "$GITHUB_OUTPUT"
+            else
+              echo "answer=no" >> "$GITHUB_OUTPUT"
+            fi
+          else
+            echo "/proc/config.gz not readable on this runner"
+            echo "answer=unknown" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: 2. /sys/kernel/sched_ext existence
+        id: sysfs
+        run: |
+          if [ -d /sys/kernel/sched_ext ]; then
+            echo "EXISTS:"
+            ls -la /sys/kernel/sched_ext
+            echo "answer=yes" >> "$GITHUB_OUTPUT"
+          else
+            echo "/sys/kernel/sched_ext does NOT exist"
+            echo "answer=no" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: 3. sched_ext_ops type in the running kernel's own BTF
+        id: btf
+        run: |
+          if [ -r /sys/kernel/btf/vmlinux ]; then
+            if grep -a -q "sched_ext_ops" /sys/kernel/btf/vmlinux; then
+              echo "FOUND: sched_ext_ops string is present in vmlinux BTF"
+              echo "answer=yes" >> "$GITHUB_OUTPUT"
+            else
+              echo "NOT FOUND: no sched_ext_ops string in vmlinux BTF"
+              echo "answer=no" >> "$GITHUB_OUTPUT"
+            fi
+          else
+            echo "/sys/kernel/btf/vmlinux not readable on this runner"
+            echo "answer=unknown" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: 4. bpftool availability
+        id: bpftool
+        run: |
+          if command -v bpftool >/dev/null 2>&1; then
+            echo "present: $(command -v bpftool)"
+            bpftool version || true
+            echo "answer=yes" >> "$GITHUB_OUTPUT"
+          else
+            echo "bpftool NOT found on PATH"
+            echo "answer=no" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Measurement summary
+        run: |
+          echo "CONFIG_SCHED_CLASS_EXT=y ......... ${{ steps.config.outputs.answer }}"
+          echo "/sys/kernel/sched_ext exists ...... ${{ steps.sysfs.outputs.answer }}"
+          echo "sched_ext_ops in vmlinux BTF ...... ${{ steps.btf.outputs.answer }}"
+          echo "bpftool on PATH ................... ${{ steps.bpftool.outputs.answer }}"
+
+      - name: If NOT supported, report and stop here
+        if: steps.config.outputs.answer != 'yes'
+        run: |
+          echo "CONCLUSION: this ubuntu-24.04 GitHub-hosted runner does NOT"
+          echo "have CONFIG_SCHED_CLASS_EXT compiled in, despite running a"
+          echo "kernel newer than sched_ext's 6.12 floor. That falsifies the"
+          echo "assumption cheaply: the search for a capable environment"
+          echo "moves to a different distro's GitHub-hosted runner, or"
+          echo "self-hosting, rather than assuming this one works."
+          echo "uname -r: $(uname -r)"
+
+      - name: If supported, check for the scx package
+        id: scxpkg
+        if: steps.config.outputs.answer == 'yes'
+        run: |
+          set +e
+          sudo apt-get update -qq
+          if apt-cache show scx >/dev/null 2>&1; then
+            echo "found=scx" >> "$GITHUB_OUTPUT"
+          elif apt-cache show scx-scheds >/dev/null 2>&1; then
+            echo "found=scx-scheds" >> "$GITHUB_OUTPUT"
+          else
+            echo "No scx / scx-scheds package available via apt-cache show."
+            echo "found=none" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install scx package
+        if: steps.config.outputs.answer == 'yes' && steps.scxpkg.outputs.found != 'none'
+        run: |
+          sudo apt-get install -y ${{ steps.scxpkg.outputs.found }}
+          echo "Installed package contents:"
+          dpkg -L ${{ steps.scxpkg.outputs.found }} | grep -i scx
+
+      - name: Run scx_simple briefly and prove it engaged
+        if: steps.config.outputs.answer == 'yes' && steps.scxpkg.outputs.found != 'none'
+        run: |
+          set +e
+          echo "=== state BEFORE ==="
+          cat /sys/kernel/sched_ext/state 2>&1
+
+          SCX_BIN=$(command -v scx_simple || dpkg -L "${{ steps.scxpkg.outputs.found }}" | grep -m1 'bin/scx_simple')
+          if [ -z "$SCX_BIN" ]; then
+            echo "scx_simple binary not found after install; stopping here."
+            exit 0
+          fi
+          echo "using: $SCX_BIN"
+
+          sudo "$SCX_BIN" &
+          SCX_PID=$!
+          sleep 3
+
+          echo "=== state DURING (scx_simple running, pid $SCX_PID) ==="
+          cat /sys/kernel/sched_ext/state 2>&1
+          ps -p "$SCX_PID" -o pid,cmd 2>&1
+
+          sudo kill -INT "$SCX_PID" 2>&1
+          wait "$SCX_PID" 2>&1
+          sleep 1
+
+          echo "=== state AFTER (scx_simple stopped) ==="
+          cat /sys/kernel/sched_ext/state 2>&1
+
+      - name: If supported but no packaged scx, report and stop
+        if: steps.config.outputs.answer == 'yes' && steps.scxpkg.outputs.found == 'none'
+        run: |
+          echo "CONFIG_SCHED_CLASS_EXT=y on this runner, but no scx /"
+          echo "scx-scheds package is available via apt-cache show -- not"
+          echo "building from source in this probe, per instructions."
+          echo "This still confirms the KERNEL capability; a real policy"
+          echo "load is unconfirmed here."
