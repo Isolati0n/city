@@ -876,3 +876,25 @@ unpaired-absence	tests/run.py	expect(_comm(house_pid) is None,
 # used in test_ctl_stop_does_not_count.
 unpaired-absence	tests/run.py	expect("FAIL pidfd_open" not in out, f"died on pidfd_open\n{out}")
 unpaired-absence	tests/run.py	expect("restart ctlfb" not in out, f"STOP counted under fallback\n{out}")
+
+# false positive: same shape as the ctlfb acks directly above, one test
+# further down the tier ladder. "FAIL" absence is paired with the real
+# kill/relaunch proof already run earlier in the same test body
+# (_comm(house_pid) is None after STOP, relaunched_pid is not None and
+# != house_pid after START) -- by the time this line runs, the
+# supervisor has already been shown to genuinely reap and refork under
+# tier 3, so this is confirming no ADDITIONAL crash, not standing in
+# for the only proof of activity. "restart ctltier3" absence is paired
+# the same way test_ctl_pidfd_fallback_with_socket's "restart ctlfb"
+# is: the real process-table check just above it. `control` and
+# `tcb-review` each independently confirmed both pairings by mutation
+# (disabling tier-3 socket servicing, and disabling START's relaunch)
+# and by strace, rather than trusting the log strings alone.
+unpaired-absence	tests/run.py	expect("FAIL" not in out, f"supervisor died under tier 3\n{out}")
+unpaired-absence	tests/run.py	expect("restart ctltier3" not in out, f"STOP counted under tier 3\n{out}")
+
+# false positive: same shape as the "one syscall" acks in tools/mkboot.sh
+# above -- "one syscall in practice" names a specific, ordinary fact
+# about how a small write(2)/sendall() is delivered on this platform,
+# not a count of anything enumerated nearby that could grow stale.
+prose-count	docs/options/11-start-stop-channel.md	one syscall in practice), so this is a latent protocol gap rather than

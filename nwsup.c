@@ -643,8 +643,6 @@ static void on_term(int sig)
  * that too fails -- never an unconditional die().
  */
 static int stop_requested;
-static unsigned ctl_budget;
-static const char *ctl_name;
 
 static void ctl_reply(int c, const char *s)
 {
@@ -918,8 +916,6 @@ int main(int argc, char **argv)
     signal(SIGINT, on_term);
 
     int deaths = 0;
-    ctl_budget = budget;
-    ctl_name = name;
     if (mkdir("/nw", 0755) < 0 && errno != EEXIST)
         die("ctl parent");
     if (mkdir(NW_CTL_DIR, 0755) < 0 && errno != EEXIST)

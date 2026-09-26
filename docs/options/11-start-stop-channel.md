@@ -58,6 +58,16 @@ descriptors invariant 5 already gives every house unconditionally: a
 baseline supervisor behaviour, not a declared field, so it needs no row in
 the mechanism-rule table any more than the log pipes do.
 
+**The socket file is `unlink()`ed on every normal terminal exit path,
+and not on a `die()`.** `tcb-review` swept every `die()` inside `nw-sup`
+after the control socket is created and found none of them unlink it —
+the same accumulation class `harness.md` already documents for
+`NW_BRICK_DIR` and `NW_LAYER_DIR` images, not a new one. Harmless in
+the sense that matters: the next start of the same unit `unlink()`s the
+path before binding, so a stale file never wedges a boot. Left as an
+accepted accumulation rather than fixed, for the same reason the brick
+and layer cases are.
+
 ### A boundary this design runs into and does not get to decide alone
 
 Making `nw-sup` able to *accept a connection while also waiting for its
@@ -101,6 +111,17 @@ of two fixed strings:
 - Response: exactly one line back over the same connection, then close.
   `"OK\n"` on success, `"ERR <reason>\n"` on refusal — synchronous, so the
   caller learns the result without a second channel or a poll of its own.
+
+**HYPOTHESIS, not demonstrated: the implementation reads the request
+with one `read(2)` and no reassembly loop.** `tcb-review` flagged that
+POSIX does not guarantee an `AF_UNIX SOCK_STREAM` write this small
+arrives at the reader in a single `read()`, so a request split across
+two writes on the caller's side would come back short and be refused
+as malformed rather than honoured. Not exercised by anything in the
+suite (a single `sendall()` of five or six bytes is effectively always
+one syscall in practice), so this is a latent protocol gap rather than
+a failing test — recorded here per the project's own rule that a
+hypothesis is labelled as one, not silently treated as covered.
 
 ## Authorization
 
@@ -150,15 +171,47 @@ entire access-control story rests on namespace visibility mattering.
   granted, assert the death counter's behaviour on the next natural
   crash.
 - **A `STOP` request and an unrelated crash arriving "at the same time"**
-  — this reads like a race and, under the poll-based design above, is not
-  one: `nw-sup`'s loop processes one readiness event per iteration, so it
-  either observes the socket request first (and must mark the pending
-  signal as "requested," before sending it, so the reap path can tell a
-  requested exit from an unrelated one) or the child's exit first (and
-  reaps it as an ordinary, unrequested death). Ordering is deterministic
-  per iteration; there is no window where both are true at once. This
-  needs a test once built, but it is not a design question the way the
-  three below are.
+  — `nw-sup`'s loop processes one readiness event per iteration, so the
+  internal state is never torn: exactly one of the `stop_requested` path
+  or the ordinary death/restart-accounting path runs, never both, never
+  neither. That much is deterministic and is what `test_ctl_stop_does_not_count`
+  pins. **"There is no window where both are true at once" overstated
+  what that buys, and is corrected here rather than left standing** —
+  `tcb-review` reproduced a real, sub-millisecond window with an
+  external `SIGKILL` timed against a `STOP`: at zero delay the unrelated
+  death is silently reclassified as "stopped" (no `restart`/`spent`
+  line, budget untouched); the ordering the loop picks is whichever
+  readiness bit `poll()` reports first, not whichever event genuinely
+  happened first in real time, and `poll()` cannot distinguish those
+  when both arrive in the same call. The window is real and narrow, not
+  absent.
+
+## A defect this design did not name: cross-generation misdirection
+
+Found by `tcb-review` while checking the paragraph above, and not
+covered by any test in the suite. The wire protocol names a *unit*
+(`NW_CTL_DIR/<name>.sock`), never a process incarnation, so a `STOP`
+that arrives while the unit is already mid-restart from an unrelated
+death can sit unaccepted in the kernel backlog and then get serviced
+against the **new**, freshly-forked generation the moment `nw-sup`
+calls `wait_house()` for it — reproduced: the original death is
+correctly logged (`restart … death=…`), the `STOP` connection is
+accepted afterward, and the second generation is killed via the
+`stop_requested` path, which by design logs nothing and does not touch
+the budget. From the caller's side: one `STOP` sent, one `OK` received.
+From the plan's side: a brand-new, healthy instance of the unit died
+within about a second of being forked, for a reason nothing in the log
+records.
+
+This is **reserved for the operator, alongside the other open questions
+below** — it is a consequence of the socket being keyed by unit rather
+than by incarnation, which is deliberate (the wire protocol carries no
+identifier for either, per this doc's own minimalism), and there is no
+way to close it without a protocol change: a generation token in the
+wire format, checked by the caller or the channel, is a design decision
+and not a one-line fix. Landing that needs a paired test the way every
+other refusal in this file does — a legal `STOP` that must be accepted,
+and a stale one that must be refused for naming the wrong generation.
 
 ## Reserved for the operator — not decided here
 

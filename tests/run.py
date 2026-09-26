@@ -3420,7 +3420,18 @@ def test_ctl_stop_does_not_count():
 
 def test_ctl_start_relaunch_and_spent():
     """START relaunches a stopped house. START on spent cannot
-    connect: the supervisor exited and unlinked the socket."""
+    connect: the supervisor exited and unlinked the socket.
+
+    `control` found the original version of this test's START-side
+    checks asserted only the wire reply (`== "OK\\n"`), never the
+    effect -- and that handle_ctl_live() replies OK to START whether
+    or not `stopped` is actually cleared afterward, so a mutation that
+    left `stopped` permanently set (START becomes a silent, PERMANENT
+    no-op) still passed every assertion here. Fixed the same way the
+    STOP-side checks already were: confirm the sleeper fixture is
+    actually gone after STOP and a genuinely NEW process (a different
+    pid, not the one STOP killed) exists after START, and that a
+    second START does not fork yet another one on top of it."""
     os.makedirs("/nw/ctl", exist_ok=True)
     env = os.environ.copy()
     env["NW_KIND"] = "1"
@@ -3444,11 +3455,27 @@ def test_ctl_start_relaunch_and_spent():
         [f"{BIN}/nw-sup", _sleeper("ctlstart"), "ctlstart"],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
     time.sleep(0.2)
+    house_pid = _find_by_comm(proc.pid, "sleep")
+    expect(house_pid is not None,
+           "sleeper never reached exec -- nothing for STOP to kill")
     expect(_ctl("ctlstart", b"STOP\n") == "OK\n", "stop before start")
     time.sleep(0.15)
+    expect(_comm(house_pid) is None,
+           "STOP replied OK but the original sleeper is still alive")
     expect(_ctl("ctlstart", b"START\n") == "OK\n", "start after stop")
     time.sleep(0.15)
+    relaunched_pid = _find_by_comm(proc.pid, "sleep")
+    expect(relaunched_pid is not None,
+           "START replied OK but the house never relaunched -- the "
+           "wire reply alone does not prove a fork happened")
+    expect(relaunched_pid != house_pid,
+           "the 'relaunched' process is the SAME pid STOP killed -- "
+           "START did not actually fork a new house")
     expect(_ctl("ctlstart", b"START\n") == "OK\n", "idempotent start")
+    time.sleep(0.15)
+    expect(_find_by_comm(proc.pid, "sleep") == relaunched_pid,
+           "a second START on an already-running house forked again "
+           "instead of being a no-op")
     proc.kill()
     print("ok ctl-start-relaunch-and-spent")
 
@@ -3530,10 +3557,21 @@ def test_ctl_pidfd_fallback_with_socket():
     expect(_comm(house_pid) is None,
            "fallback STOP replied OK but the sleeper is still alive -- "
            "the same real-kill check test_ctl_stop_does_not_count uses, "
-           "here under the signalfd/50ms-poll fallback path instead of "
-           "the pidfd path")
+           "here under the signalfd fallback path instead of the pidfd "
+           "path. NOT the 50ms-poll tier: `control` confirmed via strace "
+           "that this shim, which only forces pidfd_open to ENOSYS, "
+           "lands on signalfd every time. The third tier has its own "
+           "test, test_ctl_tier3_fallback_with_socket, which forces "
+           "signalfd to ENOSYS as well.")
     r2 = _ctl("ctlfb", b"START\n")
     expect(r2 == "OK\n", f"fallback START was {r2!r}")
+    time.sleep(0.15)
+    relaunched_pid = _find_by_comm(proc.pid, "sleep")
+    expect(relaunched_pid is not None,
+           "fallback START replied OK but the house never relaunched")
+    expect(relaunched_pid != house_pid,
+           "the 'relaunched' process under the fallback is the SAME "
+           "pid STOP killed -- START did not actually fork a new house")
     os.kill(proc.pid, 9)
     proc.wait(timeout=2)
     lg.close()
@@ -3543,6 +3581,72 @@ def test_ctl_pidfd_fallback_with_socket():
     expect("FAIL pidfd_open" not in out, f"died on pidfd_open\n{out}")
     expect("restart ctlfb" not in out, f"STOP counted under fallback\n{out}")
     print("ok ctl-pidfd-fallback-with-socket")
+
+
+def test_ctl_tier3_fallback_with_socket():
+    """pidfd_open AND signalfd both ENOSYS: the third tier, a bounded
+    50ms poll()+WNOHANG loop, must still reap the death and service
+    the control socket -- not merely compile.
+
+    test_ctl_pidfd_fallback_with_socket only forces pidfd_open, which
+    lands on the second tier (signalfd) every time -- confirmed by
+    `control` via strace, and stated in that test's own docstring. This
+    shim (tests/block_both.so.c) additionally overrides signalfd(2)
+    itself, so nothing in wait_house() can reach any wakeup but the
+    tier-3 loop. Independently, `tcb-review`'s adversarial pass built
+    the same two-syscall shim from scratch and confirmed by hand that
+    the tier activates and STOP still works under it; this test is the
+    suite's own permanent version of that check."""
+    os.makedirs("/nw/ctl", exist_ok=True)
+    block_src = os.path.join(ROOT, "tests", "block_both.so.c")
+    block_so = f"{WORK}/block_both.so"
+    c = subprocess.run(
+        ["gcc", "-shared", "-fPIC", "-O2", "-o", block_so, block_src, "-ldl"],
+        capture_output=True, text=True)
+    expect(c.returncode == 0, f"block_both.so\n{c.stderr}")
+    env = os.environ.copy()
+    env["NW_KIND"] = "1"
+    env["NW_BUDGET"] = "3"
+    env["NW_LIDS"] = "0"
+    env["LD_PRELOAD"] = block_so
+    log = f"{WORK}/ctltier3.log"
+    lg = open(log, "w")
+    proc = subprocess.Popen(
+        [f"{BIN}/nw-sup", _sleeper("ctltier3"), "ctltier3"],
+        stdout=lg, stderr=lg, env=env)
+    time.sleep(0.25)
+    house_pid = _find_by_comm(proc.pid, "sleep")
+    expect(house_pid is not None,
+           "sleeper never reached exec under the tier-3 fallback -- STOP "
+           "would have nothing to kill")
+    r = _ctl("ctltier3", b"STOP\n")
+    expect(r == "OK\n", f"tier-3 STOP was {r!r}")
+    time.sleep(0.2)
+    expect(_comm(house_pid) is None,
+           "tier-3 STOP replied OK but the sleeper is still alive -- the "
+           "bounded 50ms poll()+WNOHANG loop did not actually reach the "
+           "kill or did not reap it")
+    r2 = _ctl("ctltier3", b"START\n")
+    expect(r2 == "OK\n", f"tier-3 START was {r2!r}")
+    time.sleep(0.2)
+    relaunched_pid = _find_by_comm(proc.pid, "sleep")
+    expect(relaunched_pid is not None,
+           "tier-3 START replied OK but the house never relaunched")
+    expect(relaunched_pid != house_pid,
+           "the 'relaunched' process under tier 3 is the SAME pid STOP "
+           "killed -- START did not actually fork a new house")
+    os.kill(proc.pid, 9)
+    proc.wait(timeout=2)
+    lg.close()
+    out = open(log).read()
+    expect("intercepted pidfd_open, forcing ENOSYS" in out,
+           f"pidfd shim half never fired\n{out}")
+    expect("intercepted signalfd, forcing ENOSYS" in out,
+           f"signalfd shim half never fired -- this run exercised tier 2, "
+           f"not tier 3\n{out}")
+    expect("FAIL" not in out, f"supervisor died under tier 3\n{out}")
+    expect("restart ctltier3" not in out, f"STOP counted under tier 3\n{out}")
+    print("ok ctl-tier3-fallback-with-socket")
 
 
 def test_wait_is_poll_not_spin():
@@ -9919,6 +10023,7 @@ def main():
         test_ctl_stop_does_not_count, test_ctl_start_relaunch_and_spent,
         test_ctl_malformed_refused, test_ctl_socket_and_death_together,
         test_ctl_pidfd_fallback_with_socket,
+        test_ctl_tier3_fallback_with_socket,
         test_wait_is_poll_not_spin,
         test_poll_set_takes_a_second_fd,
         test_term_signal, test_dawn_real_boot,

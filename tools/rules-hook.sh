@@ -174,6 +174,11 @@ UNOWNED = [
      "LD_PRELOAD shim forcing pidfd_open ENOSYS, used by "
      "test_pidfd_open_failure_falls_back. Not TCB; not a house. The "
      "assertion lives in tests/run.py."),
+    ("tests/block_both.so.c",
+     "LD_PRELOAD shim forcing pidfd_open AND signalfd ENOSYS, used by "
+     "test_ctl_tier3_fallback_with_socket to exercise wait_house's "
+     "third fallback tier. Not TCB; not a house. The assertion lives "
+     "in tests/run.py."),
     ("install-agents.sh",
      "the brief gate, and the caller of this file's --check. No rules "
      "file OWNS the gate tooling; what they say about it is a sentence "
