@@ -1025,3 +1025,24 @@ prose-count	docs/options/14-shared-store.md	against the pre-existing three contr
 prose-count	store.c	* so the result is always one complete file with these exact
 # idiom: describes the CLI's own output shape, not a count of anything.
 prose-count	tests/store_probe.c	* Prints one line: RESULT rc=<rc> hex=<hex>
+
+# item #15 (per-house scheduling / sched_ext reject path): false
+# positives, checked individually.
+# "09" is a filename reference (docs/options/09), not a count.
+prose-count	blob.h	* (docs/options/09 was the file-ownership question and was
+# genuine, stable count of the function's own two checks, described
+# immediately beside them -- not a count that can drift silently.
+prose-count	nwsup.c	* Two checks, cheapest first. /sys/kernel/sched_ext is the kobject the
+# describes a single, specific CBMC assertion (there is only one), not
+# a count that could grow or shrink independent of the sentence.
+prose-count	proofs/README.md	`nwcheck.c` moves exactly one assertion in `caller_nw_check` from SUCCESS
+# PAIRED, just not with the identical string: each of these two tests
+# asserts the REAL reason string IS present a few lines above (line
+# 5955 / 6029: "sched-ext value" / "sched-ext unsupported", both `in
+# out`), then asserts the OTHER possible reason is absent -- proving
+# the two guards produce distinguishable outcomes, not that the
+# mechanism ran at all. The heuristic's pairing check looks for the
+# same string's presence nearby; these pair two DIFFERENT strings on
+# purpose, which is why it reads as unpaired.
+unpaired-absence	tests/run.py	expect("sched-ext unsupported" not in out,
+unpaired-absence	tests/run.py	expect("sched-ext no policy artifact" not in out,

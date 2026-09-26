@@ -17,7 +17,7 @@
  * a rule for whoever changes the layout, not something the code enforces.
  * The asserts below say so in every message they print, because that is
  * the one moment a reader is guaranteed to be looking. */
-#define NW_MAGIC        "NWPLAN09"
+#define NW_MAGIC        "NWPLAN10"
 #define NW_NAME_LEN     32
 #define NW_PATH_LEN     128
 /* PHASE 3: THE PLAN CARRIES A HASH, NOT A PATH. `brick` is 32 raw bytes of
@@ -253,6 +253,23 @@ _Static_assert((NW_DUP_SLOTS & (NW_DUP_SLOTS - 1)) == 0,
 #define NW_SCHED_IDLE    3u
 #define NW_SCHED_MAX     NW_SCHED_IDLE
 
+/* docs/options/15-per-house-scheduling.md. A DIFFERENT mechanism from
+ * NW_SCHED_* above -- that is sched_setscheduler(2)'s classic policy
+ * (SCHED_OTHER/BATCH/IDLE), this is sched_ext: a scheduling policy
+ * loaded as a kernel-verified BPF program (mainline since Linux 6.12,
+ * gated on CONFIG_SCHED_CLASS_EXT). Spelled NW_SCHED_EXT_* throughout,
+ * never NW_SCHED_*, and keyed in the plan as `sched-ext=`, never
+ * `sched=` -- reusing that name would collide two mechanisms onto one
+ * key, found and refused before any code was written for it.
+ *
+ * This round's closed set is exactly one name: DEFAULT, the no-op
+ * policy that proves the plumbing without needing a working BPF
+ * artifact this round's environment cannot build (see the design note
+ * for the measurement). UNSET (0) means "no sched-ext declared." */
+#define NW_SCHED_EXT_UNSET   0u
+#define NW_SCHED_EXT_DEFAULT 1u
+#define NW_SCHED_EXT_MAX     NW_SCHED_EXT_DEFAULT
+
 /* cgroup v2's own range for cpu.weight and the kernel's for nice. Named
  * here so the checker and the baker are quoting the same bound rather
  * than each spelling a literal -- the drift class invariant 3 is about,
@@ -350,7 +367,22 @@ struct nw_unit {
     uint8_t  kind;       /* NW_KIND_* — was 'critical' until 2026-09-10 */
     uint8_t  budget;     /* deaths for the life of nw-sup; 0 = no restart */
     uint8_t  lids;
-    uint8_t  _pad;       /* must stay zero; nwcheck rejects a dirty spare */
+    /* WAS `_pad`, "must stay zero; nwcheck rejects a dirty spare," until
+     * docs/options/15-per-house-scheduling.md gave the reserved spare its
+     * first meaning: NW_SCHED_EXT_*, 0 (UNSET) = no sched-ext declared.
+     *
+     * An old blob is still correctly "no sched-ext declared" under the
+     * new meaning -- the byte's OLD invariant (every sealed blob has it
+     * at 0) and the new field's UNSET value coincide, so no existing
+     * blob is reinterpreted. That was argued here as a reason a magic
+     * bump was not NEEDED for safety, and it is still true; it is not,
+     * on its own, a reason not to bump. `test_magic_moves_with_the_
+     * layout` hashes this declaration's own text (name included, not
+     * only offset/extent/type), found the rename, and required one
+     * regardless -- correctly: the ledger's job is to notice this file
+     * changed, not to adjudicate whether the change was safe. NW_MAGIC
+     * moved NWPLAN09 -> NWPLAN10, `plan-formats.txt` has the row. */
+    uint8_t  sched_ext;  /* NW_SCHED_EXT_*; NW_SCHED_EXT_UNSET = unset */
     struct nw_res res;   /* every field unset = unlimited; see nw_res */
 } __attribute__((packed));
 
@@ -406,16 +438,23 @@ struct nw_hdr {
  * and what the struct TOTALS, and nothing else -- not how far a member
  * reaches, not what it is.
  *
- * Caught now: a field added, removed, resized, retyped or MOVED, and
- * `_pad` reused for anything of a different offset, extent or type.
+ * Caught now: a field added, removed, resized, retyped or MOVED, and the
+ * spare byte (was `_pad`, now `sched_ext` -- see the field itself)
+ * reused for anything of a different offset, extent or type.
  *
  * NOT caught, and there is no version field to catch it with: changing
- * what a byte MEANS while leaving it where it is -- redefining `kind`'s
- * values, say. Only the magic can carry that, and nothing forces the
- * magic to move when the layout does, which is why every message below
- * says so at the one moment a reader is guaranteed to be looking. That
- * gap is real and named here rather than papered over; it has no options
- * doc yet (docs/options/09 was the file-ownership question and was
+ * what a byte MEANS while leaving it, its NAME and its declaration text
+ * exactly as they are -- redefining `kind`'s values without renaming
+ * `kind`, say. (`_pad`'s reuse as `sched_ext` is NOT an example of this
+ * gap, precisely because the rename changed the declaration text: the
+ * ledger's signature hashes that text, so it caught the change and
+ * NW_MAGIC moved, NWPLAN09 -> NWPLAN10, whether or not the reuse was
+ * independently argued safe.) Only the magic can carry a meaning change
+ * in general, and nothing forces the magic to move when the layout
+ * does under an unchanged name, which is why every message below says
+ * so at the one moment a reader is guaranteed to be looking. That gap
+ * is real and named here rather than papered over; it has no options doc yet
+ * (docs/options/09 was the file-ownership question and was
  * deleted at 5422f5b).
  *
  * NOT caught either: __attribute__((packed)) is asserted by nothing. It
@@ -476,7 +515,7 @@ NW_AT(nw_unit, layer,     192);  NW_EXTENT(nw_unit, layer,     NW_NAME_LEN);
 NW_AT(nw_unit, kind,      224);  NW_TYPE(nw_unit, kind,   uint8_t);
 NW_AT(nw_unit, budget,    225);  NW_TYPE(nw_unit, budget, uint8_t);
 NW_AT(nw_unit, lids,      226);  NW_TYPE(nw_unit, lids,   uint8_t);
-NW_AT(nw_unit, _pad,      227);  NW_TYPE(nw_unit, _pad,   uint8_t);
+NW_AT(nw_unit, sched_ext, 227);  NW_TYPE(nw_unit, sched_ext, uint8_t);
 NW_AT(nw_unit, res,       228);  NW_EXTENT(nw_unit, res,  NW_RES_SIZE);
 
 /* The block's own members, for the same reason the unit's are here: an
@@ -556,7 +595,12 @@ enum {
     NW_E_NAME = 5,
     NW_E_DUPNAME = 6,
     NW_E_PATH = 7,
-    NW_E_RSV = 8,
+    /* NW_E_RSV was "reserved byte nonzero" -- the spare's old, sole
+     * meaning. Renamed in place (same numeric code, same slot in
+     * errs[]) rather than retired and re-added at the end, when the
+     * spare gained its first real meaning: docs/options/15-per-house-
+     * scheduling.md. */
+    NW_E_SCHEDEXT = 8,
     NW_E_LIDS = 9,
     NW_E_KIND = 10,
     /* NW_E_BRICK was 11 and is RETIRED, not renumbered around: phase 3 made

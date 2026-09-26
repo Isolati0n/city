@@ -19,6 +19,7 @@
 #include <signal.h>
 #include <poll.h>
 #include <sys/ioctl.h>
+#include <sys/mman.h>
 #include <sys/mount.h>
 #include <sys/prctl.h>
 #include <sys/signalfd.h>
@@ -581,6 +582,83 @@ static void lid_landlock(char *const *binds, int nbinds)
     say("lid landlock");
 }
 
+/* docs/options/15-per-house-scheduling.md. Real, syscall/kernel-data
+ * level, not simulated -- the same shape sys_landlock_create_ruleset()
+ * already uses for Landlock: ask the kernel itself, not a proxy for it.
+ *
+ * Two checks, cheapest first. /sys/kernel/sched_ext is the kobject the
+ * scheduler class creates unconditionally the moment it initialises, so
+ * its absence alone is decisive on a kernel where the feature was left
+ * out of the build (measured on this project's own sandbox: absent,
+ * because CONFIG_SCHED_CLASS_EXT is not set there). Where the directory
+ * exists, the second check confirms the specific struct_ops type this
+ * mechanism needs is actually registered, by scanning the running
+ * kernel's own exported BTF for the literal type name -- the same
+ * authoritative source a userspace loader (libbpf, bpftool) has to
+ * resolve before it could load a struct_ops program against it, and the
+ * same file this feature's own design note measured by hand before a
+ * line of this function was written. No allocation: mmap rather than a
+ * read into a buffer, scanned in place, unmapped immediately. Bounded:
+ * the scan is over exactly the kernel-reported size of the file, no
+ * recursion, no unbounded loop. */
+#define NW_SCHED_EXT_MARKER "/sys/kernel/sched_ext"
+#define NW_SCHED_EXT_BTF    "/sys/kernel/btf/vmlinux"
+#define NW_SCHED_EXT_TYPE   "sched_ext_ops"
+
+static int sched_ext_supported(void)
+{
+    struct stat mst;
+    if (stat(NW_SCHED_EXT_MARKER, &mst) < 0) return 0;
+
+    int fd = open(NW_SCHED_EXT_BTF, O_RDONLY | O_CLOEXEC);
+    if (fd < 0) return 0;
+    struct stat bst;
+    if (fstat(fd, &bst) < 0 || bst.st_size <= 0) { close(fd); return 0; }
+    void *m = mmap(NULL, (size_t)bst.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
+    close(fd);
+    if (m == MAP_FAILED) return 0;
+
+    const char *needle = NW_SCHED_EXT_TYPE;
+    size_t nlen = strlen(needle);
+    const unsigned char *base = m;
+    int found = 0;
+    for (size_t i = 0; i + nlen <= (size_t)bst.st_size; i++) {
+        if (memcmp(base + i, needle, nlen) == 0) { found = 1; break; }
+    }
+    munmap(m, (size_t)bst.st_size);
+    return found;
+}
+
+/* This round names exactly one policy, NW_SCHED_EXT_DEFAULT -- the
+ * brief's own "no-op, prove the plumbing" policy -- and there is no
+ * working BPF artifact for it yet (docs/options/15's own measurement:
+ * nothing available to this project can build one). So the only
+ * behavior this function can have TODAY is the refusal, which is real:
+ * it dies loudly rather than starting a house whose plan says it is
+ * scheduled and is not, the same rule every other lid already follows.
+ * Adding a real accept path later means adding a branch here, not
+ * replacing this one. */
+static void apply_sched_ext(unsigned sched_ext)
+{
+    if (sched_ext == NW_SCHED_EXT_UNSET) return;
+    if (!sched_ext_supported())
+        die("sched-ext unsupported");
+    /* tcb-review's MEDIUM finding: a bare `say()` here, on a kernel that
+     * DOES pass sched_ext_supported(), would print the same line every
+     * other successful lid application prints while loading no policy
+     * at all -- nw_res's own defect ("declared, validated... and doing
+     * nothing") reached through a branch nothing available to this
+     * project can exercise to notice. There are exactly two honest
+     * outcomes for a declared sched-ext=: refused, by name, or loaded
+     * and verified. There is no third one, so until a real loader
+     * exists this branch is not a success path either -- it dies with
+     * a DIFFERENT, distinguishing reason from the capability refusal
+     * above, matching the design note's answer to question 5. Replace
+     * this whole branch, not the die() call inside it, the day a real
+     * policy artifact exists. */
+    die("sched-ext no policy artifact");
+}
+
 static pid_t child;
 static volatile sig_atomic_t stopping;
 
@@ -946,10 +1024,16 @@ int main(int argc, char **argv)
     const char *path = argv[1];
     const char *name = argv[2];
     unsigned lids = 0, budget = 0, kind = NW_KIND_LONGRUN;
+    unsigned sched_ext = NW_SCHED_EXT_UNSET;
     const char *e;
     if ((e = getenv("NW_LIDS"))) lids = (unsigned)atoi(e);
     if ((e = getenv("NW_BUDGET"))) budget = (unsigned)atoi(e);
     if ((e = getenv("NW_KIND"))) kind = (unsigned)atoi(e);
+    /* RE-VALIDATED for the same reason NW_BRICK/NW_LAYER are: nw-sup reads
+     * its unit from the environment, not the sealed blob, so nothing the
+     * baker or nw-check did stands behind this value. */
+    if ((e = getenv("NW_SCHED_EXT"))) sched_ext = (unsigned)atoi(e);
+    if (sched_ext > NW_SCHED_EXT_MAX) die("sched-ext value");
     /* NW_BRICK IS 64 HEX CHARACTERS, AND THIS RE-VALIDATES THEM. The sealed
      * plan carries 32 raw bytes, which cannot express a path traversal at
      * all -- but nw-spawn has to turn them into text to cross an env var,
@@ -1146,6 +1230,22 @@ int main(int argc, char **argv)
         if (p == 0) {
             if (lids & NW_LID_NEWNET) lid_netns();
             if (lids & NW_LID_NEWNS) lid_newns();
+            /* BEFORE lid_brick(), not after: tcb-review's HIGH finding.
+             * sched_ext_supported() asks a question about the MACHINE's
+             * kernel (/sys/kernel/sched_ext, /sys/kernel/btf/vmlinux),
+             * and lid_brick()'s pivot_root makes the house's `/` the
+             * brick -- after which nothing under the machine's /sys is
+             * reachable at all unless the plan happens to bind it. Applied
+             * after the pivot, EVERY brick house with a declared
+             * sched-ext= died with "sched-ext unsupported" regardless of
+             * the real host kernel's capability -- a mount-visibility
+             * artifact wearing a capability-gap message, on a kernel that
+             * might genuinely have sched_ext. NEWNET/NEWNS do not affect
+             * /sys's visibility (a fresh mount namespace starts as a copy
+             * of the parent's table; nothing here unmounts anything), so
+             * this is the earliest point that is still unconditionally
+             * correct. */
+            apply_sched_ext(sched_ext);
             if (brick) lid_brick(brick, layer, layer_bytes, binds, nbinds);
             if (lids & NW_LID_LANDLOCK) lid_landlock(binds, nbinds);
             if (lids & NW_LID_SECCOMP) {

@@ -47,6 +47,42 @@ the answers.
   implies it*, standing in the tree. It is why `dawn-real-boot` skips its
   `vfat-esp` half on every run here and substitutes ext4.
 
+- **No `sched_ext`, in the kernel build itself, not just at runtime.**
+  Measured four independent ways, for per-house scheduling
+  (`docs/options/15-per-house-scheduling.md` -- this entry first cited
+  a roadmap number, "#10," that does not match this design note or any
+  numbered list found anywhere in the tree; `claims` checked and found
+  none, so it is corrected here to a plain filename reference rather
+  than a number nothing else confirms),
+  before any design or code: `zcat /proc/config.gz | grep SCHED_CLASS_EXT`
+  answers `# CONFIG_SCHED_CLASS_EXT is not set`; `/sys/kernel/sched_ext`
+  does not exist (`ls` answers `No such file or directory`); the running
+  kernel's own exported BTF, `/sys/kernel/btf/vmlinux`, contains no
+  `sched_ext_ops` struct and no `scx_enable`/`bpf_scx` symbol at all
+  (searched as raw bytes in the file, which is where BTF stores type and
+  function names) — so even a correctly-built sched_ext BPF object has
+  nothing to CO-RE-relocate against or attach to here, independent of
+  toolchain; and `bpftool` is not installed at all (`command -v bpftool`
+  finds nothing). `clang` (18.1.3) and a libbpf **runtime** `.so` are
+  present, but not `libbpf-dev` or any `sched_ext`-specific header
+  (`find / -iname '*sched_ext*'` finds nothing on the whole filesystem).
+
+  The running kernel is new enough in principle — sched_ext merged into
+  mainline at Linux 6.12, and this box runs `6.18.44-fc-v37` — so this is
+  a **build-configuration gap, not a version gap**: whoever built this
+  kernel left the feature out. `/boot` itself is misleading here and
+  worth naming so nobody trusts it: it holds `config-6.8.0-139-generic`
+  and a matching `vmlinuz`, an entirely different kernel than the one
+  `uname -r` reports running, so a config check there would answer a
+  question about a kernel this box never boots.
+
+  **Nothing here can build, load or verify a sched_ext program, full
+  stop**, regardless of how the code is written. Any test of the
+  accept-and-attach path has no path to green on this box and must be a
+  named skip; the only sched_ext-related behavior this environment can
+  exercise for real is the refusal when the kernel doesn't support it,
+  which is genuinely true here rather than simulated.
+
 - **cgroup v2 offers only `hugetlb`.** `cat
   /sys/fs/cgroup/unified/cgroup.controllers` prints `hugetlb` and nothing
   else; `cpu`, `memory`, `cpuset`, `blkio` and the rest are mounted as v1

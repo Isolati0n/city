@@ -102,6 +102,12 @@ SCHED_OTHER = _const("NW_SCHED_OTHER")
 SCHED_BATCH = _const("NW_SCHED_BATCH")
 SCHED_IDLE = _const("NW_SCHED_IDLE")
 SCHED_NAMES = {"other": SCHED_OTHER, "batch": SCHED_BATCH, "idle": SCHED_IDLE}
+# docs/options/15-per-house-scheduling.md. A different mechanism from
+# SCHED_* above (sched_ext, not sched_setscheduler(2)), keyed as
+# `sched-ext=` specifically so it cannot collide with `sched=`.
+SCHED_EXT_UNSET = _const("NW_SCHED_EXT_UNSET")
+SCHED_EXT_DEFAULT = _const("NW_SCHED_EXT_DEFAULT")
+SCHED_EXT_NAMES = {"default": SCHED_EXT_DEFAULT}
 # cpu_mask is a uint64, so a CPU index is bounded by its width rather than
 # by a number anybody picked. The baker names the bound when it refuses.
 CPU_INDEX_MAX = 63
@@ -385,16 +391,20 @@ def bake(path, houses):
         unit += (bytes.fromhex(h["brick"]) if h["brick"]
                  else b"\0" * BRICK_HASH)
         unit += pad(h["layer"], NAME_LEN)
-        # kind (the byte that was "critical" until 2026-09-10), then _pad,
-        # which must stay zero -- nwcheck.c rejects a nonzero spare.
-        unit += struct.pack("<BBBB", h["kind"], h["budget"], h["lids"], 0)
+        # kind (the byte that was "critical" until 2026-09-10), then the
+        # spare byte -- WAS always 0 ("_pad"), now sched_ext
+        # (docs/options/15-per-house-scheduling.md), NW_SCHED_EXT_UNSET
+        # (0) by default so an undeclared house bakes the same byte it
+        # always did.
+        unit += struct.pack("<BBBB", h["kind"], h["budget"], h["lids"],
+                             h["sched_ext"])
         unit += pack_res(h["res"])
     table = b""
     for u, p in binds:
         table += struct.pack("<H", u) + pad(p, PATH_LEN)
     # Must equal NW_MAGIC in blob.h. tests/run.py asserts that agreement;
     # the version moves when the layout moves -- see the comment there.
-    prefix = b"NWPLAN09" + struct.pack("<II", len(houses), len(binds))
+    prefix = b"NWPLAN10" + struct.pack("<II", len(houses), len(binds))
     crc = zlib.crc32(prefix + struct.pack("<I", 0) + unit + table) & 0xFFFFFFFF
     blob = prefix + struct.pack("<I", crc) + unit + table
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
@@ -473,11 +483,11 @@ def _is_hex64(v):
 
 
 def house(name, exe, kind, budget, lids, brick="", binds=(), layer="",
-          res=None):
+          res=None, sched_ext=SCHED_EXT_UNSET):
     return {"name": name, "exec": exe, "kind": kind, "budget": budget,
             "lids": lids, "brick": brick, "layer": layer,
             "res": res if res is not None else empty_res(),
-            "binds": list(binds)}
+            "binds": list(binds), "sched_ext": sched_ext}
 
 
 def default_city(probe: str, lids: int):
@@ -514,6 +524,7 @@ def load_city(path: str):
             kind = None
             brick, layer, binds = "", "", []
             res = empty_res()
+            sched_ext = SCHED_EXT_UNSET
             for kv in parts[3:]:
                 k, _, v = kv.partition("=")
                 if k == "critical":
@@ -541,6 +552,13 @@ def load_city(path: str):
                     layer = v
                 elif k == "bind":
                     binds.append(v)
+                elif k == "sched-ext":
+                    tok = v.strip().lower()
+                    if tok not in SCHED_EXT_NAMES:
+                        raise SystemExit(
+                            f"house {name}: sched-ext={v} must be one of "
+                            f"{', '.join(sorted(SCHED_EXT_NAMES))}")
+                    sched_ext = SCHED_EXT_NAMES[tok]
                 elif k == "cpus":
                     res["cpu_mask"] = parse_cpus(v)
                 elif k == "cpu-weight":
@@ -668,7 +686,7 @@ def load_city(path: str):
                     f"house {name}: exec path must be absolute inside the "
                     "brick")
             houses.append(house(name, exe, kind, budget, lids,
-                                brick, binds, layer, res))
+                                brick, binds, layer, res, sched_ext))
         else:
             raise SystemExit(f"bad city line: {line}")
     return houses

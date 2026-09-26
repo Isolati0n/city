@@ -65,3 +65,10 @@
 NWPLAN07 8d57e0c2b815883966187acd732579e2be2d5fa435824124cb384f728d75c741
 NWPLAN08 f85db3dd6c8aec3e53007b9980af33525ca55ae6cc5806e4fce6e4e852aaa89d
 NWPLAN09 dca20164a04adbc87f36184ee5cb23e4d04ce8cbfb005089766146b422ddd728
+# NWPLAN10: docs/options/15-per-house-scheduling.md renamed the spare
+# byte (_pad -> sched_ext) and gave it its first meaning. Same offset,
+# same size, same type -- only the declaration TEXT changed, which is
+# exactly what this ledger's signature hashes and exactly the class of
+# change the "NOT caught... changing what a byte MEANS" gap in blob.h's
+# own layout-guard comment named. Bumped rather than argued around.
+NWPLAN10 e15563449416e13d290b296fc3a0327a5dc1ca0cf7e2cbd8eb1453bc567c876f

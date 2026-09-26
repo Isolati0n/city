@@ -36,8 +36,9 @@ set -eu
 #
 # READ THE NUMBER HONESTLY. This is LINE coverage, and a line that is both
 # a condition and its consequence counts as covered when the condition runs
-# -- `if (u[i]._pad != 0) return NW_E_RSV;` is marked executed by every
-# unit with a clean spare byte, with the return never taken. So 99% does
+# -- `if (u[i].sched_ext > NW_SCHED_EXT_MAX) return NW_E_SCHEDEXT;` is
+# marked executed by every unit with an in-range value, with the return
+# never taken. So 99% does
 # not mean every rejection path has fired. The worked example used to be
 # the brick path check; phase 3 deleted that line, and tcb-review had
 # already shown that removing it left the suite, this floor AND the CBMC

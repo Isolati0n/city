@@ -12,7 +12,7 @@ static const char *errs[] = {
     "name",
     "duplicate name",
     "exec_path",
-    "reserved byte nonzero",
+    "sched-ext policy out of range",
     "lids",
     "kind",
     "brick without NEWNS lid",
@@ -361,10 +361,11 @@ int nw_check(const void *blob, uint32_t len)
          * against cannot be expressed any more. HISTORY.md records this,
          * because a deleted security check reads as a regression to
          * anyone who finds it without the reason. */
-        /* The remaining spare byte must be zero. An unvalidated spare cannot
-         * be given meaning later: an old blob carrying garbage would be
-         * accepted by a new checker that reads it. */
-        if (u[i]._pad != 0) return NW_E_RSV;
+        /* docs/options/15-per-house-scheduling.md. NW_SCHED_EXT_UNSET (0)
+         * is the same value the spare byte was always required to hold, so
+         * an old blob is still correctly "no sched-ext declared" under this
+         * closed-range check. */
+        if (u[i].sched_ext > NW_SCHED_EXT_MAX) return NW_E_SCHEDEXT;
         if (u[i].lids & ~(uint8_t)(NW_LID_SECCOMP | NW_LID_LANDLOCK
                                    | NW_LID_NEWNS | NW_LID_NEWNET))
             return NW_E_LIDS;

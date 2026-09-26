@@ -5884,6 +5884,163 @@ def test_layer_bytes_without_layer_dies_at_the_supervisor():
           "(NW_LAYER_BYTES set, NW_LAYER unset, refused by name)")
 
 
+def test_baker_refuses_unknown_sched_ext():
+    """docs/options/15-per-house-scheduling.md. `sched-ext=` is a closed
+    set of names -- this round exactly one, `default` -- the same shape
+    `lids=` and `layer=` already are, and the reason is asserted rather
+    than just the exit code, per test_baker_refuses_bad_layers's own
+    template."""
+    city = f"{WORK}/badschedext.city"
+    open(city, "w").write(
+        "house a /bin/true kind=oneshot lids=none sched-ext=turbo\n")
+    p = run(["python3", CC, "--city", city, "--out", f"{WORK}/bse.blob"])
+    expect(p.returncode != 0,
+           f"baker accepted an unknown sched-ext name\n{p.out}{p.err}")
+    expect("sched-ext=" in (p.out + p.err),
+           f"wrong reason for an unknown sched-ext name\n{p.out}{p.err}")
+    # The pairing: the one legal name must still bake.
+    open(city, "w").write(
+        "house a /bin/true kind=oneshot lids=none sched-ext=default\n")
+    p = run(["python3", CC, "--city", city, "--out", f"{WORK}/bse.blob"])
+    expect(p.returncode == 0,
+           f"the baker refused the one legal sched-ext name\n{p.out}{p.err}")
+    print("ok baker-refuses-unknown-sched-ext (an unknown name refused by "
+          "reason; the one legal name still accepted)")
+
+
+def test_sched_ext_unsupported_refuses_at_the_supervisor():
+    """docs/options/15-per-house-scheduling.md. This machine measurably
+    lacks sched_ext -- docs/ENVIRONMENT.md's own measurement, four
+    independent ways -- so a house declaring `sched-ext=default` must
+    refuse to start rather than run as if it were scheduled, the same
+    "declared lid the kernel can't provide" refusal every other lid
+    already has (invariant 6: "Lids are not advisory").
+
+    Driven directly against nw-sup, the same shape
+    test_layer_bytes_without_layer_dies_at_the_supervisor already uses:
+    real environment variables, no full boot needed, because the
+    behavior under test is entirely inside nw-sup's own fork/exec
+    sequence and does not depend on a sealed blob existing."""
+    r = run([f"{BIN}/nw-sup", f"{BIN}/unit-probe", "probe"],
+            env=dict(os.environ, NW_SCHED_EXT="1", NW_LIDS="0", NW_KIND="0"))
+    out = r.out + r.err
+    expect("sched-ext unsupported" in out,
+           f"nw-sup did not refuse a declared sched-ext policy on a kernel "
+           f"that measurably lacks sched_ext (docs/ENVIRONMENT.md)\n{out}")
+    print("ok sched-ext-unsupported-refuses-at-the-supervisor "
+          "(NW_SCHED_EXT=1 on a kernel with no CONFIG_SCHED_CLASS_EXT, "
+          "refused by name)")
+
+
+def test_sched_ext_out_of_range_dies_at_the_supervisor():
+    """`control`'s finding: nothing exercised the out-of-range
+    re-validation nw-sup's main() does on `NW_SCHED_EXT` (the same
+    "nw-sup reads its unit from the environment, not the sealed blob"
+    argument the NW_BRICK/NW_LAYER/NW_LAYER_BYTES re-checks already
+    have). On this kernel EVERY nonzero value, legal or illegal, dies
+    with "sched-ext unsupported" from apply_sched_ext() before the
+    re-validation would matter, so the two guards were indistinguishable
+    by any existing test -- masked exactly the way `CLAUDE.md`'s
+    "a recovery mechanism turns a defect into a delay" section warns a
+    fallback path can hide what is behind it.
+
+    The re-validation runs at nw-sup startup, before the per-house fork
+    loop apply_sched_ext() lives in, so an out-of-range value must be
+    refused by name (`"sched-ext value"`) -- a DIFFERENT reason string
+    than the capability refusal -- proving this is really the startup
+    guard and not the same capability check answering for it."""
+    r = run([f"{BIN}/nw-sup", f"{BIN}/unit-probe", "probe"],
+            env=dict(os.environ, NW_SCHED_EXT="5", NW_LIDS="0", NW_KIND="0"))
+    out = r.out + r.err
+    expect("sched-ext value" in out,
+           f"nw-sup did not refuse an out-of-range NW_SCHED_EXT by its own "
+           f"reason\n{out}")
+    expect("sched-ext unsupported" not in out,
+           f"an out-of-range value was refused by the CAPABILITY check "
+           f"instead of the startup re-validation -- the two guards are "
+           f"not actually distinguishable\n{out}")
+    print("ok sched-ext-out-of-range-dies-at-the-supervisor "
+          "(NW_SCHED_EXT=5, refused by its own reason at startup, before "
+          "the per-house capability check)")
+
+
+def test_sched_ext_check_survives_the_brick_pivot():
+    """tcb-review's HIGH finding, driven for real rather than by reading
+    the fix: apply_sched_ext() must ask the MACHINE's kernel whether
+    sched_ext exists, not the house's own root -- and a brick house
+    pivots into its own root before the check used to run, so the
+    check's real target depends on ORDER, not on the check's own logic.
+
+    Plants FAKE, convincing marker files inside the brick at the exact
+    paths sched_ext_supported() reads (/sys/kernel/sched_ext as a
+    directory, /sys/kernel/btf/vmlinux containing the literal bytes
+    "sched_ext_ops") -- so a check running AFTER the pivot would see a
+    kernel that (falsely) claims to support sched_ext, reach the "no
+    policy artifact" branch, and die with a DIFFERENT reason than the
+    real, capability-absent one. The correct behavior -- checking
+    BEFORE the pivot, against the real host -- dies with the ordinary
+    "sched-ext unsupported" message regardless of what the brick plants,
+    because the real host genuinely lacks sched_ext
+    (docs/ENVIRONMENT.md). Red under the ordering this fixes: moving
+    apply_sched_ext() back to after lid_brick() makes this pass under
+    the planted files' claim instead of the host's real answer."""
+    why = erofs_available()
+    if why:
+        skip("sched-ext-check-survives-the-brick-pivot", why)
+        return
+    tree = tempfile.mkdtemp(prefix="nw-schedext-brick-", dir=WORK)
+    os.makedirs(f"{tree}/bin")
+    os.makedirs(f"{tree}/sys/kernel/sched_ext")
+    os.makedirs(f"{tree}/sys/kernel/btf")
+    shutil.copy(f"{BIN}/unit-probe", f"{tree}/bin/brick")
+    os.chmod(f"{tree}/bin/brick", 0o755)
+    # The literal string sched_ext_supported() scans for -- planted so a
+    # POST-pivot check would see this kernel as claiming sched_ext, not
+    # the real host's genuinely-absent one.
+    open(f"{tree}/sys/kernel/btf/vmlinux", "wb").write(
+        b"FAKE BTF BLOB, NOT A REAL KERNEL EXPORT -- sched_ext_ops -- "
+        b"padding so this looks like a plausible file size" + b"\0" * 64)
+
+    # mkbrick.py names the image by the sha256 of the BUILT IMAGE FILE
+    # (hash-after-build), not of the tree -- unlike make_brick()'s own
+    # pre-computed tree hash, which it can get away with only because it
+    # both chooses that name AND writes the mkfs.erofs output under it
+    # itself. Calling the real packer directly here (so the fake marker
+    # files land in a real, sealed brick) means reading ITS printed
+    # digest rather than predicting one.
+    brick_dir = _brick_dir()
+    os.makedirs(brick_dir, exist_ok=True)
+    p = run(["python3", os.path.join(ROOT, "bakery/mkbrick.py"), tree,
+              "--out-dir", brick_dir, "--quiet"])
+    expect(p.returncode == 0, f"mkbrick\n{p.out}{p.err}")
+    hexd = p.out.strip()
+    brick_path = f"{brick_dir}/{hexd}{_brick_suffix()}"
+    expect(os.path.exists(brick_path), f"mkbrick did not write {brick_path}")
+
+    city = f"{WORK}/schedext-brick.city"
+    open(city, "w").write(
+        f"house solo /bin/brick kind=oneshot lids=newns,seccomp "
+        f"brick={hexd} layer=l-schedext-brick sched-ext=default\n")
+    blob = f"{WORK}/schedext-brick.blob"
+    b = run(["python3", CC, "--city", city, "--out", blob])
+    expect(b.returncode == 0, f"bake\n{b.out}{b.err}")
+
+    rc, out = boot(plan=blob, hold=800)
+    expect("sched-ext unsupported" in out,
+           f"the sched-ext check did not refuse the REAL host's absent "
+           f"capability -- either it saw the brick's planted marker "
+           f"files instead (ordering regressed) or something else "
+           f"changed\n{out}")
+    expect("sched-ext no policy artifact" not in out,
+           f"the check answered as though this kernel supports sched_ext "
+           f"-- it read the brick's planted files, not the machine's "
+           f"real /sys, meaning apply_sched_ext() is running AFTER the "
+           f"pivot again\n{out}")
+    print("ok sched-ext-check-survives-the-brick-pivot (planted "
+          "convincing marker files inside the brick; the real host's "
+          "absence still wins)")
+
+
 def test_leading_zero_hash_is_a_brick():
     """A hash that begins with a zero byte is still a brick.
 
@@ -7515,7 +7672,7 @@ def test_checker_rejects_crafted_fields():
     NAME, PATH, BRICK = (int(blob_h(x)) for x in
                          ("NW_NAME_LEN", "NW_PATH_LEN", "NW_BRICK_HASH"))
     HDR = 20
-    KIND_OFF = HDR + unit_layout()["kind"]    # kind, then budget, lids, _pad
+    KIND_OFF = HDR + unit_layout()["kind"]  # kind, then budget, lids, sched_ext
     LIDS_OFF = KIND_OFF + 2                   # lids is the third byte of the trailer
 
     city = f"{WORK}/crafted.city"
@@ -7571,6 +7728,8 @@ def test_checker_rejects_crafted_fields():
     # blob is rebuilt either way -- and it is the difference between pinning
     # a closed set and pinning one member of it.
     LEGAL_LIDS = 1 | 2 | 4 | 8          # seccomp landlock newns newnet
+    SCHED_EXT_OFF = LIDS_OFF + 1         # sched_ext is the fourth trailer byte
+    SCHED_EXT_MAX = blob_const("NW_SCHED_EXT_MAX")  # an ALIAS; see blob_const
     BRICK_OFF = HDR + VICTIM * USZ + unit_layout()["brick"]
     LAYER_OFF = HDR + VICTIM * USZ + unit_layout()["layer"]
     LAYERW = int(blob_h("NW_NAME_LEN"))
@@ -7667,6 +7826,16 @@ def test_checker_rejects_crafted_fields():
          f"lid bit {bit:#04x}, outside the closed set")
         for bit in (0x10, 0x20, 0x40, 0x80)
     ] + [
+        # docs/options/15-per-house-scheduling.md. The spare byte's first
+        # closed set: every value above NW_SCHED_EXT_MAX refused, not one
+        # representative -- the same reasoning as `kind` and `lids` above,
+        # since a single crafted value would be satisfied by
+        # `if (v == 2) return ...` and leave every other illegal value
+        # accepted.
+        (f"schedext{v}", [(SCHED_EXT_OFF, v)], "sched-ext",
+         f"sched_ext={v}, outside the closed set")
+        for v in (SCHED_EXT_MAX + 1, SCHED_EXT_MAX + 2, 127, 255)
+    ] + [
         # Landlock grants read and execute beneath the house's root, which
         # restricts nothing when the root is the machine's. Clear the brick
         # and ask for the lid: NW_E_LLBRICK, not a house confined to /.
@@ -7697,6 +7866,8 @@ def test_checker_rejects_crafted_fields():
     ok_cases += [(f"lids={bit:#04x}", [(LIDS_OFF, bit | 4)])
                  for bit in (1, 2, 4, 8)]
     ok_cases += [("lids=all-legal", [(LIDS_OFF, LEGAL_LIDS)])]
+    ok_cases += [(f"sched_ext={v}", [(SCHED_EXT_OFF, v)])
+                 for v in range(SCHED_EXT_MAX + 1)]
     for why, edits in ok_cases:
         path = craft("ok-" + why.replace("=", ""), edits) if edits else good
         r = run([f"{BIN}/nw-check", path])
@@ -7704,8 +7875,9 @@ def test_checker_rejects_crafted_fields():
                f"nw-check rejected a legal plan ({why}): the closed set in "
                f"the TCB is narrower than the one the baker emits"
                f"\n{r.out}{r.err}")
-    print(f"ok checker-rejects-crafted (every illegal kind and lid bit "
-          f"refused on unit {VICTIM} of {NUNITS}, every legal one accepted)")
+    print(f"ok checker-rejects-crafted (every illegal kind, lid bit and "
+          f"sched-ext value refused on unit {VICTIM} of {NUNITS}, every "
+          f"legal one accepted)")
 
 
 def test_leading_zero_hash_reaches_the_supervisor():
@@ -8145,7 +8317,7 @@ def unit_layout():
     at = {m.group(1): int(m.group(2))
           for m in UNIT_AT.finditer(
               open(os.path.join(STAGE, "src", "blob.h")).read())}
-    for want in ("name", "exec_path", "brick", "layer", "kind", "_pad"):
+    for want in ("name", "exec_path", "brick", "layer", "kind", "sched_ext"):
         expect(want in at,
                f"blob.h declares no NW_AT(nw_unit, {want}, ...) -- the "
                f"layout parse has stopped matching and every crafted-blob "
@@ -9604,11 +9776,11 @@ def test_baker_writes_the_declared_layout():
 
     d = open(blob, "rb").read()
     for i, (nm, want) in enumerate((
-            ("lay",  {"kind": 1, "budget": 2, "lids": 4, "_pad": 0}),
-            ("lay2", {"kind": 1, "budget": 0, "lids": 1, "_pad": 0}))):
+            ("lay",  {"kind": 1, "budget": 2, "lids": 4, "sched_ext": 0}),
+            ("lay2", {"kind": 1, "budget": 0, "lids": 1, "sched_ext": 0}))):
         base = HDR + i * USZ + unit_layout()["kind"]
         got = {"kind": d[base], "budget": d[base + 1],
-               "lids": d[base + 2], "_pad": d[base + 3]}
+               "lids": d[base + 2], "sched_ext": d[base + 3]}
         expect(got == want,
                f"the baker did not write {nm}'s trailer where blob.h "
                f"declares it.\n  blob.h says: {want}\n  baker wrote:  {got}\n"
@@ -11008,6 +11180,10 @@ def main():
         test_leading_zero_hash_is_a_brick,
         test_brick_hash_revalidated_at_the_supervisor,
         test_layer_bytes_without_layer_dies_at_the_supervisor,
+        test_baker_refuses_unknown_sched_ext,
+        test_sched_ext_unsupported_refuses_at_the_supervisor,
+        test_sched_ext_out_of_range_dies_at_the_supervisor,
+        test_sched_ext_check_survives_the_brick_pivot,
         test_path_traversal_refused, test_dupname_refused,
         test_blob_size_ceiling,
         test_checker_rejects_crafted_fields,

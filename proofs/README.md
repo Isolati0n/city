@@ -225,10 +225,13 @@ make every assertion pass for free, and the run still prints
 
 A vacuity control is the weaker of the two controls worth running. The
 stronger one is removing the mechanism: deleting
-`if (u[i]._pad != 0) return NW_E_RSV;` from `nwcheck.c` moves exactly one
-assertion in `caller_nw_check` from SUCCESS to FAILURE, and that is what
-says the proof is anchored to the code rather than to the harness. That one
-is run by hand, because automating it means committing a broken `nwcheck.c`.
+`if (u[i].sched_ext > NW_SCHED_EXT_MAX) return NW_E_SCHEDEXT;` from
+`nwcheck.c` moves exactly one assertion in `caller_nw_check` from SUCCESS
+to FAILURE, and that is what says the proof is anchored to the code
+rather than to the harness. That one is run by hand, because automating
+it means committing a broken `nwcheck.c`. (This line named `_pad` and
+`NW_E_RSV` until docs/options/15-per-house-scheduling.md gave the spare
+byte its first meaning; same check, same code slot, renamed.)
 
 ## Generated, not copied
 
