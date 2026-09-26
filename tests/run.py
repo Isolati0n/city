@@ -3357,6 +3357,194 @@ def test_pidfd_open_failure_falls_back():
     print(f"ok pidfd-open-failure-falls-back waitpid_calls={n_calls}")
 
 
+def _ctl(name, req):
+    import socket
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    s.settimeout(2)
+    s.connect(f"/nw/ctl/{name}.sock")
+    s.sendall(req)
+    return s.recv(64).decode()
+
+
+def _sleeper(tag):
+    p = f"{WORK}/{tag}-sleep"
+    open(p, "w").write("#!/bin/sh\nexec /bin/sleep 60\n")
+    os.chmod(p, 0o755)
+    return p
+
+
+def test_ctl_stop_does_not_count():
+    """STOP kills the house and does not increment the death budget.
+
+    "restart ctlstop"/"spent ctlstop" absent from the supervisor's own
+    output is satisfied by STOP genuinely working AND by STOP being a
+    complete no-op that never reaches kill(2) at all -- if the sleeper
+    were simply still running (untouched) when the test force-kills the
+    supervisor at the end, the supervisor dies mid-poll() and never
+    prints either line either way, and this would read as a pass for
+    the wrong reason. So the first STOP is paired with a positive check
+    that the sleeper was actually alive beforehand and is actually gone
+    afterward -- found by /proc comm, not by log text, since the
+    fixture itself prints nothing."""
+    os.makedirs("/nw/ctl", exist_ok=True)
+    env = os.environ.copy()
+    env["NW_KIND"] = "1"
+    env["NW_BUDGET"] = "3"
+    env["NW_LIDS"] = "0"
+    proc = subprocess.Popen(
+        [f"{BIN}/nw-sup", _sleeper("ctlstop"), "ctlstop"],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
+    time.sleep(0.2)
+    house_pid = _find_by_comm(proc.pid, "sleep")
+    expect(house_pid is not None,
+           "sleeper never reached exec -- STOP would have nothing to kill")
+    r = _ctl("ctlstop", b"STOP\n")
+    expect(r == "OK\n", f"STOP not OK: {r!r}")
+    time.sleep(0.2)
+    expect(_comm(house_pid) is None,
+           "STOP replied OK but the sleeper is still alive -- the kill "
+           "never reached it")
+    r2 = _ctl("ctlstop", b"STOP\n")
+    expect(r2 == "OK\n", f"second STOP not OK: {r2!r}")
+    proc.send_signal(9)
+    try:
+        out, err = proc.communicate(timeout=1)
+    except subprocess.TimeoutExpired:
+        os.kill(proc.pid, 9)
+        out, err = proc.communicate()
+    out = (out or "") + (err or "")
+    expect("restart ctlstop" not in out, f"STOP counted as a death\n{out}")
+    expect("spent ctlstop" not in out, f"STOP spent the budget\n{out}")
+    print("ok ctl-stop-does-not-count")
+
+
+def test_ctl_start_relaunch_and_spent():
+    """START relaunches a stopped house. START on spent cannot
+    connect: the supervisor exited and unlinked the socket."""
+    os.makedirs("/nw/ctl", exist_ok=True)
+    env = os.environ.copy()
+    env["NW_KIND"] = "1"
+    env["NW_BUDGET"] = "0"
+    env["NW_LIDS"] = "0"
+    p = subprocess.run(
+        [f"{BIN}/nw-sup", "/bin/false", "ctlspent"],
+        capture_output=True, text=True, env=env, timeout=10)
+    out = (p.stdout or "") + (p.stderr or "")
+    expect("spent ctlspent" in out, f"budget was not spent\n{out}")
+    expect(not os.path.exists("/nw/ctl/ctlspent.sock"),
+           "spent left the socket behind")
+    try:
+        r = _ctl("ctlspent", b"START\n")
+        expect(False, f"START on spent connected and got {r!r}")
+    except (ConnectionRefusedError, FileNotFoundError, OSError):
+        pass
+
+    env["NW_BUDGET"] = "3"
+    proc = subprocess.Popen(
+        [f"{BIN}/nw-sup", _sleeper("ctlstart"), "ctlstart"],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
+    time.sleep(0.2)
+    expect(_ctl("ctlstart", b"STOP\n") == "OK\n", "stop before start")
+    time.sleep(0.15)
+    expect(_ctl("ctlstart", b"START\n") == "OK\n", "start after stop")
+    time.sleep(0.15)
+    expect(_ctl("ctlstart", b"START\n") == "OK\n", "idempotent start")
+    proc.kill()
+    print("ok ctl-start-relaunch-and-spent")
+
+
+def test_ctl_malformed_refused():
+    os.makedirs("/nw/ctl", exist_ok=True)
+    env = os.environ.copy()
+    env["NW_KIND"] = "1"
+    env["NW_BUDGET"] = "3"
+    env["NW_LIDS"] = "0"
+    proc = subprocess.Popen(
+        [f"{BIN}/nw-sup", _sleeper("ctlgarb"), "ctlgarb"],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
+    time.sleep(0.2)
+    r = _ctl("ctlgarb", b"NOPE\n")
+    expect(r == "ERR bad request\n", f"garbage was {r!r}")
+    r2 = _ctl("ctlgarb", b"STOP\n")
+    expect(r2 == "OK\n", f"STOP after garbage failed: {r2!r}")
+    proc.kill()
+    out, err = proc.communicate()
+    out = (out or "") + (err or "")
+    expect("FAIL" not in out, f"supervisor died on garbage\n{out}")
+    print("ok ctl-malformed-refused")
+
+
+def test_ctl_socket_and_death_together():
+    """Flood START while the house dies; death is still reaped."""
+    os.makedirs("/nw/ctl", exist_ok=True)
+    env = os.environ.copy()
+    env["NW_KIND"] = "1"
+    env["NW_BUDGET"] = "2"
+    env["NW_LIDS"] = "0"
+    proc = subprocess.Popen(
+        [f"{BIN}/nw-sup", "/bin/false", "ctlflood"],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
+    time.sleep(0.05)
+    for _ in range(20):
+        try:
+            _ctl("ctlflood", b"START\n")
+        except (OSError, TimeoutError, ConnectionError):
+            pass
+    try:
+        out, err = proc.communicate(timeout=2)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        out, err = proc.communicate()
+    out = (out or "") + (err or "")
+    expect("spent ctlflood" in out, f"flood starved the reap\n{out}")
+    print("ok ctl-socket-and-death-together")
+
+
+def test_ctl_pidfd_fallback_with_socket():
+    """pidfd_open ENOSYS with a live socket must not die."""
+    os.makedirs("/nw/ctl", exist_ok=True)
+    block_src = os.path.join(ROOT, "tests", "block_pidfd.so.c")
+    block_so = f"{WORK}/block_pidfd_ctl.so"
+    c = subprocess.run(
+        ["gcc", "-shared", "-fPIC", "-O2", "-o", block_so, block_src, "-ldl"],
+        capture_output=True, text=True)
+    expect(c.returncode == 0, f"block_pidfd.so\n{c.stderr}")
+    env = os.environ.copy()
+    env["NW_KIND"] = "1"
+    env["NW_BUDGET"] = "3"
+    env["NW_LIDS"] = "0"
+    env["LD_PRELOAD"] = block_so
+    log = f"{WORK}/ctlfb.log"
+    lg = open(log, "w")
+    proc = subprocess.Popen(
+        [f"{BIN}/nw-sup", _sleeper("ctlfb"), "ctlfb"],
+        stdout=lg, stderr=lg, env=env)
+    time.sleep(0.25)
+    house_pid = _find_by_comm(proc.pid, "sleep")
+    expect(house_pid is not None,
+           "sleeper never reached exec under the fallback -- STOP would "
+           "have nothing to kill")
+    r = _ctl("ctlfb", b"STOP\n")
+    expect(r == "OK\n", f"fallback STOP was {r!r}")
+    time.sleep(0.15)
+    expect(_comm(house_pid) is None,
+           "fallback STOP replied OK but the sleeper is still alive -- "
+           "the same real-kill check test_ctl_stop_does_not_count uses, "
+           "here under the signalfd/50ms-poll fallback path instead of "
+           "the pidfd path")
+    r2 = _ctl("ctlfb", b"START\n")
+    expect(r2 == "OK\n", f"fallback START was {r2!r}")
+    os.kill(proc.pid, 9)
+    proc.wait(timeout=2)
+    lg.close()
+    out = open(log).read()
+    expect("intercepted pidfd_open, forcing ENOSYS" in out,
+           f"shim never fired\n{out}")
+    expect("FAIL pidfd_open" not in out, f"died on pidfd_open\n{out}")
+    expect("restart ctlfb" not in out, f"STOP counted under fallback\n{out}")
+    print("ok ctl-pidfd-fallback-with-socket")
+
+
 def test_wait_is_poll_not_spin():
     """The blocking primitive is poll(), not a busy non-blocking wait,
     and the wait is never waitpid(-1).
@@ -3431,22 +3619,22 @@ def test_wait_is_poll_not_spin():
 
 
 def test_poll_set_takes_a_second_fd():
-    """A two-fd poll set works -- in a STANDALONE demo, not in
-    wait_house() itself.
+    """A two-fd poll set works -- in a STANDALONE demo, and (since the
+    start/stop control channel landed) exercised for real too.
 
     tests/poll_shape.c reimplements the same shape (a pidfd plus one
     extra fd) independently in its own main(); it never calls the real
-    wait_house() in nwsup.c, and neither of that function's two real
-    call sites passes extra_fd >= 0 today -- both pass -1. So this test
-    proves the PATTERN is sound in isolation and proves NOTHING about
-    wait_house()'s own `if (extra_fd >= 0) { ... }` branch, which has
-    no caller yet and is untested in situ. `control` confirmed this
-    experimentally: deleting that whole branch, or just its
-    `pf[1].revents = 0` reset, from the real wait_house() changes
-    nothing about this test's outcome. Forward-looking plumbing for the
-    socket/log-fd work still to come -- a pass here is not evidence
-    that wait_house's own second-fd handling is correct, only that the
-    idea works."""
+    wait_house() in nwsup.c. Until the control channel landed, neither
+    of that function's two real call sites ever passed extra_fd >= 0 --
+    both passed -1, and this standalone demo was the only evidence the
+    pattern worked at all, which is what the retired wording below
+    recorded. Both call sites now pass the unit's listening control
+    socket (`lfd`), always live rather than conditionally supplied, so
+    wait_house()'s own second-fd handling is exercised in situ by every
+    ctl_* test (test_ctl_stop_does_not_count and its siblings) -- a
+    pass here is no longer the only evidence the idea works, it is an
+    isolated syscall-level check of the same shape alongside real
+    exercise of the real function."""
     src = os.path.join(ROOT, "tests", "poll_shape.c")
     binp = f"{WORK}/poll_shape"
     if not os.path.exists(src):
@@ -3459,9 +3647,10 @@ def test_poll_set_takes_a_second_fd():
     r = subprocess.run([binp], capture_output=True, text=True, timeout=5)
     expect(r.returncode == 0, f"poll_shape rc={r.returncode}\n{r.stderr}")
     expect("extra=1" in r.stderr and "house=1" in r.stderr, r.stderr)
-    print("ok poll-set-takes-a-second-fd (standalone shape only -- "
-          "wait_house's own extra_fd branch has no caller and is not "
-          "exercised by this)")
+    print("ok poll-set-takes-a-second-fd (standalone shape check; "
+          "wait_house's own second-fd handling is exercised for real "
+          "by the ctl_* tests now that both call sites always pass "
+          "the control socket)")
 
 
 def test_seccomp_kills():
@@ -9727,6 +9916,9 @@ def main():
         test_crash_does_not_halt, test_budget_is_hard_total,
         test_shutdown_does_not_restart,
         test_pidfd_reaps_and_counts, test_pidfd_open_failure_falls_back,
+        test_ctl_stop_does_not_count, test_ctl_start_relaunch_and_spent,
+        test_ctl_malformed_refused, test_ctl_socket_and_death_together,
+        test_ctl_pidfd_fallback_with_socket,
         test_wait_is_poll_not_spin,
         test_poll_set_takes_a_second_fd,
         test_term_signal, test_dawn_real_boot,

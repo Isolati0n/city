@@ -837,3 +837,42 @@ prose-count	tools/mkboot.sh	# kernel paths sharing one syscall (see halted() in 
 # directly against halted()'s own docstring in tests/run.py, which
 # states the same claim in full.
 prose-count	tools/mkboot.sh	# call happens on a genuine boot -- the one thing tests/run.py's
+# false positive: this absence IS paired, two lines above it in the
+# same test -- expect(house_pid is not None, "sleeper never reached
+# exec -- STOP would have nothing to kill") establishes the process
+# existed before this checks it is gone. The heuristic only sees the
+# bare "is None" and cannot trace the adjacent positive check.
+unpaired-absence	tests/run.py	expect(_comm(house_pid) is None,
+# false positive: paired with the process-table check immediately
+# above it (expect(_comm(house_pid) is None, ...)), which is the real
+# positive proof STOP's kill(2) reached the house -- the OK reply
+# alone does not distinguish a real kill from a no-op, which is
+# exactly why that check was added. These two absences are what the
+# process-table check exists to make meaningful.
+unpaired-absence	tests/run.py	expect("restart ctlstop" not in out, f"STOP counted as a death\n{out}")
+unpaired-absence	tests/run.py	expect("spent ctlstop" not in out, f"STOP spent the budget\n{out}")
+# false positive: paired two lines above with expect("spent ctlspent"
+# in out, ...), which confirms budget exhaustion actually happened --
+# unlink(sockpath) is the immediately preceding statement on that same
+# code path in nwsup.c's main(), so confirming "spent" printed is
+# confirming the unlink ran too.
+unpaired-absence	tests/run.py	expect(not os.path.exists("/nw/ctl/ctlspent.sock"),
+# false positive: paired with the exact-string checks just above it --
+# expect(r == "ERR bad request\n", ...) proves the garbage was received
+# and correctly rejected, and expect(r2 == "OK\n", ...) proves the
+# supervisor is still alive and functional afterward. "FAIL not in out"
+# is a belt-and-suspenders check on top of an already-real pairing.
+unpaired-absence	tests/run.py	expect("FAIL" not in out, f"supervisor died on garbage\n{out}")
+# false positive: same shape as the ctlstop ack above -- paired two
+# lines above with expect(house_pid is not None, "sleeper never
+# reached exec under the fallback -- STOP would have nothing to kill").
+unpaired-absence	tests/run.py	expect(_comm(house_pid) is None,
+# false positive: "FAIL pidfd_open" absence is paired with
+# expect("intercepted pidfd_open, forcing ENOSYS" in out, ...) a few
+# lines above, which proves the ENOSYS-forcing shim actually fired, so
+# the fallback path was genuinely exercised rather than skipped.
+# "restart ctlfb" absence is paired with the process-table check
+# (_comm(house_pid) is None) added right above it, the same real proof
+# used in test_ctl_stop_does_not_count.
+unpaired-absence	tests/run.py	expect("FAIL pidfd_open" not in out, f"died on pidfd_open\n{out}")
+unpaired-absence	tests/run.py	expect("restart ctlfb" not in out, f"STOP counted under fallback\n{out}")
