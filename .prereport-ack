@@ -824,3 +824,16 @@ tool-presence	tools/stage-layers.py	if not shutil.which("mkfs.ext4"):
 # checkable directly against the code beside it -- not an anonymous
 # count that can go stale silently.
 prose-count	.claude/rules/runtime.md	"resource block, nothing applies it" gap above for this one field.**
+# false positive: "one syscall" names a specific, fixed technical fact
+# (reboot(2) is the one syscall both a namespace teardown and a real
+# poweroff go through) rather than a count of a growable set -- the
+# same phrase this file already carries in tests/run.py's halted()
+# docstring, where it did not trip the matcher because that copy is
+# inside a Python docstring rather than a `#` comment.
+prose-count	tools/mkboot.sh	# kernel paths sharing one syscall. Used only by --check-halt below.
+prose-count	tools/mkboot.sh	# kernel paths sharing one syscall (see halted() in tests/run.py).
+# false positive: "the one thing X cannot prove" identifies a specific
+# capability by what it lacks, not an anonymous count -- checkable
+# directly against halted()'s own docstring in tests/run.py, which
+# states the same claim in full.
+prose-count	tools/mkboot.sh	# call happens on a genuine boot -- the one thing tests/run.py's

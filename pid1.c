@@ -32,9 +32,10 @@ static void halt_now(const char *why)
      * kill init!" -- which `_exit(70)` unconditionally did. The same
      * `getpid() == 1` rule shutdown_city() already uses for its own
      * production reboot() is reused here rather than re-derived: a
-     * caller that is not PID 1 (every test in tests/run.py that runs
-     * this binary directly, without `unshare --pid --fork`, plus any
-     * future non-init caller) still gets the old, harmless `_exit(70)`.
+     * caller that is not PID 1 -- every test in tests/run.py that does
+     * not make this binary itself the PID 1 of a pid namespace, plus
+     * any future non-init caller -- still gets the old, harmless
+     * `_exit(70)`.
      * A caller that IS PID 1 -- production, and this project's own test
      * harness alike, since `unshare --pid --fork` makes the child
      * genuine PID 1 of its own namespace -- must never exit and instead

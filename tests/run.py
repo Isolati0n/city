@@ -813,21 +813,48 @@ def test_halt_falls_back_to_exit_when_not_pid_1():
     a caller that is not PID 1 at all -- had nothing exercising it
     until this test.
 
-    Invoked directly, deliberately with no `unshare --pid`: this
-    process's own getpid() is an ordinary PID in the harness's own
-    namespace, never 1, so `if (getpid() != 1) _exit(70);` fires
-    before sync() or reboot() are ever reached. That is what makes
-    this SAFE to run directly on whatever machine runs this suite --
-    a bug that flipped the condition would call reboot(2) here instead
-    of exiting, and this test would show it rather than silently
-    surviving one accidental unshare-free invocation, per CLAUDE.md's
-    own rule that a check must be shown rejecting, not just accepting.
-    Confirmed by hand before writing this: no unshare, `rc=70`, no
-    hang, no reboot attempt, no process left behind."""
-    p = run([f"{BIN}/nw-root", "--hold-ms", "400",
-             "--slot", f"{SLOTS}/A", "--kill-spawner"])
+    NOT invoked directly with no namespace at all -- that was this
+    test's first version, and `control` found it was only safe by
+    accident of THIS machine's own configuration, never as a property
+    of the test. `reboot(2)`'s "just tear the namespace down" redirect
+    (the kernel's `reboot_pid_ns()`) triggers on which pid namespace
+    the CALLER belongs to, not on whether the caller is PID 1 of it --
+    so a caller in the machine's own root pid namespace gets the REAL
+    `kernel_power_off()`, regardless of its own pid number. Measured:
+    this container shares its pid namespace with the host VM's own
+    real PID 1 (`readlink /proc/self/ns/pid` and `readlink
+    /proc/1/ns/pid` identical) and holds `CAP_SYS_BOOT` with no seccomp
+    filter -- so a future regression of the `getpid() != 1` guard,
+    tested the first way, would not fail loudly here. It would attempt
+    to power off whatever machine happened to be running this suite.
+
+    So this still exercises genuine non-PID-1 behaviour, but inside a
+    DISPOSABLE nested pid namespace of its own: `nw-root` runs as a
+    child of the shell that is PID 1 of that inner namespace, never PID
+    1 itself either way, so `getpid() != 1` is true for the same
+    reason as before. What changes is the blast radius if that guard is
+    ever wrong: `reboot()` reached from inside a nested, non-root pid
+    namespace tears down THAT namespace and nothing else, which is
+    exactly the surrogate `control` used to demonstrate the mechanism
+    safely rather than reproduce the dangerous case directly. Confirmed
+    by hand before writing this: `rc=70` printed by the inner shell,
+    HALT text present, no hang, the outer `unshare` process exits
+    cleanly, nothing left running afterward."""
+    p = run(["unshare", "--pid", "--fork", "--mount-proc", "--",
+             "bash", "-c",
+             f'{BIN}/nw-root --hold-ms 400 --slot {SLOTS}/A '
+             f'--kill-spawner; echo "NW_ROOT_RC=$?"'])
     out = p.out + p.err
-    expect(p.returncode == 70, f"not-PID-1 halt rc={p.returncode}\n{out}")
+    expect(p.returncode == 0,
+           f"the wrapping shell itself did not exit cleanly (rc={p.returncode}) "
+           f"-- if the getpid() guard is broken, reboot() reached from "
+           f"inside this DISPOSABLE nested namespace tears only it down, "
+           f"which is what a nonzero rc here would actually mean\n{out}")
+    m = re.search(r"NW_ROOT_RC=(\d+)", out)
+    expect(m is not None,
+           f"nw-root's own exit code was never printed by the wrapping "
+           f"shell\n{out}")
+    expect(int(m.group(1)) == 70, f"not-PID-1 halt rc={m.group(1)}\n{out}")
     expect("HALT: spawn report" in out, f"halt text\n{out}")
     print("ok halt-falls-back-to-exit-when-not-pid-1")
 
