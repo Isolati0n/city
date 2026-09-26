@@ -203,15 +203,23 @@ From the plan's side: a brand-new, healthy instance of the unit died
 within about a second of being forked, for a reason nothing in the log
 records.
 
-This is **reserved for the operator, alongside the other open questions
-below** — it is a consequence of the socket being keyed by unit rather
-than by incarnation, which is deliberate (the wire protocol carries no
+It is a consequence of the socket being keyed by unit rather than by
+incarnation, which is deliberate (the wire protocol carries no
 identifier for either, per this doc's own minimalism), and there is no
 way to close it without a protocol change: a generation token in the
-wire format, checked by the caller or the channel, is a design decision
-and not a one-line fix. Landing that needs a paired test the way every
-other refusal in this file does — a legal `STOP` that must be accepted,
-and a stale one that must be refused for naming the wrong generation.
+wire format, checked by the caller or the channel, is a design
+decision and not a one-line fix.
+
+**Decided: refused for now, not waiting on anything.** A narrow,
+sub-millisecond race window against an unrelated crash, not a security
+hole — the channel's authorization story (reachability via `bind=`)
+is untouched by it either way. Building a generation token now would
+be protocol complexity spent closing a race that may never fire in
+practice; better to run the channel for a while and see whether it
+actually does before paying that cost. Revisit if it does — landing a
+fix at that point needs a paired test the way every other refusal in
+this file does: a legal `STOP` that must be accepted, and a stale one
+that must be refused for naming the wrong generation.
 
 ## Reserved for the operator — not decided here
 
