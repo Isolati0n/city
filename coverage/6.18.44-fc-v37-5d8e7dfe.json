@@ -34,6 +34,7 @@
   "ctl-socket-and-death-together",
   "ctl-start-relaunch-and-spent",
   "ctl-stop-does-not-count",
+  "ctl-tier3-fallback-with-socket",
   "dawn-real-boot",
   "difftest",
   "dupname-refused",
