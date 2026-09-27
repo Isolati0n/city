@@ -694,6 +694,23 @@ def _comm(pid):
         return None
 
 
+def _pid_state(pid):
+    """The single-letter State field from /proc/pid/status ('R'/'S'
+    running-ish, 'T' job-control-stopped, lowercase 't' ptrace-stopped
+    -- the kernel (fs/proc/array.c) distinguishes the two, and a
+    PTRACE_INTERRUPT-induced freeze is the lowercase one -- 'Z'
+    zombie), or None if the pid is gone. Distinguishes 'stopped in
+    ptrace-stop' from 'reaped entirely', which _comm alone cannot: a
+    zombie still has a comm."""
+    try:
+        for line in open(f"/proc/{pid}/status"):
+            if line.startswith("State:"):
+                return line.split()[1]
+    except (FileNotFoundError, ProcessLookupError):
+        return None
+    return None
+
+
 def _find_by_comm(root_pid, name):
     """The first descendant of `root_pid` whose /proc comm is exactly
     `name`, or None. comm is the exec'd binary's own basename (up to
@@ -4361,6 +4378,445 @@ def test_ctl_stop_does_not_count():
     expect("restart ctlstop" not in out, f"STOP counted as a death\n{out}")
     expect("spent ctlstop" not in out, f"STOP spent the budget\n{out}")
     print("ok ctl-stop-does-not-count")
+
+
+def test_ctl_freeze_and_cont():
+    """FREEZE stops the house without it counting as a death; CONT
+    resumes it and it completes normally afterward.
+
+    This is the regression test for the wait_house() bug
+    docs/options/16-freeze-single-step.md exists to fix: without the
+    WIFSTOPPED check, a frozen house's ptrace-stop is misread as a
+    reap by the signalfd/tier-3 fallback tiers, spending a death the
+    house did not lose. The pidfd tier (what this machine actually
+    uses) is immune by construction -- poll(2) only reports a pidfd
+    ready on real termination -- so this test alone cannot show the
+    bug on this machine; test_ctl_freeze_survives_pidfd_fallback below
+    drives the same assertion under the fallback tiers directly, which
+    is where the bug actually lived. Both are needed."""
+    os.makedirs("/nw/ctl", exist_ok=True)
+    env = os.environ.copy()
+    env["NW_KIND"] = "1"
+    env["NW_BUDGET"] = "3"
+    env["NW_LIDS"] = "0"
+    proc = subprocess.Popen(
+        [f"{BIN}/nw-sup", _sleeper("ctlfreeze"), "ctlfreeze"],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
+    time.sleep(0.2)
+    house_pid = _find_by_comm(proc.pid, "sleep")
+    expect(house_pid is not None,
+           "sleeper never reached exec -- FREEZE would have nothing to stop")
+    r = _ctl("ctlfreeze", b"FREEZE\n")
+    expect(r == "OK\n", f"FREEZE not OK: {r!r}")
+    time.sleep(0.2)
+    expect(_pid_state(house_pid) == "t",
+           f"FREEZE replied OK but /proc state is "
+           f"{_pid_state(house_pid)!r}, not t (tracing stop)")
+    time.sleep(2.0)  # "a while", per the design note -- a fixed wait
+                      # in the test, not a timeout nw-sup itself reads.
+    expect(_pid_state(house_pid) == "t",
+           "house left tracing-stop on its own while frozen")
+    r2 = _ctl("ctlfreeze", b"CONT\n")
+    expect(r2 == "OK\n", f"CONT not OK: {r2!r}")
+    time.sleep(0.2)
+    expect(_pid_state(house_pid) in ("S", "R"),
+           f"CONT replied OK but /proc state is {_pid_state(house_pid)!r}, "
+           f"not running/sleeping")
+    # The sleeper is running again (post-CONT) and, invoked this way
+    # (direct nw-sup, no pack_kit()), inherits this test's own stdout/
+    # stderr pipes. Killing only nw-sup leaves that live grandchild
+    # holding the pipe's write end open, so proc.communicate() below
+    # would hang waiting for EOF that never comes -- kill it first.
+    os.kill(house_pid, 9)
+    proc.kill()
+    out, err = proc.communicate(timeout=2)
+    out = (out or "") + (err or "")
+    expect("restart ctlfreeze" not in out,
+           f"the freeze/cont cycle was counted as a death\n{out}")
+    expect("spent ctlfreeze" not in out,
+           f"the freeze/cont cycle spent the budget\n{out}")
+    print("ok ctl-freeze-and-cont")
+
+
+def test_ctl_freeze_survives_pidfd_fallback():
+    """The same freeze/cont cycle as test_ctl_freeze_and_cont, forced
+    onto the tier-3 (50ms poll + WNOHANG) fallback via tests/block_both.so.c
+    -- this is the tier that actually had the WIFSTOPPED bug, and the
+    pidfd tier this machine uses by default cannot exercise it at all
+    (pidfd only becomes poll-readable on real termination, never on a
+    ptrace-stop). test_ctl_tier3_fallback_with_socket is this test's
+    sibling for STOP; this is its FREEZE/CONT counterpart."""
+    os.makedirs("/nw/ctl", exist_ok=True)
+    block_src = os.path.join(ROOT, "tests", "block_both.so.c")
+    block_so = f"{WORK}/block_both_freeze.so"
+    c = subprocess.run(
+        ["gcc", "-shared", "-fPIC", "-O2", "-o", block_so, block_src, "-ldl"],
+        capture_output=True, text=True)
+    expect(c.returncode == 0, f"block_both.so\n{c.stderr}")
+    env = os.environ.copy()
+    env["NW_KIND"] = "1"
+    env["NW_BUDGET"] = "3"
+    env["NW_LIDS"] = "0"
+    env["LD_PRELOAD"] = block_so
+    log = f"{WORK}/ctlfreezetier3.log"
+    lg = open(log, "w")
+    proc = subprocess.Popen(
+        [f"{BIN}/nw-sup", _sleeper("ctlfreezetier3"), "ctlfreezetier3"],
+        stdout=lg, stderr=lg, env=env)
+    time.sleep(0.25)
+    house_pid = _find_by_comm(proc.pid, "sleep")
+    expect(house_pid is not None,
+           "sleeper never reached exec under the tier-3 fallback")
+    r = _ctl("ctlfreezetier3", b"FREEZE\n")
+    expect(r == "OK\n", f"tier-3 FREEZE not OK: {r!r}")
+    time.sleep(0.3)
+    expect(_pid_state(house_pid) == "t",
+           f"tier-3 FREEZE replied OK but /proc state is "
+           f"{_pid_state(house_pid)!r}, not t")
+    time.sleep(2.0)
+    expect(_pid_state(house_pid) == "t",
+           "tier-3: house was reaped as dead while frozen -- the bug "
+           "this test exists to catch")
+    r2 = _ctl("ctlfreezetier3", b"CONT\n")
+    expect(r2 == "OK\n", f"tier-3 CONT not OK: {r2!r}")
+    time.sleep(0.3)
+    expect(_pid_state(house_pid) in ("S", "R"),
+           f"tier-3 CONT replied OK but /proc state is "
+           f"{_pid_state(house_pid)!r}")
+    os.kill(proc.pid, 9)
+    proc.wait(timeout=2)
+    lg.close()
+    out = open(log).read()
+    expect("restart ctlfreezetier3" not in out,
+           f"tier-3: freeze/cont counted as a death\n{out}")
+    expect("spent ctlfreezetier3" not in out,
+           f"tier-3: freeze/cont spent the budget\n{out}")
+    print("ok ctl-freeze-survives-pidfd-fallback")
+
+
+def test_ctl_freeze_survives_signalfd_fallback():
+    """The WIFSTOPPED guard exists at TWO call sites in wait_house():
+    the signalfd tier and the tier-3 (50ms poll) tier. control found
+    that test_ctl_freeze_survives_pidfd_fallback -- which uses
+    tests/block_both.so.c, blocking BOTH pidfd_open and signalfd(2) --
+    always lands on tier 3 (confirmed by strace, per that shim's own
+    comment and test_ctl_tier3_fallback_with_socket's docstring), so it
+    cannot exercise the signalfd-tier guard at all; removing that one
+    guard alone left the whole subset green. This is the missing half:
+    tests/block_pidfd.so.c blocks ONLY pidfd_open, which
+    test_ctl_pidfd_fallback_with_socket's own docstring and control's
+    strace both confirm lands on the signalfd tier every time."""
+    os.makedirs("/nw/ctl", exist_ok=True)
+    block_src = os.path.join(ROOT, "tests", "block_pidfd.so.c")
+    block_so = f"{WORK}/block_pidfd_freeze.so"
+    c = subprocess.run(
+        ["gcc", "-shared", "-fPIC", "-O2", "-o", block_so, block_src, "-ldl"],
+        capture_output=True, text=True)
+    expect(c.returncode == 0, f"block_pidfd.so\n{c.stderr}")
+    env = os.environ.copy()
+    env["NW_KIND"] = "1"
+    env["NW_BUDGET"] = "3"
+    env["NW_LIDS"] = "0"
+    env["LD_PRELOAD"] = block_so
+    log = f"{WORK}/ctlfreezesignalfd.log"
+    lg = open(log, "w")
+    proc = subprocess.Popen(
+        [f"{BIN}/nw-sup", _sleeper("ctlfreezesignalfd"), "ctlfreezesignalfd"],
+        stdout=lg, stderr=lg, env=env)
+    time.sleep(0.25)
+    house_pid = _find_by_comm(proc.pid, "sleep")
+    expect(house_pid is not None,
+           "sleeper never reached exec under the signalfd fallback")
+    r = _ctl("ctlfreezesignalfd", b"FREEZE\n")
+    expect(r == "OK\n", f"signalfd-tier FREEZE not OK: {r!r}")
+    time.sleep(0.3)
+    expect(_pid_state(house_pid) == "t",
+           f"signalfd-tier FREEZE replied OK but /proc state is "
+           f"{_pid_state(house_pid)!r}, not t")
+    time.sleep(2.0)
+    expect(_pid_state(house_pid) == "t",
+           "signalfd-tier: house was reaped as dead while frozen -- "
+           "exactly the bug this test exists to catch on this tier")
+    r2 = _ctl("ctlfreezesignalfd", b"CONT\n")
+    expect(r2 == "OK\n", f"signalfd-tier CONT not OK: {r2!r}")
+    time.sleep(0.3)
+    expect(_pid_state(house_pid) in ("S", "R"),
+           f"signalfd-tier CONT replied OK but /proc state is "
+           f"{_pid_state(house_pid)!r}")
+    os.kill(proc.pid, 9)
+    proc.wait(timeout=2)
+    lg.close()
+    out = open(log).read()
+    expect("restart ctlfreezesignalfd" not in out,
+           f"signalfd-tier: freeze/cont counted as a death\n{out}")
+    expect("spent ctlfreezesignalfd" not in out,
+           f"signalfd-tier: freeze/cont spent the budget\n{out}")
+    print("ok ctl-freeze-survives-signalfd-fallback")
+
+
+def test_ctl_freeze_reattaches_after_restart():
+    """The real bug control found: ptrace_attached/house_frozen were,
+    as first written, sticky for the SUPERVISOR's whole life rather
+    than one generation's. STOP+START (the existing idiom
+    test_ctl_start_relaunch_and_spent already uses) forces a genuinely
+    new pid, distinct from the first generation; FREEZE-ing that second
+    generation must actually re-seize it, not silently skip PTRACE_SEIZE
+    because a stale flag survived from the pid that is now dead.
+
+    control's own finding is why this needs a NEW, tight test rather
+    than reusing test_ctl_freeze_races_natural_exit: that test's
+    assertions accept any ERR-prefixed reply, so the exact failure this
+    bug produces (do_freeze() skipping SEIZE, then PTRACE_INTERRUPT
+    against an unseized pid failing with ESRCH -- a wrong failure, not
+    a hang) passed right through it undetected in 6/6 runs. Asserting
+    the reply is exactly "OK\\n", and separately that /proc really shows
+    't', closes both the loose-assertion gap and the "trust the reply"
+    gap in one test."""
+    os.makedirs("/nw/ctl", exist_ok=True)
+    env = os.environ.copy()
+    env["NW_KIND"] = "1"
+    env["NW_BUDGET"] = "3"
+    env["NW_LIDS"] = "0"
+    proc = subprocess.Popen(
+        [f"{BIN}/nw-sup", _sleeper("ctlfrzgen2"), "ctlfrzgen2"],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
+    time.sleep(0.2)
+    gen1 = _find_by_comm(proc.pid, "sleep")
+    expect(gen1 is not None, "first-generation sleeper never reached exec")
+
+    r1 = _ctl("ctlfrzgen2", b"FREEZE\n")
+    expect(r1 == "OK\n", f"first-generation FREEZE not OK: {r1!r}")
+    time.sleep(0.2)
+    expect(_pid_state(gen1) == "t", "first-generation FREEZE did not stop it")
+    r2 = _ctl("ctlfrzgen2", b"CONT\n")
+    expect(r2 == "OK\n", f"first-generation CONT not OK: {r2!r}")
+    time.sleep(0.2)
+
+    # STOP + START: the existing idiom for forcing a genuinely new pid,
+    # exactly as test_ctl_start_relaunch_and_spent already does.
+    expect(_ctl("ctlfrzgen2", b"STOP\n") == "OK\n", "STOP before restart")
+    time.sleep(0.15)
+    expect(_comm(gen1) is None, "STOP did not actually kill the first generation")
+    expect(_ctl("ctlfrzgen2", b"START\n") == "OK\n", "START to force generation 2")
+    time.sleep(0.2)
+    gen2 = _find_by_comm(proc.pid, "sleep")
+    expect(gen2 is not None, "START never relaunched a second generation")
+    expect(gen2 != gen1,
+           "the 'second generation' is the SAME pid as the first -- "
+           "this test cannot tell the two apart")
+
+    r3 = _ctl("ctlfrzgen2", b"FREEZE\n")
+    expect(r3 == "OK\n",
+           f"second-generation FREEZE was {r3!r}, not OK -- a stale "
+           f"ptrace_attached from generation 1 made do_freeze() skip "
+           f"PTRACE_SEIZE and issue PTRACE_INTERRUPT at an unseized pid")
+    time.sleep(0.2)
+    expect(_pid_state(gen2) == "t",
+           f"second-generation FREEZE replied OK but /proc state is "
+           f"{_pid_state(gen2)!r}, not t -- it was never actually seized")
+    os.kill(gen2, 9)
+    proc.kill()
+    proc.communicate(timeout=2)
+    print("ok ctl-freeze-reattaches-after-restart")
+
+
+def test_ctl_freeze_cont_then_stop_actually_kills():
+    """tcb-review's CRITICAL finding, as a permanent regression test:
+    once a pid has ever been PTRACE_SEIZEd, EVERY signal sent to it is
+    intercepted into a signal-delivery-stop until the tracer re-injects
+    it -- not only the PTRACE_INTERRUPT this file issues on FREEZE.
+    do_cont() always calls PTRACE_CONT with signal 0 (correct for
+    resuming our OWN event-stop, which carries no signal to redeliver),
+    but the first version of wait_house()'s WIFSTOPPED fix treated
+    every stop identically -- "ignore, keep polling" -- which silently
+    discarded a REAL signal too. Reproduced live: FREEZE, CONT, then
+    STOP left the house sitting in ptrace-stop forever, never dying,
+    "OK" from STOP notwithstanding, because STOP's own SIGTERM was
+    intercepted and never delivered.
+
+    This is exactly the sequence a real operator would hit -- freeze a
+    house to look at it, resume it, and expect the ordinary lifecycle
+    verbs to still work afterward. The fix is is_ptrace_event_stop()
+    distinguishing nw-sup's own event-stop from an intercepted real
+    signal, and forwarding the latter via PTRACE_CONT's own signal
+    argument so it actually reaches the house."""
+    os.makedirs("/nw/ctl", exist_ok=True)
+    env = os.environ.copy()
+    env["NW_KIND"] = "1"
+    env["NW_BUDGET"] = "3"
+    env["NW_LIDS"] = "0"
+    proc = subprocess.Popen(
+        [f"{BIN}/nw-sup", _sleeper("ctlfrzstop"), "ctlfrzstop"],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
+    time.sleep(0.2)
+    house_pid = _find_by_comm(proc.pid, "sleep")
+    expect(house_pid is not None, "sleeper never reached exec")
+
+    r1 = _ctl("ctlfrzstop", b"FREEZE\n")
+    expect(r1 == "OK\n", f"FREEZE not OK: {r1!r}")
+    time.sleep(0.2)
+    expect(_pid_state(house_pid) == "t", "FREEZE did not stop it")
+
+    r2 = _ctl("ctlfrzstop", b"CONT\n")
+    expect(r2 == "OK\n", f"CONT not OK: {r2!r}")
+    time.sleep(0.2)
+    expect(_pid_state(house_pid) in ("S", "R"),
+           f"CONT replied OK but /proc state is {_pid_state(house_pid)!r}")
+
+    r3 = _ctl("ctlfrzstop", b"STOP\n")
+    expect(r3 == "OK\n", f"STOP after a freeze/cont cycle not OK: {r3!r}")
+    time.sleep(0.3)
+    expect(_comm(house_pid) is None,
+           f"STOP replied OK but the once-frozen house is still alive, "
+           f"state {_pid_state(house_pid)!r} -- its own SIGTERM was "
+           f"intercepted by ptrace and never delivered, exactly "
+           f"tcb-review's CRITICAL finding")
+    proc.kill()
+    proc.communicate(timeout=2)
+    print("ok ctl-freeze-cont-then-stop-actually-kills")
+
+
+def test_ctl_freeze_idempotent_and_cont_without_freeze():
+    """FREEZE on an already-frozen unit is idempotent OK with no
+    observable second effect; CONT on a unit that was never frozen is
+    idempotent OK with no effect on a running house."""
+    os.makedirs("/nw/ctl", exist_ok=True)
+    env = os.environ.copy()
+    env["NW_KIND"] = "1"
+    env["NW_BUDGET"] = "3"
+    env["NW_LIDS"] = "0"
+    proc = subprocess.Popen(
+        [f"{BIN}/nw-sup", _sleeper("ctlfrz2"), "ctlfrz2"],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
+    time.sleep(0.2)
+    house_pid = _find_by_comm(proc.pid, "sleep")
+    expect(house_pid is not None, "sleeper never reached exec")
+
+    # CONT before any FREEZE: idempotent, no effect on a running house.
+    r0 = _ctl("ctlfrz2", b"CONT\n")
+    expect(r0 == "OK\n", f"CONT with nothing frozen not OK: {r0!r}")
+    time.sleep(0.1)
+    expect(_pid_state(house_pid) in ("S", "R"),
+           "CONT with nothing frozen disturbed a running house")
+
+    r1 = _ctl("ctlfrz2", b"FREEZE\n")
+    expect(r1 == "OK\n", f"first FREEZE not OK: {r1!r}")
+    time.sleep(0.2)
+    expect(_pid_state(house_pid) == "t", "first FREEZE did not stop it")
+
+    r2 = _ctl("ctlfrz2", b"FREEZE\n")
+    expect(r2 == "OK\n", f"second (idempotent) FREEZE not OK: {r2!r}")
+    time.sleep(0.2)
+    expect(_pid_state(house_pid) == "t",
+           "second FREEZE left the house in a different state")
+
+    r3 = _ctl("ctlfrz2", b"CONT\n")
+    expect(r3 == "OK\n", f"CONT after double FREEZE not OK: {r3!r}")
+    time.sleep(0.2)
+    expect(_pid_state(house_pid) in ("S", "R"),
+           "CONT after double FREEZE failed to resume the house")
+    # See test_ctl_freeze_and_cont: the running grandchild inherits this
+    # test's own pipes and must be killed before nw-sup, or
+    # communicate() hangs waiting for a pipe write-end that is still
+    # open in an orphaned, still-running process.
+    os.kill(house_pid, 9)
+    proc.kill()
+    out, err = proc.communicate(timeout=2)
+    out = (out or "") + (err or "")
+    expect("restart ctlfrz2" not in out, f"counted as a death\n{out}")
+    print("ok ctl-freeze-idempotent-and-cont-without-freeze")
+
+
+def test_ctl_freeze_races_natural_exit():
+    """FREEZE arriving at (or just after) the moment a house dies on its
+    own is a narrow, real race -- docs/options/11-start-stop-channel.md
+    already names and accepts the same shape for STOP ("a narrow,
+    sub-millisecond race window... not absent") rather than closing it
+    with a generation token, and this is not a heavier claim than that
+    one.
+
+    A bare flood of FREEZE with no CONT is not the right shape for this:
+    a successfully frozen house is, correctly, no longer dying on its
+    own at all (that is the whole point of the fix), so the death/
+    restart cycle would legitimately stall rather than "starve" --
+    asserting it still reaches "spent" under that flood would be
+    asserting the fix's own absence. So each FREEZE is followed by a
+    CONT, giving every generation a chance to actually run to its
+    natural exit before the next probe. What must hold regardless of
+    how any single request lands: nw-sup never crashes, every reply is
+    well-formed (OK or an ERR-prefixed reason, never a raw exception or
+    a hang), and the budget still exhausts and reports "spent" normally
+    -- the flood does not starve the reap the way
+    test_ctl_socket_and_death_together already checks for START."""
+    os.makedirs("/nw/ctl", exist_ok=True)
+    env = os.environ.copy()
+    env["NW_KIND"] = "1"
+    env["NW_BUDGET"] = "2"
+    env["NW_LIDS"] = "0"
+    proc = subprocess.Popen(
+        [f"{BIN}/nw-sup", "/bin/false", "ctlfrzrace"],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
+    time.sleep(0.05)
+    replies = []
+    for _ in range(20):
+        try:
+            replies.append(_ctl("ctlfrzrace", b"FREEZE\n"))
+            replies.append(_ctl("ctlfrzrace", b"CONT\n"))
+        except (OSError, TimeoutError, ConnectionError):
+            pass
+    try:
+        out, err = proc.communicate(timeout=3)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        out, err = proc.communicate()
+    out = (out or "") + (err or "")
+    expect("spent ctlfrzrace" in out,
+           f"FREEZE/CONT flood starved the reap -- never spent\n{out}")
+    expect("FAIL" not in out, f"nw-sup crashed under the FREEZE/CONT flood\n{out}")
+    for r in replies:
+        expect(r == "OK\n" or r.startswith("ERR"),
+               f"a FREEZE/CONT reply was neither OK nor ERR-prefixed: {r!r}")
+    print("ok ctl-freeze-races-natural-exit")
+
+
+def test_ctl_freeze_not_running_while_stopped():
+    """FREEZE while the unit is in the stopped state (after STOP, before
+    a subsequent START) is refused as "not running", not treated as
+    malformed and not silently accepted; CONT while stopped is
+    idempotent OK, since nothing is frozen."""
+    os.makedirs("/nw/ctl", exist_ok=True)
+    env = os.environ.copy()
+    env["NW_KIND"] = "1"
+    env["NW_BUDGET"] = "3"
+    env["NW_LIDS"] = "0"
+    proc = subprocess.Popen(
+        [f"{BIN}/nw-sup", _sleeper("ctlfrzstopped"), "ctlfrzstopped"],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
+    time.sleep(0.2)
+    house_pid = _find_by_comm(proc.pid, "sleep")
+    expect(house_pid is not None, "sleeper never reached exec")
+    r0 = _ctl("ctlfrzstopped", b"STOP\n")
+    expect(r0 == "OK\n", f"STOP not OK: {r0!r}")
+    time.sleep(0.2)
+    expect(_comm(house_pid) is None, "STOP did not actually kill it")
+
+    r1 = _ctl("ctlfrzstopped", b"FREEZE\n")
+    expect(r1 == "ERR not running\n",
+           f"FREEZE while stopped was {r1!r}, not the 'not running' refusal")
+    r2 = _ctl("ctlfrzstopped", b"CONT\n")
+    expect(r2 == "OK\n", f"CONT while stopped (idempotent) was {r2!r}")
+
+    r3 = _ctl("ctlfrzstopped", b"START\n")
+    expect(r3 == "OK\n", f"START after the FREEZE/CONT probing not OK: {r3!r}")
+    time.sleep(0.2)
+    relaunched = _find_by_comm(proc.pid, "sleep")
+    expect(relaunched is not None, "START after probing never relaunched")
+    # Same pipe-holder hazard as test_ctl_freeze_and_cont: the relaunched
+    # sleeper is running and inherits this test's own pipes.
+    os.kill(relaunched, 9)
+    proc.kill()
+    proc.communicate(timeout=2)
+    print("ok ctl-freeze-not-running-while-stopped")
 
 
 def test_ctl_start_relaunch_and_spent():
@@ -11160,7 +11616,16 @@ def main():
         test_relaunch_reports_inconclusive_when_still_running,
         test_shutdown_does_not_restart,
         test_pidfd_reaps_and_counts, test_pidfd_open_failure_falls_back,
-        test_ctl_stop_does_not_count, test_ctl_start_relaunch_and_spent,
+        test_ctl_stop_does_not_count,
+        test_ctl_freeze_and_cont,
+        test_ctl_freeze_survives_pidfd_fallback,
+        test_ctl_freeze_survives_signalfd_fallback,
+        test_ctl_freeze_reattaches_after_restart,
+        test_ctl_freeze_idempotent_and_cont_without_freeze,
+        test_ctl_freeze_races_natural_exit,
+        test_ctl_freeze_not_running_while_stopped,
+        test_ctl_freeze_cont_then_stop_actually_kills,
+        test_ctl_start_relaunch_and_spent,
         test_ctl_malformed_refused, test_ctl_socket_and_death_together,
         test_ctl_pidfd_fallback_with_socket,
         test_ctl_tier3_fallback_with_socket,
