@@ -8138,6 +8138,103 @@ def test_landlock_confines():
           f"and allowed in the bind, mkblock refused in both; {trunc})")
 
 
+def test_ctl_dir_hardening():
+    """Item 1f (docs/OPERATOR-BRIEF.md Section 2): the control-socket
+    directory is 0700 and a house's bind of it is read-only.
+
+    Deliberately NO Landlock here, unlike test_landlock_confines above.
+    The read-only bind is enforced by the MOUNT (MS_BIND then
+    MS_BIND|MS_REMOUNT|MS_RDONLY), not by a lid right, so a plain
+    `lids=newns` house sees the same denial a landlock house would --
+    that is the whole point of testing it separately rather than
+    folding it into the landlock test, whose skip this must not
+    inherit on a machine with no Landlock at all.
+
+    Two directions, same shape harness.md asks for everywhere else:
+    a NORMAL bind (NW_BIND_0) must still be writable, or a baker/
+    supervisor bug that made every bind read-only would pass this
+    test too. Only NW_BIND_1, the one naming NW_CTL_DIR specifically,
+    must be denied."""
+    why = erofs_available()
+    if why:
+        skip("ctl-dir-hardening", why)
+        return
+
+    ctldir = blob_h("NW_CTL_DIR").strip('"')
+    # WIDEN THE MODE FIRST, deliberately, before this boot. NW_CTL_DIR is
+    # on the machine root like NW_BRICK_DIR and NW_LAYER_DIR, so it is
+    # not reset by `make stage` and can already sit at 0700 from an
+    # EARLIER real nw-sup this same suite process (or a previous run on
+    # this machine, hours or days old) already chmod'd -- a control that
+    # deletes the chmod call and reruns only this test could then still
+    # read 0700 off that leftover state and report a false pass, never
+    # having exercised the code under test at all. Widening it here
+    # means the post-boot assertion below can only pass if THIS boot's
+    # nw-sup actually re-narrowed it.
+    if os.path.exists(ctldir):
+        os.chmod(ctldir, 0o755)
+    shared = f"{WORK}/ctlhard-shared"
+    shutil.rmtree(shared, ignore_errors=True)
+    os.makedirs(shared, exist_ok=True)
+    open(f"{shared}/token", "w").write("token-from-the-machine\n")
+    brick = make_brick("ctlhard-brick", mirrors=(shared, ctldir))
+
+    city = f"{WORK}/ctlhard.city"
+    open(city, "w").write(
+        f"house sealed /bin/brick kind=oneshot lids=newns "
+        f"brick={brick} layer=l-ctlhard bind={shared} bind={ctldir}\n")
+    blob = f"{WORK}/ctlhard.blob"
+    b = run(["python3", CC, "--city", city, "--out", blob, "--lab"])
+    expect(b.returncode == 0, f"bake\n{b.out}{b.err}")
+
+    rc, out = boot(plan=blob, hold=1500)
+    expect(city_closed(rc, out), f"ctl-dir-hardening city rc={rc}\n{out}")
+
+    def field(k):
+        return dict(re.findall(r"(\w+) " + k + r"=(\S+)", out))
+
+    expect(field("id").get("sealed") == "ctlhard-brick",
+           f"house did not start\n{out}")
+    # THE CONTROL: an ordinary bind must still be writable with no lid
+    # doing anything special. If this is denied, the finding is not
+    # about /nw/ctl at all -- it is a regression in the plain bind
+    # path, and the assertion below would be satisfied for the wrong
+    # reason (every bind refused, not just this one).
+    wrb = field("wr_bind").get("sealed", "")
+    expect(wrb == "ok",
+           f"an ordinary declared bind was not writable: wr_bind={wrb}. "
+           f"Nothing about item 1f should touch a bind that is not "
+           f"NW_CTL_DIR\n{out}")
+    # THE SUBJECT: /nw/ctl specifically, refused at the FILESYSTEM level.
+    # errno 30 is EROFS from the remount, not denied(13)/EACCES from a
+    # lid -- there is no lid in this plan at all, so EACCES here would
+    # mean something other than the mount answered.
+    wrc = field("wr_bind1").get("sealed", "")
+    expect(wrc == "denied(30)",
+           f"a bind of NW_CTL_DIR was not read-only: wr_bind1={wrc}. "
+           f"denied(30) is EROFS from the MS_RDONLY remount; anything "
+           f"else means the remount did not take or something unrelated "
+           f"answered\n{out}")
+
+    # THE DIRECTORY MODE, on the machine root -- NW_CTL_DIR is absolute,
+    # like NW_BRICK_DIR and NW_LAYER_DIR, so this boot's own nw-sup
+    # process created or confirmed it there before this unit's child
+    # ever forked. 0o700 exactly, not merely "no group/other bits" --
+    # nw-sup chmods it unconditionally on every boot specifically so a
+    # directory a PREDECESSOR binary left at 0755 does not survive an
+    # upgrade unfixed.
+    st = os.stat(ctldir)
+    mode = st.st_mode & 0o777
+    expect(mode == 0o700,
+           f"{ctldir} is mode {oct(mode)}, not 0700, after a boot that "
+           f"ran nw-sup at least once\n{out}")
+
+    print(f"ok ctl-dir-hardening ({ctldir} mode {oct(mode)} after boot; "
+          f"an ordinary bind stayed writable ({wrb}) while the bind of "
+          f"{ctldir} was refused at the mount ({wrc}), with no lid in "
+          f"the plan at all)")
+
+
 def test_landlock_bind_to_a_file():
     """Pins nwsup.c's ll_beneath() fix for a bind target that is not a
     directory. Every bind before this one, anywhere in this suite, named a
@@ -12478,6 +12575,7 @@ def main():
         test_non_provision_at_max,
         test_landlock_confines,
         test_landlock_bind_to_a_file,
+        test_ctl_dir_hardening,
         test_console_house_reachable,
         test_slot_unchosen_not_missing_dir,
         test_logger_holds_fd0,

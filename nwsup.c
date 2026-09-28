@@ -315,6 +315,24 @@ static void lid_brick(const char *brick, const char *layer,
         say("lid layer");
     }
 
+    /* NW_CTL_DIR's IDENTITY, stat'd once, not its spelling. tcb-review:
+     * a plan declaring bind=/nw/ctl/ (or //nw/ctl, or /nw/./ctl) bind-
+     * mounts the identical directory -- the kernel resolves the source
+     * path the same way `mount(2)` below does -- but a `strcmp` against
+     * the constant does not match any of those, so the remount below
+     * would silently skip and leave the real control directory
+     * read-write through a differently-spelled bind=. Reproduced:
+     * `path_ok_len()` (nwcheck.c) accepts all three spellings, and the
+     * kernel resolves each to the same inode as NW_CTL_DIR. `stat()`,
+     * which resolves a path the same way the kernel's own path lookup
+     * does, is what a string comparison cannot be. Dies loudly rather
+     * than silently treating "cannot tell" as "not the control
+     * directory": nw-sup's own main() creates NW_CTL_DIR before this
+     * process is ever forked, so a failure here means that assumption
+     * broke, not that this bind merely isn't NW_CTL_DIR. */
+    struct stat ctl_st;
+    if (stat(NW_CTL_DIR, &ctl_st) < 0) die("stat ctl dir");
+
     for (int i = 0; i < nbinds; i++) {
         char tgt[sizeof(NW_BRICK_MNT) + NW_PATH_LEN];
         int n = snprintf(tgt, sizeof tgt, "%s%s", NW_BRICK_MNT, binds[i]);
@@ -326,6 +344,35 @@ static void lid_brick(const char *brick, const char *layer,
          * rather than being created behind the baker's back. */
         if (mount(binds[i], tgt, NULL, MS_BIND | MS_REC, NULL) < 0)
             die("bind");
+        /* NW_CTL_DIR SPECIFICALLY, not a general read-only bind field.
+         * Item 1f (docs/OPERATOR-BRIEF.md Section 2): a house that binds
+         * the control directory to reach another unit's socket gets it
+         * read-only, so it can connect() to a control socket but cannot
+         * replace or delete one -- narrower than the general bind grant
+         * every other path gets. Keyed off the bind resolving to the same
+         * directory, the same shape `brick=` forcing NW_LID_NEWNS already
+         * uses for a fixed consequence of a value, rather than a new plan
+         * field: there is exactly one directory this applies to and it
+         * never varies per house, so a field would be a second way to say
+         * something the bind's own resolution already says.
+         *
+         * TWO STEPS, not MS_BIND|MS_RDONLY in one mount(2) call -- the
+         * kernel silently drops MS_RDONLY combined with MS_BIND in a
+         * single call; the remount is what actually takes read-only
+         * effect. Measured directly: MS_BIND alone, then
+         * MS_BIND|MS_REMOUNT|MS_RDONLY on the same target, and a create
+         * or unlink through the mountpoint afterward gets EROFS while a
+         * connect(2) to an existing socket there still succeeds -- a
+         * read-only bind does not withhold read/connect access to what
+         * it already contains, only the ability to change what is
+         * there. */
+        struct stat bst;
+        if (stat(binds[i], &bst) < 0) die("stat bind");
+        if (bst.st_dev == ctl_st.st_dev && bst.st_ino == ctl_st.st_ino) {
+            if (mount(binds[i], tgt, NULL,
+                       MS_BIND | MS_REMOUNT | MS_RDONLY, NULL) < 0)
+                die("bind ctl dir readonly");
+        }
     }
 
     /* pivot_root(".", ".") -- new_root and put_old are the same directory.
@@ -1372,13 +1419,51 @@ int main(int argc, char **argv)
     int deaths = 0;
     if (mkdir("/nw", 0755) < 0 && errno != EEXIST)
         die("ctl parent");
-    if (mkdir(NW_CTL_DIR, 0755) < 0 && errno != EEXIST)
+    /* 0700, not 0755: item 1e (docs/OPERATOR-BRIEF.md Section 2, item
+     * 1f) hardens the control-socket directory. Every house is uid 0
+     * with no privilege dropped (invariant 5), so this does not change
+     * what a house on THIS machine can reach -- root bypasses directory
+     * permission bits everywhere. What it closes is a mapped, non-root
+     * uid entering /nw/ctl at all: measured, `stat -c '%a %U'` on a
+     * socket made under this scheme reads 600 root, and connecting as
+     * "nobody" to it gets EACCES (errno 13), while root's own connect
+     * through the exact same path still succeeds.
+     *
+     * CHMOD UNCONDITIONALLY, not only on the branch that just created
+     * it. `/nw` is on the persistent root, not tmpfs, so a directory
+     * this binary's PREDECESSOR made at 0755 survives an upgrade to
+     * this binary untouched by the `mkdir` EEXIST tolerance above --
+     * `mkdir` never retroactively narrows a mode it did not choose.
+     * Every nw-sup enforces the mode on every boot instead of trusting
+     * whichever supervisor happened to create the directory first. */
+    if (mkdir(NW_CTL_DIR, 0700) < 0 && errno != EEXIST)
         die("ctl dir");
+    /* fchmod on an O_NOFOLLOW-opened fd, not chmod(2) by path. chmod(2)
+     * follows a symlink; if /nw/ctl were ever replaced by one (a stale
+     * leftover, or between the mkdir above and here) chmod would narrow
+     * the SYMLINK'S TARGET instead, silently leaving the intended
+     * directory at whatever mode it already had. `fd-auditor`. Inert
+     * under today's threat model -- every house is uid 0 (invariant 5),
+     * so nothing here would gain from planting such a symlink that it
+     * could not already do directly -- but it is the categorical fix
+     * rather than a check for one attack shape, and it costs one open(). */
+    int ctl_dir_fd = open(NW_CTL_DIR, O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+    if (ctl_dir_fd < 0) die("open ctl dir");
+    if (fchmod(ctl_dir_fd, 0700) < 0)
+        die("ctl dir mode");
+    close(ctl_dir_fd);
     char sockpath[sizeof(NW_CTL_DIR) + NW_NAME_LEN + 8];
     if (snprintf(sockpath, sizeof sockpath, "%s/%s.sock",
                  NW_CTL_DIR, name) >= (int)sizeof sockpath)
         die("ctl path");
     unlink(sockpath);
+    /* The socket FILE's mode comes from the process umask at bind(2)
+     * time, the same as any other file creation -- socket(2) and
+     * bind(2) take no mode argument. Narrowed to exactly this pair so
+     * nothing else nw-sup creates (loop devices, layer mounts) is
+     * affected by a process-wide umask change; restored immediately
+     * after, not left for the rest of the process's life. */
+    mode_t ctl_old_umask = umask(0077);
     int lfd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC | SOCK_NONBLOCK, 0);
     if (lfd < 0) die("ctl socket");
     struct sockaddr_un addr;
@@ -1389,6 +1474,7 @@ int main(int argc, char **argv)
         die("ctl path");
     if (bind(lfd, (struct sockaddr *)&addr, sizeof addr) < 0)
         die("ctl bind");
+    umask(ctl_old_umask);
     if (listen(lfd, 4) < 0) die("ctl listen");
 
     int stopped = 0;

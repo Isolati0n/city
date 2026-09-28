@@ -1065,3 +1065,7 @@ prose-count	pid1.c	/* docs/OPERATOR-BRIEF.md Section 1d: one boot line naming
 # ran the exact order-swap mutation this absence exists to catch (bake
 # before check) and confirmed it goes red.
 unpaired-absence	tests/run.py	expect(not os.path.exists(f"{WORK}/nope.blob"),
+# a fixed fact about mount(2)'s kernel semantics (MS_BIND then a
+# separate MS_BIND|MS_REMOUNT|MS_RDONLY), not a growable count -- the
+# sentence names the two calls it is, and cannot silently become three
+prose-count	nwsup.c	* TWO STEPS, not MS_BIND|MS_RDONLY in one mount(2) call -- the

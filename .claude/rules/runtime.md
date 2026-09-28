@@ -387,6 +387,75 @@ elsewhere was already there. `tcb-review`.*
   the same path inside and out. Invariant 5 is about the descriptor table a
   house is born with, and that is still `/dev/null` on 0 and a log pipe on
   1 and 2.
+- **`NW_CTL_DIR` is the one bind target with its own rule, not a general
+  read-only-bind field.** Item 1f (2026-09-28, `docs/OPERATOR-BRIEF.md`
+  Section 2): a declared `bind=` that resolves to `NW_CTL_DIR` gets
+  remounted `MS_BIND|MS_REMOUNT|MS_RDONLY` after the ordinary
+  `MS_BIND`, in the bind loop — the same shape `brick=` forcing
+  `NW_LID_NEWNS` already uses, not a new plan field, because there is
+  exactly one path this applies to and it never varies per house.
+
+  **Resolved by `stat()`-identity (device and inode), not by comparing
+  the declared string to the constant.** The first version did compare
+  strings, and `tcb-review` broke it without touching a symlink: a
+  plan declaring `bind=/nw/ctl/`, `bind=//nw/ctl` or `bind=/nw/./ctl`
+  passes `nwcheck.c`'s `path_ok_len` (which rejects `..` and control
+  bytes, not a trailing slash or a doubled slash), bind-mounts the
+  identical directory exactly as `/nw/ctl` would — the kernel resolves
+  a mount's source path the same way `stat()` does — and yet none of
+  those spellings `strcmp`-matched `NW_CTL_DIR`, so the remount
+  silently never fired and the real control directory stayed fully
+  read-write through a differently-spelled bind. `stat()` on the
+  declared bind and on `NW_CTL_DIR` itself, compared by `st_dev`/
+  `st_ino`, answers "does this resolve to the control directory" the
+  way the mount itself resolves it, closing the whole class of
+  equivalent spellings at once rather than adding a string variant to
+  reject one at a time. A failed `stat()` on either side `die()`s
+  rather than silently treating "cannot tell" as "not the control
+  directory" — the exact failure mode the string comparison had.
+
+  **Two mount(2) calls, not one**: the kernel silently drops
+  `MS_RDONLY` combined with `MS_BIND` in a single call, so the remount
+  is the only step that takes effect. Measured directly: after both
+  calls, `open(..., O_CREAT)` and `unlink()` through the mountpoint get
+  `EROFS` (errno 30) while `connect(2)` to a socket already there still
+  succeeds — a read-only bind withholds the ability to change what a
+  directory contains, not the ability to read or connect to what is
+  already in it.
+
+  **`NW_CTL_DIR` itself is `0700`, chmod'd unconditionally on every
+  boot, not only on the branch that just created it.** `/nw` is on the
+  persistent root, so a directory a predecessor binary left at `0755`
+  survives an upgrade to a binary that only conditionally narrows a
+  mode it did not choose; every `nw-sup` enforces `0700` every time
+  instead. **`fchmod` on an `O_DIRECTORY|O_NOFOLLOW`-opened descriptor,
+  not `chmod(2)` by path** — `chmod(2)` follows a symlink, so if
+  `NW_CTL_DIR` were ever replaced by one the path form would narrow the
+  symlink's *target* instead and leave the directory the name is
+  supposed to mean untouched. `fd-auditor` found this inert under
+  today's threat model (every house is uid 0; invariant 5 says nothing
+  here gains from planting such a symlink that it could not already do
+  directly) and worth the categorical fix anyway rather than a check
+  for one attack shape. The socket FILE's mode comes from the process
+  `umask` at `bind(2)` time — `socket(2)`/`bind(2)` take no mode
+  argument — so `nw-sup` sets `umask(0077)` immediately around that one
+  `socket()` plus `bind()` pair and restores it right after, not for
+  the rest of the process's life, so nothing else `nw-sup` creates (a
+  loop device, a layer mount) is affected by the narrowed mask.
+
+  **What this closes and what it does not, stated because
+  `docs/options/11`'s own access-control paragraph would otherwise read
+  as contradicted by it.** Every house on this machine is uid 0 with no
+  privilege dropped (invariant 5), and root does not go through a
+  directory's permission bits, so `0700` and a read-only bind change
+  nothing about what one house's uid-0 process can already reach on
+  this machine — a brickless house's unrestricted view of `NW_CTL_DIR`,
+  which `docs/options/11` already documents as inherited from invariant
+  5 rather than opened by the control channel, is exactly as
+  unrestricted after this as before it. What it closes is real against
+  a uid this design does not have yet: measured, connecting to a
+  `0600` socket as a mapped, non-root uid gets `EACCES` where root's
+  own connect through the identical path succeeds.
 
 ## `rescue` — an operator mode, and it is not a fallback
 

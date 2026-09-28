@@ -13,7 +13,13 @@
  *   bind=    the contents of $NW_BIND_0/token, if the plan declared a bind.
  *            The path comes from the environment because a bind is the same
  *            path inside and out, so the fixture cannot know it in advance.
+ *   wr_bind1= whether a NEW file could be created under $NW_BIND_1, if the
+ *            plan declared a second bind. Item 1f's read-only /nw/ctl bind
+ *            is mount-level (MS_RDONLY), not a Landlock right, so this is
+ *            the one probe in this fixture that needs no lid at all to be
+ *            meaningful -- a plain `lids=newns` house sees the same denial.
  *
+
  * Not in the TCB. Test fixture.
  */
 #define _GNU_SOURCE
@@ -447,6 +453,12 @@ int main(int argc, char **argv)
     }
     report_write("wr_root", "");        /* creates -- needs MAKE_REG */
     if (b && b[0]) report_write("wr_bind", b);
+    /* A SECOND, INDEPENDENT bind, probed the same way as the first. Not
+     * gated on b[0]: a house can declare bind=/nw/ctl without declaring
+     * any other bind, and NW_BIND_1 in that case would be the FIRST
+     * declared bind under a different name were this gated on `b`. */
+    const char *b1 = getenv("NW_BIND_1");
+    if (b1 && b1[0]) report_write("wr_bind1", b1);
     /* THE THREE THAT SEPARATE THE LID FROM THE FILESYSTEM, added for the
      * Landlock decision of 2026-09-12. Writing a file the brick already
      * contains must SUCCEED (the layer is writable); a device node at the

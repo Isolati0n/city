@@ -166,6 +166,21 @@ documents for every
 brickless house, restated here because this is the first feature whose
 entire access-control story rests on namespace visibility mattering.
 
+**Item 1f's hardening (2026-09-28, `docs/OPERATOR-BRIEF.md` Section 2)
+narrows a DIFFERENT axis and does not close this one.** `NW_CTL_DIR` is
+`0700` and its sockets are created under `umask(077)` now, and a house
+that reaches it through a declared `bind=NW_CTL_DIR` gets it read-only
+rather than the ordinary read-write grant every other bind gets. What
+that buys is real against a uid this design's own uid-0 model does not
+have yet — a mapped, non-root uid gets `EACCES` connecting to a `0600`
+socket, measured directly. It buys nothing against the gap this section
+names: every house here is uid 0 (invariant 5), and root does not go
+through a directory's permission bits at all, so a brickless house's
+reach into `NW_CTL_DIR` is exactly as unrestricted after 1f as before
+it. The read-only bind is a write restriction on a house that goes
+through `bind=`, not an access restriction on who may `bind=` it or
+who may reach the directory some other way.
+
 ## Refusals, each paired with the test that pins it
 
 - **Malformed request** (anything other than exactly `"START\n"` or
