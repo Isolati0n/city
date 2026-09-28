@@ -190,11 +190,6 @@ UNOWNED = [
      "test_ctl_tier3_fallback_with_socket to exercise wait_house's "
      "third fallback tier. Not TCB; not a house. The assertion lives "
      "in tests/run.py."),
-    ("tests/delay_exec.so.c",
-     "LD_PRELOAD shim delaying execv(2) by a configurable interval, "
-     "used to force the fork-to-execv window nw-sup's exec fence "
-     "closes. Not TCB; not a house. The assertion lives in "
-     "tests/run.py."),
     ("tests/sha256_vectors.c",
      "standalone known-answer test for sha256.c against NIST's own "
      "SHA-256 vectors, used by test_sha256_known_vectors. Not TCB; not "

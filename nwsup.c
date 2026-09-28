@@ -26,7 +26,6 @@
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
-#include <sys/ptrace.h>
 #include <sys/un.h>
 #include <sys/wait.h>
 #include <time.h>
@@ -775,80 +774,18 @@ static void on_term(int sig)
  * next, and only drops to a bounded 50ms poll()-plus-WNOHANG loop if
  * that too fails -- never an unconditional die().
  *
- * SIGNALFD IS NO LONGER ONLY A FALLBACK, since docs/options/16's FREEZE
- * verb gave it a second job pidfd cannot do at all: pidfd_open(2) is
- * documented to become poll-readable ONLY on genuine termination, never
- * on any kind of ptrace-stop -- not our own PTRACE_INTERRUPT, and not an
- * ordinary signal ptrace intercepts once this pid has ever been seized
- * (docs/options/16's is_ptrace_event_stop()/forward_if_real_signal()).
- * A first version of this fix handled that only inside the two fallback
- * tiers, and `tcb-review` reproduced it failing under tier 1 -- the tier
- * every real machine actually uses: with only pidfd polled, a STOP or
- * shutdown SIGTERM arriving at a once-frozen house is intercepted, and
- * NOTHING here ever finds out, because neither polled fd becomes ready
- * for it. poll() simply never returns. So signalfd(SIGCHLD) is now
- * ALWAYS created and polled ALONGSIDE pidfd when both are available --
- * not "pidfd, or else signalfd" but "pidfd for the fast, common,
- * termination-only case, plus signalfd as the one channel that can see
- * every kind of ptrace-stop too." The 50ms-poll tier remains the last
- * resort, reached only when BOTH fail.
+ * Item 1c (docs/OPERATOR-BRIEF.md Section 2) removed docs/options/16's
+ * FREEZE/CONT verbs, which for one round made signalfd(SIGCHLD) run
+ * UNCONDITIONALLY alongside pidfd rather than only as its fallback --
+ * pidfd_open(2) is documented to become poll-readable solely on
+ * genuine termination, never on a ptrace-stop, and a frozen house
+ * needed a channel that could see one. With FREEZE/CONT gone, nothing
+ * here ever ptrace-attaches a house, so there is no stop for pidfd to
+ * be blind to, and signalfd is back to being purely the fallback this
+ * paragraph already describes. docs/options/16 is superseded, not
+ * deleted; `HISTORY.md` and that document carry the retired reasoning.
  */
 static int stop_requested;
-
-/* docs/options/16-freeze-single-step.md. Bookkeeping only, set/cleared
- * optimistically inside the ctl handler the same fire-and-forget way
- * stop_requested already is -- neither flag claims the kernel has
- * already produced the state change, only that a request for it was
- * issued. ptrace_attached is sticky for one generation's whole life
- * (SEIZE once per fork, INTERRUPT/CONT as needed after) -- reset to 0
- * at every fresh fork below, since a new pid was never seized and a
- * stale "already attached" would send PTRACE_INTERRUPT at a pid nw-sup
- * never actually traced. house_frozen toggles per freeze/cont pair
- * and exists so a repeat FREEZE or a CONT on a never-frozen unit can
- * be answered without a second syscall. */
-static int ptrace_attached;
-static int house_frozen;
-
-/* fd-auditor's MEDIUM finding on #16, closed: FREEZE was reachable the
- * instant fork() returned, before the child had applied any lid or
- * reached execv() -- an operator FREEZE could in principle seize the
- * forked copy of nw-sup itself mid-lid_brick(), holding a contended
- * loop device open for as long as it stayed frozen. Closed with an
- * exec fence: a CLOEXEC pipe created before every fork, write end held
- * by the child, read end held by the parent. The write end survives
- * fork and every lid application (none of them exec anything), and is
- * closed automatically by the kernel the moment the child's own
- * execv() succeeds -- CLOEXEC's whole purpose. The parent's read()
- * returns 0 (EOF) at exactly that instant and not before; a failed
- * exec's die() closes it too, via ordinary process exit, which is
- * fine -- that generation is dying either way and FREEZE has nothing
- * left to attach to. exec_fence_rd is -1 once confirmed (closed
- * promptly rather than held open for the rest of the generation) or
- * once no pipe exists yet to check; child_execed is the sticky
- * confirmation, reset to 0 at every fresh fork alongside the two
- * flags above. */
-static int exec_fence_rd = -1;
-static int child_execed;
-
-/* Non-blocking: a pipe with data never written on it either reads EOF
- * (write end closed -- execv succeeded, or the child exited without
- * one) or fails with EAGAIN (write end still open -- still mid-lid-setup).
- * Safe to call repeatedly; once child_execed is 1 this is a no-op. */
-static void check_exec_fence(void)
-{
-    if (child_execed || exec_fence_rd < 0)
-        return;
-    char buf[1];
-    ssize_t n = read(exec_fence_rd, buf, sizeof buf);
-    if (n == 0) {
-        child_execed = 1;
-        close(exec_fence_rd);
-        exec_fence_rd = -1;
-    }
-    /* n < 0 (EAGAIN): still pre-exec, nothing to update. n > 0 should
-     * never happen -- nothing ever writes to this pipe -- and is
-     * deliberately left unhandled rather than guessed at. */
-}
 
 static void ctl_reply(int c, const char *s)
 {
@@ -856,90 +793,9 @@ static void ctl_reply(int c, const char *s)
     (void)n;
 }
 
-/* FREEZE/CONT never call waitpid() here, deliberately. handle_ctl_live()
- * runs synchronously inside wait_house()'s own poll loop, and reaping is
- * wait_house()'s job alone, done exactly once per real event with the
- * resulting status carried back to the per-unit loop's death accounting.
- * A confirming waitpid() in this function would risk reaping a real,
- * unrelated death (a race between the request arriving and the house
- * exiting on its own) inside a handler with no path back to that
- * bookkeeping -- silently swallowing it. So a FREEZE issues SEIZE (if
- * needed) and INTERRUPT and replies OK immediately, meaning "the
- * request was issued", exactly what STOP's own OK already means. The
- * actual transition into ptrace-stop is observed by wait_house()'s own
- * WIFSTOPPED-aware loop, asynchronously -- see that function for the
- * other half of this fix, and see is_ptrace_event_stop() below for a
- * second half tcb-review found this first version did not have: once a
- * pid is PTRACE_SEIZEd, EVERY signal sent to it -- not only the
- * PTRACE_INTERRUPT this file issues -- becomes an intercepted
- * signal-delivery-stop that never reaches the tracee until the tracer
- * re-injects it. Treating every WIFSTOPPED status as "ignore, keep
- * polling" (which is correct for our own FREEZE) silently discarded
- * every OTHER signal too -- including STOP's own SIGTERM and PID 1's
- * shutdown TERM -- for the rest of a once-frozen generation's life.
- * Reproduced live: FREEZE, CONT, then STOP left the house sitting in
- * ptrace-stop forever, never dying, "OK" from STOP notwithstanding. */
-
-/* linux/ptrace.h's PTRACE_EVENT_STOP, spelled locally so this file does
- * not need that header beside <sys/ptrace.h> (the two are not always
- * safe to include together). True iff `st` (a WIFSTOPPED wait status)
- * is nw-sup's OWN PTRACE_INTERRUPT/group-stop notification, per
- * ptrace(2): "status>>8 == (SIGTRAP | (PTRACE_EVENT_STOP<<8))" --
- * distinct from an ordinary signal-delivery-stop, where WSTOPSIG(st)
- * reports the real signal number and no such event bits are set.
- * Verified against a real seize/interrupt/cont/kill sequence, not
- * assumed from the man page alone. */
-#define NW_PTRACE_EVENT_STOP 128
-static int is_ptrace_event_stop(int st)
-{
-    return (st >> 8) == (SIGTRAP | (NW_PTRACE_EVENT_STOP << 8));
-}
-
-/* A WIFSTOPPED status that is NOT our own event-stop is a real signal
- * ptrace intercepted before delivery -- most commonly STOP's or
- * shutdown's own SIGTERM, once this pid has ever been seized. Forward
- * it via PTRACE_CONT's own signal argument so the tracee actually
- * receives and acts on it (its default disposition, same as if ptrace
- * had never been involved), rather than silently discarding it. Our
- * own event-stops are left exactly as they are -- this must never
- * resume a FREEZE the operator asked for. */
-static void forward_if_real_signal(pid_t p, int st)
-{
-    if (!is_ptrace_event_stop(st))
-        ptrace(PTRACE_CONT, p, NULL, (void *)(intptr_t)WSTOPSIG(st));
-}
-
-static int do_freeze(pid_t live)
-{
-    if (live <= 0)
-        return -1;
-    if (house_frozen)
-        return 0; /* idempotent: no second INTERRUPT */
-    if (!ptrace_attached) {
-        if (ptrace(PTRACE_SEIZE, live, NULL, NULL) < 0)
-            return -1;
-        ptrace_attached = 1;
-    }
-    if (ptrace(PTRACE_INTERRUPT, live, NULL, NULL) < 0)
-        return -1;
-    house_frozen = 1;
-    return 0;
-}
-
-static int do_cont(pid_t live)
-{
-    if (!house_frozen)
-        return 0; /* idempotent: no syscall at all */
-    if (live > 0 && ptrace(PTRACE_CONT, live, NULL, NULL) < 0)
-        return -1;
-    house_frozen = 0;
-    return 0;
-}
-
 /* Listen fd ready: one connection, one request, one reply, close.
  * START/STOP while the child is live. START on a live house is OK
- * (no second fork). STOP sets stop_requested and SIGTERMs. FREEZE/CONT
- * are the same fire-and-forget shape -- see do_freeze/do_cont above. */
+ * (no second fork). STOP sets stop_requested and SIGTERMs. */
 static void handle_ctl_live(int listen_fd, pid_t live)
 {
     int c = accept(listen_fd, NULL, NULL);
@@ -955,21 +811,6 @@ static void handle_ctl_live(int listen_fd, pid_t live)
             kill(live, SIGTERM);
         }
         ctl_reply(c, "OK\n");
-    } else if (n == 7 && memcmp(buf, "FREEZE\n", 7) == 0) {
-        check_exec_fence();
-        if (live <= 0)
-            ctl_reply(c, "ERR not running\n");
-        else if (!child_execed)
-            ctl_reply(c, "ERR not execed\n");
-        else if (do_freeze(live) < 0)
-            ctl_reply(c, "ERR freeze failed\n");
-        else
-            ctl_reply(c, "OK\n");
-    } else if (n == 5 && memcmp(buf, "CONT\n", 5) == 0) {
-        if (do_cont(live) < 0)
-            ctl_reply(c, "ERR cont failed\n");
-        else
-            ctl_reply(c, "OK\n");
     } else {
         ctl_reply(c, "ERR bad request\n");
     }
@@ -979,26 +820,29 @@ static void handle_ctl_live(int listen_fd, pid_t live)
 static int wait_house(pid_t p, int extra_fd)
 {
     int pfd = (int)syscall(SYS_pidfd_open, p, 0U);
-
-    /* signalfd(SIGCHLD) is attempted unconditionally now -- not only
-     * when pidfd_open fails. See the header comment above for why:
-     * pidfd is blind to every ptrace-stop, and once extra_fd exists
-     * (always, both call sites) a FREEZE can arrive during this very
-     * call. */
-    sigset_t sc;
-    sigemptyset(&sc);
-    sigaddset(&sc, SIGCHLD);
-    sigprocmask(SIG_BLOCK, &sc, NULL);
-    int wake = signalfd(-1, &sc, SFD_CLOEXEC);
+    int wake = -1;
+    if (pfd < 0) {
+        /* signalfd(SIGCHLD) is the FALLBACK for a failed pidfd_open,
+         * not a channel run alongside it. Item 1c (docs/OPERATOR-BRIEF.md
+         * Section 2, superseding docs/options/16): FREEZE/CONT once made
+         * this unconditional, because pidfd_open(2) is documented to
+         * become poll-readable only on genuine termination, never on a
+         * ptrace-stop, and a frozen house needed a channel that could
+         * see one. Nothing here ptrace-attaches a house any more, so
+         * there is no stop for pidfd to be blind to, and pidfd alone
+         * sees every real termination this fallback exists to catch. */
+        sigset_t sc;
+        sigemptyset(&sc);
+        sigaddset(&sc, SIGCHLD);
+        sigprocmask(SIG_BLOCK, &sc, NULL);
+        wake = signalfd(-1, &sc, SFD_CLOEXEC);
+    }
 
     if (pfd < 0 && wake < 0) {
         /* Both primary channels failed. Live socket cannot sit behind
          * blocking waitpid: that re-enables the orphan-and-die path
-         * the last review closed. If there is no ctl socket either,
-         * this pid can never have been ptrace-seized (handle_ctl_live()
-         * is unreachable), so a plain blocking wait is correct -- there
-         * is nothing to mistake a stop for. Otherwise, poll the socket
-         * with a 50ms bound and waitpid WNOHANG. */
+         * the last review closed. Otherwise, poll the socket with a
+         * 50ms bound and waitpid WNOHANG. */
         if (extra_fd < 0) {
             int st = 0;
             if (waitpid(p, &st, 0) < 0)
@@ -1018,16 +862,8 @@ static int wait_house(pid_t p, int extra_fd)
             }
             int st = 0;
             pid_t r = waitpid(p, &st, WNOHANG);
-            /* r == p && WIFSTOPPED(st): a ptrace-stop, not a reap --
-             * see is_ptrace_event_stop()/forward_if_real_signal() above:
-             * our own FREEZE is left alone, any other intercepted
-             * signal is forwarded so it actually reaches the house.
-             * docs/options/16. */
-            if (r == p && WIFSTOPPED(st)) {
-                forward_if_real_signal(p, st);
-            } else if (r == p) {
+            if (r == p)
                 return st;
-            }
             if (pf.revents & (POLLIN | POLLHUP | POLLERR)) {
                 handle_ctl_live(extra_fd, p);
                 pf.revents = 0;
@@ -1035,13 +871,12 @@ static int wait_house(pid_t p, int extra_fd)
         }
     }
 
-    /* At least one of pidfd/signalfd is available. Poll every fd that
-     * exists: pidfd for the fast, common, termination-only path;
-     * signalfd for anything pidfd cannot see (any ptrace-stop, once
-     * this pid has ever been seized); the ctl socket for START/STOP/
-     * FREEZE/CONT requests. Up to three members, tracked by index
-     * rather than by a fixed position, since which ones exist varies. */
-    struct pollfd pf[3];
+    /* Exactly one of pidfd/signalfd is available -- the two are mutually
+     * exclusive now that signalfd is only created when pidfd_open failed
+     * above. Poll it plus the ctl socket, up to two members, tracked by
+     * index rather than by a fixed position since which one exists
+     * varies. */
+    struct pollfd pf[2];
     nfds_t n = 0;
     int pfd_i = -1, wake_i = -1, extra_i = -1;
     if (pfd >= 0) {
@@ -1076,26 +911,19 @@ static int wait_house(pid_t p, int extra_fd)
         }
         if (wake_i >= 0 &&
             (pf[wake_i].revents & (POLLIN | POLLHUP | POLLERR))) {
-            /* SIGCHLD is delivered to the tracer on a ptrace-stop
-             * exactly as on a real exit -- the WIFSTOPPED check is
-             * what tells them apart, and event-stop-vs-real-signal is
-             * is_ptrace_event_stop()/forward_if_real_signal() above. */
             struct signalfd_siginfo si;
             ssize_t ign = read(wake, &si, sizeof si);
             (void)ign;
             int st = 0;
             pid_t r = waitpid(p, &st, WNOHANG);
-            if (r == p && WIFSTOPPED(st)) {
-                forward_if_real_signal(p, st);
-            } else if (r == p) {
-                if (pfd >= 0) close(pfd);
+            if (r == p) {
                 close(wake);
                 return st;
             }
             pf[wake_i].revents = 0;
         }
         if (pfd_i >= 0 && (pf[pfd_i].revents & (POLLIN | POLLHUP | POLLERR)))
-            break; /* pidfd: real termination only, never a stop. */
+            break; /* pidfd: real termination, the only thing it reports. */
     }
 
     int st = 0;
@@ -1508,12 +1336,6 @@ int main(int argc, char **argv)
                 continue;
             } else if (n == 5 && memcmp(buf, "STOP\n", 5) == 0) {
                 ctl_reply(c, "OK\n");
-            } else if (n == 7 && memcmp(buf, "FREEZE\n", 7) == 0) {
-                /* No live pid while stopped -- well-formed request,
-                 * nothing to attach to. */
-                ctl_reply(c, "ERR not running\n");
-            } else if (n == 5 && memcmp(buf, "CONT\n", 5) == 0) {
-                ctl_reply(c, "OK\n"); /* nothing was frozen; idempotent */
             } else {
                 ctl_reply(c, "ERR bad request\n");
             }
@@ -1521,44 +1343,12 @@ int main(int argc, char **argv)
             continue;
         }
 
-        /* A fresh fork is a new pid that was never seized: the ptrace
-         * relationship (if any) belonged to the generation that just
-         * died, not to this one. Without this reset, a FREEZE after a
-         * restart would see ptrace_attached already set from the prior
-         * generation, skip PTRACE_SEIZE, and issue PTRACE_INTERRUPT
-         * against a pid nw-sup was never actually tracing -- a failure,
-         * not a hang, but a wrong one. "Sticky for the unit's whole
-         * life" (docs/options/16) means the ctl socket's whole life,
-         * which is one generation at a time, not literally forever. */
-        ptrace_attached = 0;
-        house_frozen = 0;
-        /* The exec fence: see check_exec_fence()'s own comment. A fresh
-         * pipe per generation, same reasoning as the two resets above --
-         * the previous generation's confirmation says nothing about
-         * this one. exec_fence_rd is already -1 if the prior generation
-         * confirmed (closed promptly by check_exec_fence()); closing it
-         * again here covers the one case where FREEZE was never once
-         * requested against the prior generation, so nothing ever read
-         * it to EOF and closed it. */
-        if (exec_fence_rd >= 0) close(exec_fence_rd);
-        child_execed = 0;
-        int ef[2];
-        if (pipe2(ef, O_CLOEXEC) < 0) die("exec fence pipe");
         pid_t p = fork();
         if (p < 0) die("fork house");
         if (p > 0) {
             child = p;
-            close(ef[1]);
-            if (fcntl(ef[0], F_SETFL, O_NONBLOCK) < 0) die("exec fence nonblock");
-            exec_fence_rd = ef[0];
         }
         if (p == 0) {
-            close(ef[0]);
-            /* ef[1] (O_CLOEXEC) is left open here, deliberately: it
-             * survives every lid below and is closed by the kernel the
-             * instant execv() below succeeds, which is the whole fence.
-             * Nothing in this child ever writes to it. */
-
             /* A genuinely pre-existing bug, found by this round's own
              * deterministic pre-exec-window test, not introduced by it:
              * fork() copies signal DISPOSITION, so this child inherits

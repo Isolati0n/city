@@ -79,6 +79,42 @@ environment — so a change to any link is a change to everything below it.
 - **No compile-time descriptor numbers alongside dynamic allocation.** Bugs
   5, 9 and 13 were one mistake three times, and none of them produced an
   error — they produced silently wrong routing. Sweep `/proc/self/fd`.
+- **`wait_house()`'s `signalfd` is a FALLBACK, not a second channel run
+  alongside `pidfd`.** `nwsup.c` opens `pidfd_open(2)` first; `signalfd`
+  is created only when that call failed, never unconditionally. This is
+  the ORIGINAL shape, restored by item 1c (2026-09-28,
+  `docs/OPERATOR-BRIEF.md` Section 2) removing `FREEZE`/`CONT`
+  (`docs/options/16`, now superseded) — for one round `FREEZE` needed
+  `signalfd` running unconditionally beside `pidfd`, because
+  `pidfd_open(2)` is documented to become poll-readable only on genuine
+  termination, never on a ptrace-stop, and a frozen house needed a
+  channel that could see one. With `FREEZE`/`CONT` gone, nothing here
+  ever `ptrace`-attaches a house (`grep -nE "ptrace|PTRACE" nwsup.c`
+  returns nothing outside a stale-history comment), so there is no stop
+  for `pidfd` to be blind to. `pfd` and `wake` (the two fds) are
+  mutually exclusive in the current code: `wake` is only assigned
+  inside the `if (pfd < 0)` branch, so at most one of them is ever
+  polled, never both. The exec-fence pipe (a `CLOEXEC` pipe that let
+  `FREEZE` tell whether a forked child had reached `execv()` yet) and
+  its per-fork reset are gone with it — nothing left needs to ask that
+  question.
+
+  **One coverage gap this removal quietly opened, closed in the same
+  change.** `test_ctl_exec_resets_sigchld_mask` pins a per-fork
+  `sigprocmask(SIG_SETMASK, &empty, NULL)` reset (a real, still-
+  necessary fix: `wait_house()`'s `signalfd` arming blocks SIGCHLD in
+  `nw-sup`'s own process and never unblocks it, so an unguarded second
+  fork would inherit that straight into the house's own image). The
+  test forced nothing before this change — `pidfd_open` succeeds on
+  any real kernel here, so `signalfd` was created unconditionally
+  regardless, and the bug's precondition always held. Once `signalfd`
+  became fallback-only, the same test with no forced failure never
+  makes `wait_house()` touch `sigprocmask` at all, so the reset it
+  exists to pin stops mattering to it — measured directly: mutating the
+  reset out and rerunning the unmodified test left it green. Fixed by
+  making the test force the `pidfd_open` failure with
+  `tests/block_pidfd.so.c` (the same shim `test_ctl_pidfd_fallback_with_socket`
+  already uses), which put the mutation back to red.
 - **One seccomp table.** `nwsup.c` calls `nw_apply_house_seccomp()` in
   `lids.c`; it once carried a verbatim second copy. There is one allow-list,
   `strict_allow[]`, and a house does not choose it. *This described

@@ -1,6 +1,20 @@
 # 16 — Operator-controlled freeze / single-step
 
-Status: **built and reviewed across two rounds; the fd-auditor MEDIUM
+**SUPERSEDED 2026-09-28 (item 1c, `docs/OPERATOR-BRIEF.md` Section 2).**
+`FREEZE`/`CONT`, the ptrace code (SEIZE/INTERRUPT/CONT,
+`is_ptrace_event_stop`/`forward_if_real_signal`), the exec-fence pipe
+and its fd, and the unconditional signalfd that sat beside pidfd (it
+existed only to see a ptrace-stop pidfd_open(2) cannot) are all removed
+from `nw-sup`. `STOP` still works, with no ptrace forwarding, and the
+pidfd_open-failure fallback tiers (signalfd, then a bounded 50ms poll)
+are unchanged — signalfd is once again purely that fallback, not a
+second channel run alongside pidfd. The design and the review record
+below are kept as the reasoning that led here, not as a description of
+what the tree does today; read `.claude/rules/runtime.md`'s
+`wait_house()` note for the current shape.
+
+Status (as originally written; no longer current): **built and
+reviewed across two rounds; the fd-auditor MEDIUM
 is now closed.** Freeze and continue (`FREEZE`/`CONT`) are real,
 syscall-level verbs on the existing per-unit control socket, wired
 into `nw-sup` alongside `START`/`STOP`. Single-step (`STEP`) is named
