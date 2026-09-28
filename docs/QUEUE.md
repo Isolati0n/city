@@ -12,7 +12,7 @@ session restart: read both files, nothing else, to pick back up.
 If this file disagrees with the repo, the repo wins, and whoever notices
 fixes this file.
 
-Base at last edit: `abe4059` (origin/main).
+Base at last edit: `df1a001` (origin/main).
 
 ## Decision authority (Section 5 of the brief)
 
@@ -94,11 +94,40 @@ Status of each, current as of this commit:
 - **1b** (design note, `docs/options/22`, `claims` + batched questions):
   lock/unlock, the ten numbered questions from the brief. NOT STARTED.
   Blocks Phase 2 (Phase 2 requires this note approved).
-- **1c** (trusted core: `control`+`tcb-review`+`fd-auditor`): FREEZE/CONT
-  removal from `nw-sup` — verbs, ptrace code, exec-fence pipe/fd, the
-  unconditional signalfd beside pidfd, and their tests. Keep the
-  pidfd_open-failure fallback tiers. `docs/options/16` marked superseded.
-  NOT STARTED. Blocks Phase 2 (Phase 2 requires this landed).
+- **1c** — DONE, `941ecc8` (+ coverage record `df1a001`). Blocks Phase 2
+  no longer — landed. Removed from `nw-sup`: FREEZE/CONT's ptrace code
+  (SEIZE/INTERRUPT/CONT, `do_freeze`/`do_cont`,
+  `is_ptrace_event_stop`/`forward_if_real_signal`), the exec-fence pipe
+  and its per-fork setup/reset, and the two wire-protocol branches in
+  `handle_ctl_live()` (live and "stopped" versions). `wait_house()`'s
+  `signalfd` is once again purely the `pidfd_open`-failure fallback,
+  not run unconditionally beside `pidfd` — the two are now mutually
+  exclusive, and the poll array shrank from 3 members to 2 accordingly.
+  The `pidfd_open`-failure fallback tiers and their tests are
+  unchanged, per the brief. `docs/options/16` marked superseded (kept,
+  not deleted). Deleted: the 12 `test_ctl_freeze_*`/
+  `test_ctl_start_stop_unaffected_by_exec_fence` tests, and the
+  now-orphaned `tests/delay_exec.so.c` fixture plus its
+  `tools/rules-hook.sh` exemption entry. A real coverage gap the
+  removal quietly opened was found and closed in the same change:
+  `test_ctl_exec_resets_sigchld_mask` never forced `pidfd_open` to
+  fail, so under the old unconditional-signalfd code its own
+  precondition (SIGCHLD blocked in nw-sup's process) always held
+  regardless of the per-fork reset it exists to pin; now that signalfd
+  is fallback-only, the same test needed `tests/block_pidfd.so.c` (an
+  existing shim) added to keep forcing that precondition — verified by
+  mutating the reset out and watching the unmodified test stay green,
+  then confirming the fix turns it red again.
+  `.claude/rules/runtime.md` documents the restored shape and this fix.
+  Reviews: `tcb-review`, `fd-auditor`, `control` — no findings from any
+  of the three; `control` independently reproduced all three legs of
+  the sigchld-mask fix's justification in an isolated scratch copy.
+  `make checkbrief`: 5 verified, 0 contradicted, 4 uncheckable.
+  `make test`: EXIT:0, PASSED WITH SKIPS (only the recorded vfat-ESP
+  skip) — first run caught a real but self-inflicted failure (a stale
+  `tools/rules-hook.sh` UNOWNED entry for the just-deleted fixture,
+  still in git's index until `git add` recorded the deletion), fixed,
+  second run clean.
 - **1d** — DONE, `74413db`. `NW_BOOT_NEED(n,e) = NW_FD_RESERVED + n + 2*e`
   in `blob.h` (was `NW_FD_NEED`, `+2*n+2*e`), used everywhere invariant 3
   requires agreement (both `_Static_assert`s, the baker,
