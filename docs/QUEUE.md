@@ -1,193 +1,166 @@
 # QUEUE — current truth only
 
-This file is current-state, not a log. When a stage lands or a decision
+This file is current-state, not a log. When an item lands or a decision
 changes, this file is edited in the same commit as the change; stale
 entries are deleted, not appended around. Git history is the log.
+
+`docs/OPERATOR-BRIEF.md` is the single source of truth for scope and
+decisions, committed verbatim. This file tracks STATUS against it —
+what's done, in progress, or next — and is the recovery path after a
+session restart: read both files, nothing else, to pick back up.
 
 If this file disagrees with the repo, the repo wins, and whoever notices
 fixes this file.
 
-Base at last edit: `446b2ba` (origin/main).
+Base at last edit: `553071e` (origin/main).
 
-## Decision authority (Part C, standing)
+## Decision authority (Section 5 of the brief)
 
-Two authorities, split by kind, not by file:
+Decided alone, recorded here: names, wording, refusal texts, test
+design, internal structure. Stop and ask ONLY for: a plan-format change
+beyond the brief; reversing a refusal or a commitment; a new permission;
+an ownership conflict (`pid1.c`/`dawn.c` are Grok's; item 1d is the only
+authorized edit); anything contradicting Section 1 of the brief; a flaky
+test (diagnose, never add a retry). One batched question message per
+note or stage, each with a recommended default.
 
-1. **Decided alone, recorded here**: names, wording, refusal texts, test
-   design, mutation choices, file placement, ordering, internal structure.
-2. **Stop and ask the operator, ONLY for**: a plan-format change (a field,
-   `NW_MAGIC`); reversing a refusal or a stated commitment; any of PID 1's
-   verbs; a new or widened permission or lid; an ownership conflict
-   (`pid1.c`/`dawn.c` are Grok's; `plan.als`/`Plan.tla` beyond the
-   authorized fd-need edit are frozen absent direct instruction); contradicting
-   an operator decision; a flaky test (diagnose, never add a retry).
-   Batch these one message per stage; keep working on unblocked items
-   while waiting. (This item's list is a paraphrase of a standing
-   operator instruction that is not itself in this tree; no enumerated
-   "commitments" or "verbs" list exists here to check it against, so no
-   count is given for either — see CLAUDE.md's own rule against a count
-   with nothing to check it against.)
+Review by risk: trusted core gets `control` + `tcb-review` (+
+`fd-auditor` when fds/mounts/cgroups change) + `claims` on prose.
+`bakery/`/`tools/`/tests get `control` + one reviewer. Docs get one
+`claims` pass. Every push needs a full `make test` and an `ls-remote`
+check. Low on usage: push to `wip/<stage>` with a
+`tools/HANDOFF-<stage>.md`, never to `main`.
 
-Review by risk (not by directory): trusted core (`nwsup.c`, `nwspawn.c`,
-`nwcheck.c`, `blob.h`, the plan format, anything deciding what boots or
-what a house may do — CLAUDE.md's own TCB table is the exhaustive list;
-this parenthetical is not one) gets the full set — `control` + `tcb-review`
-+ `fd-auditor` when fds/mounts/cgroups are touched + `claims` on prose.
-This narrows CLAUDE.md's own dispatch table, which pairs `tcb-review` and
-`fd-auditor` unconditionally on any TCB change; the narrowing is the
-standing operator instruction (Amendment 2, Part C.3), not a decision
-made here, and practice so far has dispatched both together regardless —
-`de8a5e8` and `446b2ba` both did, whether or not the change was fd-shaped.
-`bakery/`/`tools/`/test-only gets `control` + one reviewer + `claims` on
-docs. Docs-only gets one `claims` pass. Every push needs a full
-`make test` and an `ls-remote` verification, regardless of tier.
+## Superseded by the master brief — do not use
 
-Low on usage: push to `wip/<stage>` with a `tools/HANDOFF-<stage>.md`,
-never to `main`, still verified via `ls-remote`.
+The prior working agreement (Amendment 1, Amendment 2, and the queue
+structure this file held before the brief) is superseded in full. Two
+concrete reversals worth naming so nobody re-derives the old answer by
+habit: the earlier "keep the conservative fd-need assert" decision is
+overridden by Section 1.3's `NW_BOOT_NEED(n,e)` formula; the earlier
+Stage 1/2/3/4 ordering (pure-core refactor first, cgroups second, a
+lock/unlock note, one format bump, four sign-off notes) is replaced by
+Section 2/3's Phase 1/2/3/4 structure, which interleaves docs-only and
+trusted-core items inside Phase 1 rather than doing all design notes
+before all code.
 
-## Stage 0 — DONE, landed on `main`
+## Stage 0 — DONE, landed on `main`, before the master brief
 
 1. Edge fd-need term in `plan.als`/`Plan.tla`, oracle cross-check against
-   `blob.h` — `de8a5e8`.
+   `blob.h` — `de8a5e8`. Its formula is now superseded by
+   `NW_BOOT_NEED(n,e) = NW_FD_RESERVED + n + 2*e` (Section 1.3); item 1d
+   below is where that lands.
 2. `nw-spawn`'s fd-ordering discipline (`pack_kit()`), pinned as far as it
-   can be, with the real collision axis `tcb-review` found (a wire's own
-   source colliding with an earlier wire's target) resolved by a
-   reachability proof against `main()`'s edge-creation loop, not by a
-   test — `446b2ba`.
-3. `scx_simple` GitHub Actions continuation: libbpf/bpftool version skew
-   diagnosed precisely (skeleton generator v1.8 vs link-time headers
-   1.3.0), not fixed within the five-iteration budget; recorded honestly
-   as "attempted, not closed"; workflow file deleted per the "not kept"
-   convention — `ff5fc9c` (landed before this file existed; confirmed via
-   `git log --all` as an ancestor of `446b2ba`).
+   can be — `446b2ba`.
+3. `scx_simple` GitHub Actions continuation, first two rounds: libbpf/
+   bpftool version skew diagnosed, not fixed, workflow deleted —
+   `ff5fc9c`. Section 4 is a third, differently-shaped attempt (a
+   packaged binary from another distro's container, not a from-source
+   build), not a repeat of the same approach.
+4. `docs/QUEUE.md` seeded — `553071e`.
 
-Nothing outstanding from Stage 0. The reject-path sched_ext mechanism
-that item 3's own investigation sits beside (`docs/options/15`) is
-likewise landed and reviewed; its accept path stays kind 3 (no working
-policy artifact yet), which is `docs/options/15`'s own conclusion, not a
-gap this queue tracks separately.
+## THIS ITEM — docs/OPERATOR-BRIEF.md + QUEUE.md rewrite (Section 0's first action)
 
-## Stage 1 — pure-core refactor. NOT STARTED.
+In progress: this commit. One `claims` pass before landing, per the
+brief's own instruction for this item.
 
-Status: waiting on the operator's brief. The original multi-stage message
-that defined "Stage 1: pure-core refactor" (with a larger set of
-state-table rules, reduced by Amendment 1 to the three named below) was
-referenced but its full text was not resent after the amendments landed;
-no enumerated original list is in this tree to check a count against, so
-none is given. Per the standing rule — "If a stage refers to a brief you
-don't have the full text of, stop and ask the operator to resend it. Do
-not reconstruct it." — this stage does not start until that text is back
-in hand.
+## Phase 1 — independent items, start now
 
-**Open question, recommended default**: resend the original Stage 1
-brief verbatim, or confirm the three reduced state-machine decisions
-(shutdown-while-frozen → kill; grace-expiry-while-frozen → kill;
-START-on-frozen-house → no-op) are the entire scope now. Recommended:
-the operator resends the brief; reconstructing seven-reduced-to-three
-decisions from memory of an amendment is exactly the kind of thing this
-project's own record shows going wrong quietly.
+Status of each, current as of this commit:
 
-## Stage 2 — cgroups minus PAUSE/RESUME. NOT STARTED. Depends on Stage 1.
+- **1a** (docs, `claims`): HISTORY §17 header note, `docs/options/11`
+  status line, `nwsup.c` stale `extra_fd` comment, commitment 2 restated
+  in `CLAUDE.md` and everywhere else it appears, report on where else
+  commitments text lives (`NEXUSWEAVE.md` is not in this tree). NOT
+  STARTED.
+- **1b** (design note, `docs/options/22`, `claims` + batched questions):
+  lock/unlock, the ten numbered questions from the brief. NOT STARTED.
+  Blocks Phase 2 (Phase 2 requires this note approved).
+- **1c** (trusted core: `control`+`tcb-review`+`fd-auditor`): FREEZE/CONT
+  removal from `nw-sup` — verbs, ptrace code, exec-fence pipe/fd, the
+  unconditional signalfd beside pidfd, and their tests. Keep the
+  pidfd_open-failure fallback tiers. `docs/options/16` marked superseded.
+  NOT STARTED. Blocks Phase 2 (Phase 2 requires this landed).
+- **1d** (trusted core, AUTHORIZED edit to `pid1.c`): `NW_BOOT_NEED(n,e)`
+  macro in `blob.h`, used by the `_Static_assert`, `tools/gen-spec-limits.py`,
+  the baker, and the boot preflight; one new boot line printing
+  `BootNeed`/`RLIMIT_NOFILE` at city open. NOT STARTED. Supersedes item
+  1 of Stage 0 above (the fd-need term `de8a5e8` landed used the
+  conservative assert this item replaces).
+- **1e** (`bakery/`, `control` + one reviewer): baker refuses `lids=none`
+  in a city plan, with an explicit lab flag for fixtures. NOT STARTED.
+- **1f** (trusted core, `control`+`tcb-review`): control-socket hardening
+  — `0700` directory, `umask(077)` socket creation, read-only `/nw/ctl`
+  bind for console/launcher houses. NOT STARTED.
+- **1g** (docs, `claims` + batched questions each): `docs/options/21`
+  (output ownership; the `pid1.c` section is a brief for Grok, not an
+  edit), `docs/options/23` (erofs file-backed bricks), `docs/options/20`
+  (grants table + schema generator + the machine hash from Section 1.4).
+  NOT STARTED.
 
-Scope per Amendment 1: placement, limits and read-back, whole-house kill,
-death autopsy. PAUSE/RESUME (cgroup freeze) and group pause are removed
-from scope permanently, superseded by the LOCK/UNLOCK feature below.
+No ordering dependency among 1a/1d/1e/1f/1g/Section-4 — any can run
+concurrently; 1b and 1c gate Phase 2 specifically, not each other or the
+rest of Phase 1.
 
-## LOCK/UNLOCK design note — NOT STARTED. Runs after Stage 2, before Stage 3.
+## Phase 2 — pure-core refactor. Depends on 1b (approved) and 1c (landed).
 
-Target: `docs/options/22-lock-unlock-houses.md`. Design note only, no
-code; one `claims` pass before landing; does not wait for operator
-sign-off unless a finding changes the semantics below.
+`nw-sup`'s supervision decision becomes a pure function
+`decide(lock, complete_on_0, stopping, stop_requested, start_requested,
+has_child, child_exited, exit_status, deaths, budget)` returning one of
+`FORK, WAIT, IDLE, RESTART, SPENT, EXIT_SUP, TERM_CHILD`. No clocks, no
+I/O inside it. Behavior-preserving (every existing test passes
+unchanged); until the format bump the shell always passes `LOCKED`, with
+the `UNLOCKED` rows present and tested ahead of having a plan field that
+can select them. An exhaustive event-sequence test, length justified in
+the commit. Six named invariants (STOP never increments deaths; UNLOCKED
+never increments deaths; SPENT, LOCKED-only, is absorbing; deaths rise
+only on an unrequested LOCKED exit; a shutting-down supervisor never
+forks or restarts; START on a running house is a no-op), each with a
+CBMC harness and a mutation check that turns it red. NOT STARTED.
 
-**Semantics, as specified by the operator (Amendment 1), recorded here
-so Stage 3's format bump can implement them without re-deriving them:**
+## Phase 3 — per-house cgroups. Depends on Phase 2.
 
-- One plan field per house: `lids=`-shaped, `lock=locked|unlocked`.
-  UNSET means `locked` (today's behavior, unchanged).
-- **LOCKED**: boot-started; restarted after death under a hard-total
-  budget, exactly like every house today (compositor, seat-manager,
-  audio, console are the named examples).
-- **UNLOCKED**: NOT boot-started. The supervisor starts idle, holding
-  the control socket (today's existing "stopped" state). `START` launches
-  it. ANY exit — clean or crashed — returns it to idle: no restart, no
-  budget consumed. A crash writes a crash record; a clean exit (status 0)
-  writes none. Relaunches are unlimited (no budget applies to an
-  unlocked house at all). `STOP` closes a running unlocked house and
-  never counts against anything.
-- Declaring both `unlocked` and a restart budget is a contradiction,
-  refused at bake time AND at boot (nwcheck.c), matching every other
-  cross-field rule in `plan.md`'s Hard rules.
-- A minimal `nwctl` (list / start / stop, a small STATUS reply) ships
-  inside the compositor's brick, reaching the control socket via a
-  read-only `/nw/ctl` bind. Example launcher entry: `nwctl start
-  <house>`. The compositor and the console stay real-root (no brick
-  seal on those two), unchanged from today.
+`clone3`+`CLONE_INTO_CGROUP` placement, `nw-sup` itself outside the
+cgroup. `mem_high`/`mem_max`/`cpu_weight`/`cpu_mask`/`nice`/`sched_policy`
+applied in place with kernel read-back and a control against an
+unlimited house each. No io limits, no groups, no pause (all cut per
+Section 1.6). `cgroup.kill` for whole-house kill (version-gated, with a
+freeze-then-kill fallback), used on restart/spent/stop escalation. Death
+autopsy from `memory.events`/`pids.events`, delta-since-this-run,
+"unavailable" rather than a false zero. Evidence format version bump.
+All controls run in the QEMU guest. NOT STARTED.
 
-**The questions the note must answer, each against the CURRENT
-code with a file:line citation, and each stating plainly what could not
-be verified rather than guessing:**
+## Phase 4 — the one plan-format bump. Depends on Phase 3.
 
-1. Mount lifetime for an unlocked house: per-`START` or once at boot?
-   Loop-device `AUTOCLEAR` interaction? A concrete plan for measuring
-   leaks across 50 launch/quit cycles (loop devices, mounts, cgroup
-   dirs, fds, zombies).
-2. Output tail across runs: how a crash record avoids reading stale
-   output from a PREVIOUS run of the same unlocked house — mark run
-   boundaries in the log, or something else.
-3. Edges and unlocked houses: recommend refusing a declared edge on an
-   unlocked house (an edge's socketpair is created once, at boot, before
-   any house exists to hold it — an unlocked house that has not started
-   yet has nothing to inherit it), name the exact refusal text and where
-   it is checked (baker and `nwcheck.c`, matching every other structural
-   rule).
-4. Every contradictory declaration to refuse at bake AND boot, not only
-   `unlocked` + budget — read the full cross-field-rule list in
-   `plan.md` and check each field's interaction with `lock=`.
-5. Encoding: a spare byte, precedent is `sched_ext`'s NWPLAN09→NWPLAN10
-   bump (`docs/options/15`) — `locked=0` so an old blob's zero byte
-   still means today's behavior, fits in the single format bump Stage 3
-   is scoped to.
-6. Idle-state cost (a supervisor holding a socket, doing nothing —
-   memory/fd footprint), the STATUS reply's exact format, and behavior
-   of STOP / FREEZE-CONT / TERM / START-on-an-already-running-house.
-7. Interplay with `tools/relaunch-house.py` and any profile's existing
-   RUN/STOP verbs — does `lock=` change what those tools may assume.
-8. The launch path in full: `nwctl` inside the compositor's brick, its
-   `PATH`, and — using ONLY mechanisms that already exist in this tree
-   today — what a launched game house actually needs to run (a bind, a
-   brick, an edge if wired to something). Flag gaps; do not design new
-   mechanisms to fill them.
-9. Tests, red then green, including the 50-cycle leak check from
-   question 1 and a locked-house regression (today's boot-and-restart
-   behavior must be provably unchanged for every `lock=locked` house,
-   including the implicit-default case).
+`NW_MAGIC` bump, five-place discipline, ledger updated by tooling. Adds
+`lock`, stop-signal + grace period (unset = today's behavior),
+supervisor-death policy, per-house `nofile` (measure this init's current
+default hard limit and verify Proton/Wine esync's real requirement from
+primary sources before sizing the field). Deletes `io_rbps`, `io_wbps`,
+`sched_ext` (supersedes `docs/options/15`'s reject path). Every
+not-yet-applied field refused by name. Then, each with its own
+design-note-plus-`claims` step before code: stop-grace escalation;
+supervisor-death applier; run/stop profiles + minimal `nwctl`;
+permission-diff tool (baker-side); self-verifying confinement
+(full break-out set in boot tests, a cheap subset at every real start);
+Landlock port/scope fields (only what a Landlock test can falsify);
+device lid (reject path first); rootless houses (last; console and
+compositor stay real-root). `provides`/`needs` service resolution per
+`docs/options/20` — exactly one provider per service, baker prints the
+edges it adds. NOT STARTED.
 
-## Stage 3 — the plan-format bump. NOT STARTED. Depends on the LOCK/UNLOCK note.
+## Section 4 — scx side thread. Bounded: 3 push iterations, CI+docs only.
 
-ONE format bump carrying every field accumulated since NWPLAN10:
-`lock=`, `stop-grace` (if the LOCK/UNLOCK note's answer to question 6
-needs one), and anything else queued by that point. Not a bump per
-field — the whole reason this stage exists after the design note rather
-than interleaved with it.
-
-## Stage 4 — design notes for operator sign-off. NOT STARTED. Depends on Stage 3.
-
-Notes, none of them code:
-- `docs/options/20` — grants/schema.
-- `docs/options/21` — output-ownership, with a `pid1.c`-touching brief
-  written for Grok specifically (ownership: Grok owns `pid1.c`).
-- `docs/options/23` — erofs file-backed bricks. Per the operator's own
-  framing this splits off content from an earlier "asleep houses" note;
-  no note by that name exists anywhere in this tree's history
-  (`git log --all --diff-filter=A -- "*asleep*"` returns nothing), so
-  that provenance is the operator's account, not something this tree
-  confirms, and `docs/options/23` should be written from LOCK/UNLOCK's
-  own content rather than assumed to be extracting from a file that
-  turns out not to exist.
+Third attempt at proving the sched_ext accept path, differently shaped
+from the two already recorded in `docs/options/15`: a privileged Fedora
+or Arch container on the free `ubuntu-24.04` runner, using that distro's
+own packaged `scx` binary against the runner's kernel rather than
+building from source. Confirm the package exists before attempting
+anything else. Measurement only — Phase 4 deletes the `sched_ext` plan
+field regardless of this result. NOT STARTED.
 
 ## Open questions carried forward
 
-- Stage 1's brief text (see above) — blocking Stage 1's start.
-- Nothing else is currently blocked; every other open question lives
-  inside the stage it belongs to, above, with its own recommended
-  default.
+None blocking right now. Item 1b's own ten questions get answered inside
+that note, then batched to the operator as that item's own step, not
+listed here in advance.
