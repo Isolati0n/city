@@ -205,6 +205,47 @@ The boundary that does matter here is not between files, it is **trust**:
   above is — self-diagnosing, but only if you know to read past the
   wrapper. `claims`.
 
+  **As of 2026-09-28 (item 1e, `docs/OPERATOR-BRIEF.md` Section 2), a
+  DECLARED `lids=none` also needs `--lab`.** The baker's own required-key
+  refusal two paragraphs up stays exactly as it was — omitting `lids=`
+  is refused regardless of any flag, because there is still no default
+  to fall back to. What changed is the *acceptance* half: `--city`
+  without `--lab` now refuses `lids=none` the same way it refuses an
+  omitted key, on the ground that a bare house — uid 0, no mount
+  namespace of its own (invariant 5) — is a fixture's shortcut and a
+  real deployment should not get one without saying so. `--probe`
+  is untouched; it already requires an explicit `--lids` value with no
+  default (including `--lids none`) and is inherently synthetic, never a
+  deployment artifact, so the same question already has an answer there
+  and does not need a second gate.
+
+  **Scoped to the byte, not to the invocation.** The check is
+  `lids == 0`, evaluated after `parse_lids()`, so a city plan with a
+  real lid set (`lids=newns`, `lids=seccomp`, …) bakes with no `--lab`
+  at all — the flag is about a specific declared value, not a blanket
+  requirement on every `--city` bake.
+
+  **Every test-suite `--city` bake now passes `--lab`**, because the
+  suite is a lab context end to end and the alternative was inspecting
+  each of ~80 call sites for which ones happen to use `lids=none` today
+  — which a later fixture could silently stop being true of.
+  `tools/scale-probe.py` and `tools/fdorder-sweep.py`, the two hand-run
+  dev tools that also bake `lids=none` fixtures, pass it too.
+  `tools/stage-candidate.py` grew its own `--lab` flag that the test
+  harness's `_stage()` wrapper always sets and forwards to the baker;
+  a real operator invocation does not set it, so a staged candidate is
+  held to the same rule a fresh `--city` bake is. `tools/fold-house.py`
+  and `tools/mkboot.sh` are unchanged — both rebake a REAL plan (a live
+  slot's fold, a burned ESP), not a fixture, so they get no exemption.
+  `tools/relaunch-house.py` is the one deliberate exception: its
+  throwaway single-house plan re-serializes `lids=` off a unit that
+  already passed a real baker once, so it passes `--lab`
+  unconditionally rather than gating an operational re-bake on a
+  decision it is not making. `test_baker_rejects` is the control pair
+  the item's own brief asks for: the same `lids=none` city file refused
+  without `--lab` and accepted with it, plus one more bake showing a
+  real lid set needs no `--lab` either way.
+
 - **The resource block: unset is zero, and zero is never a limit.** Every
   field of `struct nw_res` is 0 when the plan declares nothing, and 0
   means *no limit declared* rather than a limit of zero. A default would

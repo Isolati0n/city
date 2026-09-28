@@ -994,7 +994,7 @@ def test_fd_preflight_names_the_shortfall():
     open(city, "w").write(
         "".join(f"house h{i} /bin/true kind=oneshot lids=none\n"
                 for i in range(n)))
-    b = run(["python3", CC, "--city", city, "--out", blob])
+    b = run(["python3", CC, "--city", city, "--out", blob, "--lab"])
     expect(b.returncode == 0, f"bake fd-preflight\n{b.err}{b.out}")
 
     hard_lo = need - 1
@@ -1071,7 +1071,7 @@ def test_fd_preflight_names_the_shortfall_with_edges():
         f"house eb {BIN}/unit-wire kind=oneshot lids=none\n"
         "edge=ea,eb\n")
     blob = f"{WORK}/fd-preflight-edges.blob"
-    b = run(["python3", CC, "--city", city, "--out", blob])
+    b = run(["python3", CC, "--city", city, "--out", blob, "--lab"])
     expect(b.returncode == 0, f"bake fd-preflight-edges\n{b.err}{b.out}")
     expect("edges=1" in b.out, f"baker did not report the declared edge\n{b.out}")
 
@@ -1165,7 +1165,7 @@ def test_log_pipe_peak_is_one_end_per_house():
     open(city, "w").write(
         "".join(f"house i{i} /bin/true kind=oneshot lids=none\n"
                 for i in range(n)))
-    b = run(["python3", CC, "--city", city, "--out", blob])
+    b = run(["python3", CC, "--city", city, "--out", blob, "--lab"])
     expect(b.returncode == 0, f"bake interleave\n{b.err}{b.out}")
 
     rc, out = boot(plan=blob, hold=400, nofile=(need, need))
@@ -1204,7 +1204,7 @@ def test_baker_rejects():
     open(city, "w").write("house x /bin/true kind=oneshot lids=none\n"
                           "house a /bin/true kind=oneshot lids=none\n"
                           "house a /bin/true kind=oneshot lids=none\n")
-    p = run(["python3", CC, "--city", city, "--out", f"{WORK}/nope.blob"])
+    p = run(["python3", CC, "--city", city, "--out", f"{WORK}/nope.blob", "--lab"])
     expect(p.returncode != 0, "duplicate name should fail bake")
     expect("duplicate name" in (p.out + p.err), f"reason\n{p.out}{p.err}")
 
@@ -1215,20 +1215,24 @@ def test_baker_rejects():
     # message is the entire point of keeping the branch.
     open(city, "w").write(
         "house a /bin/true kind=oneshot lids=none critical=1\n")
-    p = run(["python3", CC, "--city", city, "--out", f"{WORK}/nope.blob"])
+    p = run(["python3", CC, "--city", city, "--out", f"{WORK}/nope.blob", "--lab"])
     expect(p.returncode != 0 and "critical= was removed" in (p.out + p.err),
            f"critical= must refuse by NAME, not fall through to the "
            f"unknown-key message: the branch exists to say what happened "
            f"to it\n{p.out}{p.err}")
 
-    # AND THE NEW KEY ITSELF, in both directions. Omitting it is
-    # refused; saying `none` is accepted and bakes the same byte the
-    # omission used to -- which is the whole point, and why the
-    # acceptance half has to be here: a baker that refused BOTH would
-    # satisfy the refusal below.
+    # AND THE NEW KEY ITSELF, in what is now three directions rather
+    # than two. Omitting it is refused; saying `none` bakes the same
+    # byte the omission used to -- which is the whole point, and why
+    # the acceptance half below has to exist: a baker that refused
+    # BOTH would satisfy the refusal below. What changed on 2026-09-28
+    # (item 1e) is that acceptance of `none` now needs `--lab` too: a
+    # bare house is a lab fixture's shortcut, not something a real
+    # city plan should get by accident, so the baker asks for the
+    # `--lab` flag to say so explicitly.
     nolids = f"{WORK}/nolids-city.txt"
     open(nolids, "w").write("house a /bin/true kind=oneshot\n")
-    p = run(["python3", CC, "--city", nolids, "--out", f"{WORK}/nope.blob"])
+    p = run(["python3", CC, "--city", nolids, "--out", f"{WORK}/nope.blob", "--lab"])
     expect(p.returncode != 0 and "lids= is required" in (p.out + p.err),
            f"a house with no lids= must be refused: a bare house somebody "
            f"chose and one somebody forgot bake the identical byte"
@@ -1246,16 +1250,47 @@ def test_baker_rejects():
 
     okl = f"{WORK}/okl-city.txt"
     open(okl, "w").write("house a /bin/true kind=oneshot lids=none\n")
-    p = run(["python3", CC, "--city", okl, "--out", f"{WORK}/okl.blob"])
+    p = run(["python3", CC, "--city", okl, "--out", f"{WORK}/okl.blob", "--lab"])
     expect(p.returncode == 0,
-           f"lids=none must be ACCEPTED -- it is how a bare house is "
-           f"declared, and refusing it would leave no way to say it"
+           f"lids=none must be ACCEPTED with --lab -- it is how a bare "
+           f"house is declared in a fixture, and refusing it there too "
+           f"would leave no way to say it"
            f"\n{p.out}{p.err}")
     expect(_lids_byte(f"{WORK}/okl.blob") == 0,
            f"lids=none baked {_lids_byte(f'{WORK}/okl.blob')}, not 0. The "
            f"whole argument for requiring the key is that `none` bakes "
            f"the byte an omission used to; a `none` that means something "
            f"else is a bare house nobody declared.")
+
+    # THE THIRD DIRECTION, item 1e (2026-09-28): a CITY PLAN -- --city
+    # without --lab -- must refuse the identical file the fixture
+    # above just baked. This is the control pair the item's own brief
+    # asks for: "city plan refused, lab plan accepted", both against
+    # the same source so nothing about the CONTENT explains the
+    # difference, only the flag does. Without a matching acceptance
+    # elsewhere, a baker that refused every --city plan unconditionally
+    # -- lids= present or not -- would satisfy this half alone; the
+    # `okl` assertion two blocks up is that other half, over the same
+    # file with the one flag added.
+    p = run(["python3", CC, "--city", okl, "--out", f"{WORK}/nope.blob"])
+    expect(p.returncode != 0 and "--lab" in (p.out + p.err),
+           f"lids=none in a city plan without --lab must be refused, "
+           f"naming --lab as the way out for a fixture that means it"
+           f"\n{p.out}{p.err}")
+    expect(not os.path.exists(f"{WORK}/nope.blob"),
+           f"a refused bake must not leave a blob behind at --out"
+           f"\n{p.out}{p.err}")
+    # AND A LID SET THAT IS NOT `none` NEEDS NO --lab AT ALL -- the
+    # refusal is scoped to the byte being literally 0, not to every
+    # city plan lacking the flag. Re-bakes `nolids-city.txt` with a
+    # real lid added rather than omitted, through the SAME --city path
+    # with no --lab, so the only variable is the lids= value.
+    real = f"{WORK}/real-lids-city.txt"
+    open(real, "w").write("house a /bin/true kind=oneshot lids=newns\n")
+    p = run(["python3", CC, "--city", real, "--out", f"{WORK}/real.blob"])
+    expect(p.returncode == 0,
+           f"a declared, non-empty lid set must bake without --lab"
+           f"\n{p.out}{p.err}")
 
     # AND THE --probe PATH, which is the OTHER way this baker makes
     # houses. It kept its own `--lids seccomp` default after the city
@@ -1313,7 +1348,7 @@ def test_baker_rejects():
            "_lids_byte reads 0 for a house baked with seccomp, so every "
            "`== 0` above is satisfied by the reader and not by the baker")
     open(city, "w").write("house a /bin/true kind=oneshot window=1 lids=none\n")
-    p = run(["python3", CC, "--city", city, "--out", f"{WORK}/nope.blob"])
+    p = run(["python3", CC, "--city", city, "--out", f"{WORK}/nope.blob", "--lab"])
     expect(p.returncode != 0, "window= must fail the bake")
     # A distinctive substring of the D18 message, not the key echoed back:
     # deleting the `elif k == "window"` branch entirely falls through to
@@ -1326,10 +1361,13 @@ def test_baker_rejects():
     print("ok baker-reject-dupname+window+lids (duplicate name on a pair "
           "that is not at index 0, window= and critical= each refused by "
           "reason; lids= and --lids each omitted refused and `none` "
-          "accepted, on the city path and the probe path -- and the BYTE "
-          "checked 0 in both, because accepted-without-reading is "
-          "satisfied by a `none` that means something else; the probe "
-          "refusal asserted to have written no blob)")
+          "accepted with --lab, on the city path and the probe path -- "
+          "and the BYTE checked 0 in both, because accepted-without-"
+          "reading is satisfied by a `none` that means something else; "
+          "the probe refusal asserted to have written no blob; a city "
+          "plan's lids=none refused without --lab naming --lab, the same "
+          "file accepted with it, and a real lid set needing no --lab at "
+          "all)")
 
 
 def test_fuzz_checker():
@@ -1467,11 +1505,11 @@ def test_kind_required():
     a silent default is the failure mode this project keeps designing out."""
     city = f"{WORK}/nokind.city"
     open(city, "w").write("house a /bin/true lids=none\n")
-    p = run(["python3", CC, "--city", city, "--out", f"{WORK}/nope.blob"])
+    p = run(["python3", CC, "--city", city, "--out", f"{WORK}/nope.blob", "--lab"])
     expect(p.returncode != 0, "missing kind should fail the bake")
     expect("kind= is required" in (p.out + p.err), f"reason\n{p.out}{p.err}")
     open(city, "w").write("house a /bin/true kind=daemon lids=none\n")
-    p = run(["python3", CC, "--city", city, "--out", f"{WORK}/nope.blob"])
+    p = run(["python3", CC, "--city", city, "--out", f"{WORK}/nope.blob", "--lab"])
     expect(p.returncode != 0, "bad kind should fail the bake")
     expect("must be oneshot or longrun" in (p.out + p.err), f"reason\n{p.out}{p.err}")
     print("ok kind-required")
@@ -1488,7 +1526,7 @@ def test_kind_exit0():
         f"house idle {probe} kind=oneshot lids=none\n"
     )
     blob = f"{WORK}/longrun.blob"
-    b = run(["python3", CC, "--city", long_city, "--out", blob])
+    b = run(["python3", CC, "--city", long_city, "--out", blob, "--lab"])
     expect(b.returncode == 0, f"bake\n{b.out}{b.err}")
     rc, out = boot(plan=blob, hold=1200)
     expect(city_closed(rc, out), f"city should survive, rc={rc}\n{out}")
@@ -1501,7 +1539,7 @@ def test_kind_exit0():
         f"house idle {probe} kind=oneshot lids=none\n"
     )
     blob2 = f"{WORK}/oneshot.blob"
-    b = run(["python3", CC, "--city", one_city, "--out", blob2])
+    b = run(["python3", CC, "--city", one_city, "--out", blob2, "--lab"])
     expect(b.returncode == 0, f"bake\n{b.out}{b.err}")
     rc, out2 = boot(plan=blob2, hold=1200)
     expect(city_closed(rc, out2), f"city should survive, rc={rc}\n{out2}")
@@ -1590,7 +1628,7 @@ def test_dawn_real_boot():
                 f"house {n} /nw/bin/unit-probe kind=oneshot lids=none\n"
                 for n in names))
             p = run(["python3", CC, "--city", city,
-                     "--out", f"{lab}/me/slots/{slot}/plan.blob"])
+                     "--out", f"{lab}/me/slots/{slot}/plan.blob", "--lab"])
             expect(p.returncode == 0, f"bake {slot}\n{p.out}{p.err}")
         open(f"{lab}/me/slots/current", "w").write("A\n")
         subprocess.run(["sync"], check=True)
@@ -1858,7 +1896,7 @@ def test_term_signal():
     city = f"{WORK}/term.city"
     open(city, "w").write(f"house term {term} kind=oneshot lids=none\n")
     blob = f"{WORK}/term.blob"
-    b = run(["python3", CC, "--city", city, "--out", blob])
+    b = run(["python3", CC, "--city", city, "--out", blob, "--lab"])
     expect(b.returncode == 0, f"bake\n{b.out}{b.err}")
     rc, out = boot(plan=blob, hold=500)
     expect(city_closed(rc, out), f"term rc={rc}\n{out}")
@@ -2868,7 +2906,7 @@ def test_last_words_survive_group_term():
     city = f"{WORK}/lastwords.city"
     open(city, "w").write(f"house lw {lw} kind=longrun lids=none\n")
     blob = f"{WORK}/lastwords.blob"
-    b = run(["python3", CC, "--city", city, "--out", blob])
+    b = run(["python3", CC, "--city", city, "--out", blob, "--lab"])
     expect(b.returncode == 0, f"bake\n{b.out}{b.err}")
 
     def shutdown_by(mode):
@@ -2944,7 +2982,7 @@ def test_last_words_survive_group_term():
     for label, binary, lines in (("small", "unit-lastwords", 5),
                                  ("many", "unit-lastwordsmany", 2500)):
       open(city, "w").write(f"house lw {BIN}/{binary} kind=longrun lids=none\n")
-      b = run(["python3", CC, "--city", city, "--out", blob])
+      b = run(["python3", CC, "--city", city, "--out", blob, "--lab"])
       expect(b.returncode == 0, f"bake {label}\n{b.out}{b.err}")
       for mode in ("init", "group"):
         out = shutdown_by(mode)
@@ -3003,7 +3041,7 @@ def test_orphans_across_restarts():
     open(city, "w").write(
         f"house orph {orph} kind=longrun budget=3 lids=none\n")
     blob = f"{WORK}/orphan.blob"
-    b = run(["python3", CC, "--city", city, "--out", blob])
+    b = run(["python3", CC, "--city", city, "--out", blob, "--lab"])
     expect(b.returncode == 0, f"bake\n{b.out}{b.err}")
 
     # CASE A: the children die while the city is up. Every orphan is
@@ -3096,7 +3134,7 @@ def test_orphans_across_restarts():
     open(slow_city, "w").write(
         f"house orph {BIN}/unit-orphanslow kind=longrun budget=3 lids=none\n")
     slow_blob = f"{WORK}/orphanslow.blob"
-    b = run(["python3", CC, "--city", slow_city, "--out", slow_blob])
+    b = run(["python3", CC, "--city", slow_city, "--out", slow_blob, "--lab"])
     expect(b.returncode == 0, f"bake slow\n{b.out}{b.err}")
     for f in (mark,):
         try:
@@ -3157,7 +3195,7 @@ def test_crash_does_not_halt():
         f"house idle {probe} kind=oneshot lids=none\n"
     )
     blob = f"{WORK}/crash.blob"
-    b = run(["python3", CC, "--city", city, "--out", blob])
+    b = run(["python3", CC, "--city", city, "--out", blob, "--lab"])
     expect(b.returncode == 0, f"bake\n{b.out}{b.err}")
     rc, out = boot(plan=blob, hold=1200)
     expect(city_closed(rc, out), f"city should survive a crashing house, rc={rc}\n{out}")
@@ -3202,7 +3240,7 @@ def test_budget_is_hard_total():
         f"house idle {probe} kind=oneshot lids=none\n"
     )
     blob = f"{WORK}/d18.blob"
-    b = run(["python3", CC, "--city", city, "--out", blob])
+    b = run(["python3", CC, "--city", city, "--out", blob, "--lab"])
     expect(b.returncode == 0, f"bake\n{b.out}{b.err}")
     # 3 deaths * 1.2s plus spawn/shutdown slack.
     #
@@ -3659,7 +3697,7 @@ def test_evidence_captures_death_output():
         name = f"evtboom{os.getpid()}"
         open(city, "w").write(
             f"house {name} {boom} kind=longrun budget=1 lids=none\n")
-        b = run(["python3", CC, "--city", city, "--out", blob])
+        b = run(["python3", CC, "--city", city, "--out", blob, "--lab"])
         expect(b.returncode == 0, f"bake\n{b.out}{b.err}")
 
         before = _evidence_files()
@@ -3760,7 +3798,7 @@ def test_evidence_silent_house_empty_tail():
         open(city, "w").write(
             f"house {name} /bin/true kind=longrun budget=0 lids=none\n"
             f"house {loud} {boom} kind=longrun budget=0 lids=none\n")
-        b = run(["python3", CC, "--city", city, "--out", blob])
+        b = run(["python3", CC, "--city", city, "--out", blob, "--lab"])
         expect(b.returncode == 0, f"bake\n{b.out}{b.err}")
 
         before = _evidence_files()
@@ -3869,7 +3907,7 @@ def test_evidence_ring_buffer_is_bounded():
     city = f"{WORK}/evt-fire.city"
     open(city, "w").write(f"house {name} {fire} kind=longrun budget=0 lids=none\n")
     blob = f"{WORK}/evt-fire.blob"
-    b = run(["python3", CC, "--city", city, "--out", blob])
+    b = run(["python3", CC, "--city", city, "--out", blob, "--lab"])
     expect(b.returncode == 0, f"bake\n{b.out}{b.err}")
 
     stage_layers(blob)
@@ -3972,7 +4010,7 @@ def test_relaunch_reproduces_a_real_crash():
         city = f"{WORK}/relaunch-boom.city"
         open(city, "w").write(f"house {name} {BIN}/unit-boom kind=longrun budget=1 lids=none\n")
         blob = f"{WORK}/relaunch-boom.blob"
-        b = run(["python3", CC, "--city", city, "--out", blob])
+        b = run(["python3", CC, "--city", city, "--out", blob, "--lab"])
         expect(b.returncode == 0, f"bake\n{b.out}{b.err}")
 
         before = _evidence_files()
@@ -4064,7 +4102,7 @@ def test_relaunch_layer_copy_and_isolation():
         f"house {name} /bin/brick kind=oneshot budget=0 lids=newns "
         f"brick={brick} layer={layer_id}\n")
     blob = f"{WORK}/relaunch-ff.blob"
-    b = run(["python3", CC, "--city", city, "--out", blob])
+    b = run(["python3", CC, "--city", city, "--out", blob, "--lab"])
     expect(b.returncode == 0, f"bake\n{b.out}{b.err}")
     stage_layers(blob)
 
@@ -4125,7 +4163,7 @@ def test_relaunch_does_not_count_against_the_real_budget():
     open(city, "w").write(
         f"house {name} {BIN}/unit-boom kind=longrun budget=3 lids=none\n")
     blob = f"{WORK}/relaunch-budget.blob"
-    b = run(["python3", CC, "--city", city, "--out", blob])
+    b = run(["python3", CC, "--city", city, "--out", blob, "--lab"])
     expect(b.returncode == 0, f"bake\n{b.out}{b.err}")
 
     before = _evidence_files()
@@ -4190,7 +4228,7 @@ def test_relaunch_reports_inconclusive_when_still_running():
     city = f"{WORK}/relaunch-sleep.city"
     open(city, "w").write(f"house {name} {_sleeper(name)} kind=longrun budget=0 lids=none\n")
     blob = f"{WORK}/relaunch-sleep.blob"
-    b = run(["python3", CC, "--city", city, "--out", blob])
+    b = run(["python3", CC, "--city", city, "--out", blob, "--lab"])
     expect(b.returncode == 0, f"bake\n{b.out}{b.err}")
 
     # A fabricated stand-in "original": the sleeper itself never
@@ -4201,7 +4239,7 @@ def test_relaunch_reports_inconclusive_when_still_running():
     boom_city = f"{WORK}/relaunch-sleep-origin.city"
     open(boom_city, "w").write(f"house {name} {BIN}/unit-boom kind=longrun budget=0 lids=none\n")
     boom_blob = f"{WORK}/relaunch-sleep-origin.blob"
-    b2 = run(["python3", CC, "--city", boom_city, "--out", boom_blob])
+    b2 = run(["python3", CC, "--city", boom_city, "--out", boom_blob, "--lab"])
     expect(b2.returncode == 0, f"bake\n{b2.out}{b2.err}")
     before = _evidence_files()
     rc0, out0 = boot(plan=boom_blob, hold=1200)
@@ -4241,7 +4279,7 @@ def test_shutdown_does_not_restart():
         f"house stay {term} kind=longrun budget=20 lids=none\n"
         f"house dt {dieterm} kind=longrun budget=20 lids=none\n")
     blob = f"{WORK}/shut.blob"
-    b = run(["python3", CC, "--city", city, "--out", blob])
+    b = run(["python3", CC, "--city", city, "--out", blob, "--lab"])
     expect(b.returncode == 0, f"bake\n{b.out}{b.err}")
     # A stale marker would make dt skip its death and silently turn this
     # back into the one-house test. Removing it means a leftover fails the
@@ -5541,7 +5579,7 @@ def test_seccomp_kills():
     city = f"{WORK}/sec.city"
     open(city, "w").write(f"house bad {bad} kind=oneshot lids=seccomp\n")
     blob = f"{WORK}/sec.blob"
-    b = run(["python3", CC, "--city", city, "--out", blob])
+    b = run(["python3", CC, "--city", city, "--out", blob, "--lab"])
     expect(b.returncode == 0, b.err)
     rc, out = boot(plan=blob, hold=600)
     # "survived" absent is not enough on its own: it is also absent when the
@@ -5738,7 +5776,7 @@ def test_brick_is_a_root():
         f"house two /bin/brick kind=oneshot lids=newns,seccomp brick={two} layer=l-two\n"
     )
     blob = f"{WORK}/brick.blob"
-    b = run(["python3", CC, "--city", city, "--out", blob])
+    b = run(["python3", CC, "--city", city, "--out", blob, "--lab"])
     expect(b.returncode == 0, f"bake\n{b.out}{b.err}")
     expect("binds=2" in b.out, f"bind table not emitted\n{b.out}")
     chk = run([f"{BIN}/nw-check", blob])
@@ -5886,7 +5924,7 @@ def test_path_traversal_refused():
          f"brick={brick} layer=l-trav\n", "exec_path"),
     ):
         open(esc, "w").write(line)
-        p = run(["python3", CC, "--city", esc, "--out", f"{WORK}/nope.blob"])
+        p = run(["python3", CC, "--city", esc, "--out", f"{WORK}/nope.blob", "--lab"])
         expect(p.returncode != 0, f"baker accepted .. in {why}\n{p.out}{p.err}")
         expect("no '..' component" in (p.out + p.err),
                f"{why} reason\n{p.out}{p.err}")
@@ -5926,7 +5964,7 @@ def test_path_traversal_refused():
         open(esc, "w").write(
             f"house one /bin/brick kind=oneshot lids=newns,seccomp "
             f"brick={path} layer=l-shape\n")
-        p = run(["python3", CC, "--city", esc, "--out", f"{WORK}/nope.blob"])
+        p = run(["python3", CC, "--city", esc, "--out", f"{WORK}/nope.blob", "--lab"])
         expect(p.returncode != 0,
                f"baker accepted {what} as brick=\n{p.out}{p.err}")
         expect("hex characters" in (p.out + p.err),
@@ -5941,7 +5979,7 @@ def test_path_traversal_refused():
     open(esc, "w").write(
         f"house one /bin/brick kind=oneshot lids=newns,seccomp "
         f"brick={brick} layer=l-esc\n")
-    p = run(["python3", CC, "--city", esc, "--out", good])
+    p = run(["python3", CC, "--city", esc, "--out", good, "--lab"])
     expect(p.returncode == 0, f"bake\n{p.out}{p.err}")
 
     EXEC_OFF = hdr_size() + int(blob_h("NW_NAME_LEN"))     # hdr + name
@@ -6004,7 +6042,7 @@ def test_brick_image_is_sealed():
     open(city, "w").write(
         f"house sealed /bin/brick kind=oneshot lids=newns brick={brick} layer=l-sealed\n")
     blob = f"{WORK}/sealed.blob"
-    b = run(["python3", CC, "--city", city, "--out", blob])
+    b = run(["python3", CC, "--city", city, "--out", blob, "--lab"])
     expect(b.returncode == 0, f"bake\n{b.out}{b.err}")
     # Hashed BEFORE the boot, so the comparison after it is a claim about
     # the boot. Comparing two reads taken afterwards is an identity, which
@@ -6106,7 +6144,7 @@ def test_the_layer_reset_fires_once_per_run():
     open(city, "w").write(
         f"house resetprobe {BIN}/unit-probe kind=oneshot "
         f"lids=newns,seccomp brick={'ab' * 32} layer={lid}\n")
-    b = run(["python3", CC, "--city", city, "--out", blob])
+    b = run(["python3", CC, "--city", city, "--out", blob, "--lab"])
     expect(b.returncode == 0, f"bake the reset probe\n{b.out}{b.err}")
 
     sentinel = f"{_layer_dir()}/{lid}/upper/planted"
@@ -6147,7 +6185,7 @@ def test_the_layer_reset_fires_once_per_run():
             f"house resetprobe {BIN}/unit-probe kind=oneshot "
             f"lids=newns,seccomp brick={'cd' * 32} layer={lid}\n")
         blob2 = f"{WORK}/reset2-{os.getpid()}.blob"
-        b2 = run(["python3", CC, "--city", city2, "--out", blob2])
+        b2 = run(["python3", CC, "--city", city2, "--out", blob2, "--lab"])
         expect(b2.returncode == 0, f"bake the second plan\n{b2.out}{b2.err}")
         open(sentinel, "w").write("this boot wrote this\n")
         stage_layers(blob2)
@@ -6205,7 +6243,7 @@ def test_layer_survives_a_restart():
         f"house keeper /bin/brick kind=longrun budget=3 "
         f"lids=newns brick={brick} layer={lid}\n")
     blob = f"{WORK}/layer.blob"
-    b = run(["python3", CC, "--city", city, "--out", blob])
+    b = run(["python3", CC, "--city", city, "--out", blob, "--lab"])
     expect(b.returncode == 0, f"bake\n{b.out}{b.err}")
     rc, out = boot(plan=blob, hold=1600)
     expect(city_closed(rc, out), f"layer rc={rc}\n{out[-2000:]}")
@@ -6323,7 +6361,7 @@ def test_layer_bytes_enforces_capacity():
         f"lids=newns brick={keep_brick} layer={keep_lid} "
         f"layer-bytes={cap}\n")
     blob = f"{WORK}/layer-cap.blob"
-    b = run(["python3", CC, "--city", city, "--out", blob])
+    b = run(["python3", CC, "--city", city, "--out", blob, "--lab"])
     expect(b.returncode == 0, f"bake\n{b.out}{b.err}")
     rc, out = boot(plan=blob, hold=1800)
     expect(city_closed(rc, out), f"layer-cap rc={rc}\n{out[-2000:]}")
@@ -6454,7 +6492,7 @@ def test_layer_bytes_representation_switch_refused():
             f"house h /bin/brick kind=oneshot lids=newns "
             f"brick={fake_brick} layer={lid}{opt}\n")
         blob = f"{WORK}/switch-{lid}-{layer_bytes}.blob"
-        b = run(["python3", CC, "--city", city, "--out", blob])
+        b = run(["python3", CC, "--city", city, "--out", blob, "--lab"])
         expect(b.returncode == 0, f"bake layer-bytes={layer_bytes}\n{b.out}{b.err}")
         return blob
 
@@ -6587,7 +6625,7 @@ def test_many_brick_houses_all_start():
         f"house m{i:02d} /bin/brick kind=oneshot lids=newns brick={b} layer=l-m{i:02d}\n"
         for i, b in enumerate(houses)))
     blob = f"{WORK}/many.blob"
-    b = run(["python3", CC, "--city", city, "--out", blob])
+    b = run(["python3", CC, "--city", city, "--out", blob, "--lab"])
     expect(b.returncode == 0, f"bake\n{b.out}{b.err}")
     rc, out = boot(plan=blob, hold=2500)
     expect(city_closed(rc, out), f"many-bricks rc={rc}\n{out[-2000:]}")
@@ -6626,7 +6664,7 @@ def test_edge_bidirectional_exchange():
         f"house ebeta {BIN}/unit-wire kind=oneshot lids=none\n"
         "edge=ealpha,ebeta\n")
     blob = f"{WORK}/edge2.blob"
-    b = run(["python3", CC, "--city", city, "--out", blob])
+    b = run(["python3", CC, "--city", city, "--out", blob, "--lab"])
     expect(b.returncode == 0, f"bake\n{b.out}{b.err}")
     expect("edges=1" in b.out, f"baker did not report the declared edge\n{b.out}")
     rc, out = boot(plan=blob, hold=1200)
@@ -6656,7 +6694,7 @@ def test_edge_unwired_house_gets_no_wire():
         f"house egamma {BIN}/unit-wire kind=oneshot lids=none\n"
         "edge=ealpha,ebeta\n")
     blob = f"{WORK}/edge3.blob"
-    b = run(["python3", CC, "--city", city, "--out", blob])
+    b = run(["python3", CC, "--city", city, "--out", blob, "--lab"])
     expect(b.returncode == 0, f"bake\n{b.out}{b.err}")
     rc, out = boot(plan=blob, hold=1200)
     expect(city_closed(rc, out), f"edge3 rc={rc}\n{out[-2000:]}")
@@ -6695,7 +6733,7 @@ def test_many_houses_many_edges_no_collision():
     lines += [f"edge=r{i:02d},r{(i + 1) % n:02d}\n" for i in range(n)]
     open(city, "w").write("".join(lines))
     blob = f"{WORK}/ring.blob"
-    b = run(["python3", CC, "--city", city, "--out", blob])
+    b = run(["python3", CC, "--city", city, "--out", blob, "--lab"])
     expect(b.returncode == 0, f"bake\n{b.out}{b.err}")
     expect(f"edges={n}" in b.out, f"baker did not report {n} edges\n{b.out}")
     rc, out = boot(plan=blob, hold=3000)
@@ -6747,7 +6785,7 @@ def test_edge_backpressure():
         f"house bpr {BIN}/unit-wire kind=oneshot lids=none\n"
         "edge=bpw,bpr\n")
     blob = f"{WORK}/edgebp.blob"
-    b = run(["python3", CC, "--city", city, "--out", blob])
+    b = run(["python3", CC, "--city", city, "--out", blob, "--lab"])
     expect(b.returncode == 0, f"bake\n{b.out}{b.err}")
     rc, out = boot(plan=blob, hold=2500, env={
         "NW_WIRE_WRITER": "bpw", "NW_WIRE_READER": "bpr",
@@ -6892,7 +6930,7 @@ def test_baker_refuses_unknown_sched_ext():
     city = f"{WORK}/badschedext.city"
     open(city, "w").write(
         "house a /bin/true kind=oneshot lids=none sched-ext=turbo\n")
-    p = run(["python3", CC, "--city", city, "--out", f"{WORK}/bse.blob"])
+    p = run(["python3", CC, "--city", city, "--out", f"{WORK}/bse.blob", "--lab"])
     expect(p.returncode != 0,
            f"baker accepted an unknown sched-ext name\n{p.out}{p.err}")
     expect("sched-ext=" in (p.out + p.err),
@@ -6900,7 +6938,7 @@ def test_baker_refuses_unknown_sched_ext():
     # The pairing: the one legal name must still bake.
     open(city, "w").write(
         "house a /bin/true kind=oneshot lids=none sched-ext=default\n")
-    p = run(["python3", CC, "--city", city, "--out", f"{WORK}/bse.blob"])
+    p = run(["python3", CC, "--city", city, "--out", f"{WORK}/bse.blob", "--lab"])
     expect(p.returncode == 0,
            f"the baker refused the one legal sched-ext name\n{p.out}{p.err}")
     print("ok baker-refuses-unknown-sched-ext (an unknown name refused by "
@@ -7021,7 +7059,7 @@ def test_sched_ext_check_survives_the_brick_pivot():
         f"house solo /bin/brick kind=oneshot lids=newns,seccomp "
         f"brick={hexd} layer=l-schedext-brick sched-ext=default\n")
     blob = f"{WORK}/schedext-brick.blob"
-    b = run(["python3", CC, "--city", city, "--out", blob])
+    b = run(["python3", CC, "--city", city, "--out", blob, "--lab"])
     expect(b.returncode == 0, f"bake\n{b.out}{b.err}")
 
     rc, out = boot(plan=blob, hold=800)
@@ -7090,7 +7128,7 @@ def test_leading_zero_hash_is_a_brick():
         open(city, "w").write(
             f"house lz /bin/true kind=oneshot lids=newns,seccomp "
             f"brick={brick} layer=l-lz bind=/etc\n")
-        b = run(["python3", CC, "--city", city, "--out", f"{WORK}/lz.blob"])
+        b = run(["python3", CC, "--city", city, "--out", f"{WORK}/lz.blob", "--lab"])
         expect(b.returncode == 0, f"bake {what}\n{b.out}{b.err}")
         r = run([f"{BIN}/nw-check", f"{WORK}/lz.blob"])
         expect(r.returncode == want,
@@ -7103,7 +7141,7 @@ def test_leading_zero_hash_is_a_brick():
     city = f"{WORK}/lz-none.city"
     open(city, "w").write(
         "house lz /bin/true kind=oneshot lids=seccomp bind=/etc\n")
-    b = run(["python3", CC, "--city", city, "--out", f"{WORK}/lz-none.blob"])
+    b = run(["python3", CC, "--city", city, "--out", f"{WORK}/lz-none.blob", "--lab"])
     expect(b.returncode != 0, "a bind with no brick should fail the bake")
     expect("bind= without brick=" in (b.out + b.err),
            f"wrong reason for a bind without a brick\n{b.out}{b.err}")
@@ -7123,7 +7161,7 @@ def test_leading_zero_hash_is_a_brick():
     open(city, "w").write(
         f"house lz /bin/true kind=oneshot lids=newns,seccomp "
         f"brick={'0' * int(blob_h('NW_BRICK_HASH')) * 2} layer=l-zero\n")
-    b = run(["python3", CC, "--city", city, "--out", f"{WORK}/lz-zero.blob"])
+    b = run(["python3", CC, "--city", city, "--out", f"{WORK}/lz-zero.blob", "--lab"])
     expect(b.returncode != 0, "an all-zero brick hash should fail the bake")
     expect("all zeros" in (b.out + b.err) and "machine root" in (b.out + b.err),
            f"wrong reason for an all-zero brick hash\n{b.out}{b.err}")
@@ -7165,7 +7203,7 @@ def test_baker_refuses_bad_layers():
     ]
     for line, reason, what in cases:
         open(city, "w").write(line + "\n")
-        p = run(["python3", CC, "--city", city, "--out", f"{WORK}/bl.blob"])
+        p = run(["python3", CC, "--city", city, "--out", f"{WORK}/bl.blob", "--lab"])
         expect(p.returncode != 0, f"baker accepted {what}\n{p.out}{p.err}")
         expect(reason in (p.out + p.err),
                f"wrong reason for {what}: expected {reason!r}\n"
@@ -7176,7 +7214,7 @@ def test_baker_refuses_bad_layers():
         f"house a /bin/brick kind=oneshot lids=newns brick={brick} "
         f"layer=fine\nhouse b /bin/brick kind=oneshot lids=newns "
         f"brick={brick} layer=also-fine\n")
-    p = run(["python3", CC, "--city", city, "--out", f"{WORK}/bl.blob"])
+    p = run(["python3", CC, "--city", city, "--out", f"{WORK}/bl.blob", "--lab"])
     expect(p.returncode == 0,
            f"the baker refused a legal pair of layered houses\n"
            f"{p.out}{p.err}")
@@ -7209,7 +7247,7 @@ def test_baker_refuses_bad_edges():
     ]
     for line, reason, what in cases:
         open(city, "w").write(line + "\n")
-        p = run(["python3", CC, "--city", city, "--out", f"{WORK}/be.blob"])
+        p = run(["python3", CC, "--city", city, "--out", f"{WORK}/be.blob", "--lab"])
         expect(p.returncode != 0, f"baker accepted {what}\n{p.out}{p.err}")
         expect(reason in (p.out + p.err),
                f"wrong reason for {what}: expected {reason!r}\n"
@@ -7219,7 +7257,7 @@ def test_baker_refuses_bad_edges():
         "house a /bin/true kind=oneshot lids=none\n"
         "house b /bin/true kind=oneshot lids=none\n"
         "edge=a,b\n")
-    p = run(["python3", CC, "--city", city, "--out", f"{WORK}/be.blob"])
+    p = run(["python3", CC, "--city", city, "--out", f"{WORK}/be.blob", "--lab"])
     expect(p.returncode == 0,
            f"the baker refused a legal edge\n{p.out}{p.err}")
     expect("edges=1" in p.out, f"baker did not report the edge\n{p.out}")
@@ -7249,7 +7287,7 @@ def test_checker_rejects_crafted_edges():
         "house e0 /bin/true kind=oneshot lids=none\n"
         "house e1 /bin/true kind=oneshot lids=none\n"
         "edge=e0,e1\n")
-    p = run(["python3", CC, "--city", city, "--out", good])
+    p = run(["python3", CC, "--city", city, "--out", good, "--lab"])
     expect(p.returncode == 0, f"bake\n{p.out}{p.err}")
     base = bytearray(open(good, "rb").read())
     NUNITS, NBINDS, NEDGES = 2, 0, 1
@@ -7577,7 +7615,7 @@ def test_baker_refuses_bad_resources():
         open(city, "w").write(line + "\n")
         if os.path.exists(out):
             os.unlink(out)
-        p = run(["python3", CC, "--city", city, "--out", out])
+        p = run(["python3", CC, "--city", city, "--out", out, "--lab"])
         expect(p.returncode != 0, f"baker accepted {what}\n{p.out}{p.err}")
         expect(reason in (p.out + p.err),
                f"wrong reason for {what}: expected {reason!r}\n"
@@ -7644,7 +7682,7 @@ def test_baker_refuses_bad_resources():
         open(city, "w").write(line + "\n")
         if os.path.exists(out):
             os.unlink(out)
-        p = run(["python3", CC, "--city", city, "--out", out])
+        p = run(["python3", CC, "--city", city, "--out", out, "--lab"])
         expect(p.returncode == 0,
                f"the baker refused a legal resource declaration:\n"
                f"  {line}\n{p.out}{p.err}")
@@ -7677,7 +7715,7 @@ def test_baker_refuses_bad_resources():
         f"house bare0 /bin/true kind=oneshot lids=none\n"
         f"house bare1 /bin/true kind=oneshot lids=none\n"
         f"house bound /bin/true kind=oneshot lids=none cpu-weight=100\n")
-    p = run(["python3", CC, "--city", city, "--out", f"{WORK}/br.blob"])
+    p = run(["python3", CC, "--city", city, "--out", f"{WORK}/br.blob", "--lab"])
     expect(p.returncode == 0, f"bake\n{p.out}{p.err}")
     line = [l for l in (p.out + p.err).splitlines()
             if "no resource block" in l]
@@ -7693,7 +7731,7 @@ def test_baker_refuses_bad_resources():
     # empty list -- which reads as a report that ran and found none.
     open(city, "w").write(
         f"house bound /bin/true kind=oneshot lids=none cpu-weight=100\n")
-    p = run(["python3", CC, "--city", city, "--out", f"{WORK}/br.blob"])
+    p = run(["python3", CC, "--city", city, "--out", f"{WORK}/br.blob", "--lab"])
     expect(p.returncode == 0, f"bake\n{p.out}{p.err}")
     expect("no resource block" not in (p.out + p.err),
            f"the baker reported unbounded houses in a city that has "
@@ -7717,7 +7755,7 @@ def test_brick_needs_newns():
     city = f"{WORK}/brick-nons.city"
     open(city, "w").write(
         f"house solo /bin/brick kind=oneshot lids=seccomp brick=aa00bb11cc22dd33ee44ff5566778899aabbccddeeff00112233445566778899 layer=l-ns\n")
-    p = run(["python3", CC, "--city", city, "--out", f"{WORK}/nope.blob"])
+    p = run(["python3", CC, "--city", city, "--out", f"{WORK}/nope.blob", "--lab"])
     expect(p.returncode != 0, "brick without newns should fail the bake")
     expect("needs lids=...,newns" in (p.out + p.err), f"reason\n{p.out}{p.err}")
 
@@ -7727,7 +7765,7 @@ def test_brick_needs_newns():
     open(city, "w").write(
         f"house solo /bin/brick kind=oneshot lids=newns,seccomp "
         f"brick=aa00bb11cc22dd33ee44ff5566778899aabbccddeeff00112233445566778899 layer=l-ns\n")
-    p = run(["python3", CC, "--city", city, "--out", good])
+    p = run(["python3", CC, "--city", city, "--out", good, "--lab"])
     expect(p.returncode == 0, f"bake\n{p.out}{p.err}")
     d = bytearray(open(good, "rb").read())
     # DERIVED, not written. This was `20 + 32 + 128 + 96 + 2` and the 96
@@ -7777,7 +7815,7 @@ def test_lids_are_not_advisory():
         f"house plain {BIN}/unit-probe kind=oneshot budget=0 lids=none\n"
     )
     blob = f"{WORK}/lid-advisory.blob"
-    b = run(["python3", CC, "--city", city, "--out", blob])
+    b = run(["python3", CC, "--city", city, "--out", blob, "--lab"])
     expect(b.returncode == 0, f"bake\n{b.out}{b.err}")
     rc, out = boot(plan=blob, hold=1500)
 
@@ -7867,7 +7905,7 @@ def test_landlock_confines():
         f"house sealed /bin/brick kind=oneshot lids=newns,landlock "
         f"brick={brick} layer=l-ll bind={shared}\n")
     blob = f"{WORK}/ll.blob"
-    b = run(["python3", CC, "--city", city, "--out", blob])
+    b = run(["python3", CC, "--city", city, "--out", blob, "--lab"])
     expect(b.returncode == 0, f"bake\n{b.out}{b.err}")
 
     rc, out = boot(plan=blob, hold=1500)
@@ -8143,7 +8181,7 @@ def test_landlock_bind_to_a_file():
         f"house filebind /bin/brick kind=oneshot lids=newns,landlock "
         f"brick={brick} layer=l-llfile bind={bind_file}\n")
     blob = f"{WORK}/ll-file.blob"
-    b = run(["python3", CC, "--city", city, "--out", blob])
+    b = run(["python3", CC, "--city", city, "--out", blob, "--lab"])
     expect(b.returncode == 0, f"bake\n{b.out}{b.err}")
 
     rc, out = boot(plan=blob, hold=1200)
@@ -8324,7 +8362,7 @@ def test_logger_holds_fd0():
         for i in range(n):
             f.write(f"house h{i} {BIN}/unit-term kind=longrun lids=none\n")
     blob = f"{WORK}/logger-fd0.blob"
-    b = run(["python3", CC, "--city", city, "--out", blob])
+    b = run(["python3", CC, "--city", city, "--out", blob, "--lab"])
     expect(b.returncode == 0, f"bake\n{b.out}{b.err}")
 
     p = subprocess.Popen(
@@ -8421,7 +8459,7 @@ def test_rlimit_raise():
         for i in range(n):
             f.write(f"house h{i} {BIN}/unit-term kind=longrun lids=none\n")
     blob = f"{WORK}/rlimit-raise.blob"
-    b = run(["python3", CC, "--city", city, "--out", blob])
+    b = run(["python3", CC, "--city", city, "--out", blob, "--lab"])
     expect(b.returncode == 0, f"bake\n{b.out}{b.err}")
 
     # --- Case 1: soft well below need, hard well above it. ---
@@ -8638,7 +8676,7 @@ def test_dupname_refused():
     open(city, "w").write("".join(
         f"house u{i:02d} /bin/true kind=oneshot lids=none\n" for i in range(n)))
     good = f"{WORK}/dup-ok.blob"
-    b = run(["python3", CC, "--city", city, "--out", good])
+    b = run(["python3", CC, "--city", city, "--out", good, "--lab"])
     expect(b.returncode == 0, f"bake\n{b.out}{b.err}")
     base = bytearray(open(good, "rb").read())
     expect(len(base) == HDR + n * USZ,
@@ -8828,7 +8866,7 @@ def test_checker_rejects_crafted_fields():
     open(city, "w").write("".join(
         f"house c{i:02d} /bin/true kind=oneshot lids=newns,seccomp "
         f"brick={brick} layer=l-c{i:02d}\n" for i in range(NUNITS)))
-    p = run(["python3", CC, "--city", city, "--out", good])
+    p = run(["python3", CC, "--city", city, "--out", good, "--lab"])
     expect(p.returncode == 0, f"bake\n{p.out}{p.err}")
     base = bytearray(open(good, "rb").read())
     USZ = unit_layout()["_size"]
@@ -9053,7 +9091,7 @@ def test_leading_zero_hash_reaches_the_supervisor():
         f"lids=newns brick={'00' + 'ab' * (NB - 1)} layer=l-zl\n"
         f"house denselead {BIN}/unit-probe kind=oneshot "
         f"lids=newns brick={'ab' * NB} layer=l-dl\n")
-    b = run(["python3", CC, "--city", city, "--out", blob])
+    b = run(["python3", CC, "--city", city, "--out", blob, "--lab"])
     expect(b.returncode == 0, f"bake\n{b.out}{b.err}")
     rc, out = boot(plan=blob, hold=900)
     expect(city_closed(rc, out), f"lzboot rc={rc}\n{out[-2000:]}")
@@ -9102,7 +9140,7 @@ def test_checker_rejects_crafted_binds():
         f"house b0 /bin/true kind=oneshot lids=newns,seccomp "
         f"brick={'ab' * BRICK} layer=l-b0 bind=/etc\n"
         f"house b1 /bin/true kind=oneshot lids=seccomp\n")
-    p = run(["python3", CC, "--city", city, "--out", good])
+    p = run(["python3", CC, "--city", city, "--out", good, "--lab"])
     expect(p.returncode == 0, f"bake\n{p.out}{p.err}")
     base = bytearray(open(good, "rb").read())
     NUNITS, NBINDS = 2, 1
@@ -9223,7 +9261,7 @@ def test_checker_rejects_crafted_resources():
     open(city, "w").write("".join(
         f"house r{i:02d} /bin/true kind=oneshot lids=newns,seccomp "
         f"brick={brick} layer=l-r{i:02d}\n" for i in range(NUNITS)))
-    p = run(["python3", CC, "--city", city, "--out", good])
+    p = run(["python3", CC, "--city", city, "--out", good, "--lab"])
     expect(p.returncode == 0, f"bake\n{p.out}{p.err}")
     base = bytearray(open(good, "rb").read())
     expect(len(base) == HDR + NUNITS * USZ,
@@ -9635,7 +9673,7 @@ def test_old_magic_is_refused_as_magic():
     good = f"{WORK}/magic-good.blob"
     city = f"{WORK}/magic.city"
     open(city, "w").write("house m /bin/true kind=oneshot lids=none\n")
-    b = run(["python3", CC, "--city", city, "--out", good])
+    b = run(["python3", CC, "--city", city, "--out", good, "--lab"])
     expect(b.returncode == 0, f"bake\n{b.out}{b.err}")
     d = bytearray(open(good, "rb").read())
 
@@ -9739,7 +9777,7 @@ def _candidate_stager_body(_sh, _ids_made):
     open(live_city, "w").write(
         f"house liveone {BIN}/unit-probe kind=oneshot lids=seccomp\n")
     b = run(["python3", CC, "--city", live_city,
-             "--out", f"{slots}/A/plan.blob"])
+             "--out", f"{slots}/A/plan.blob", "--lab"])
     expect(b.returncode == 0, f"bake live\n{b.out}{b.err}")
     open(f"{slots}/current", "w").write("A\n")
 
@@ -9786,7 +9824,7 @@ def _candidate_stager_body(_sh, _ids_made):
         before = open(cand, "rb").read() if os.path.exists(cand) else None
         r = run(["python3", stager, "--slots", slots,
                  "--city", city or cand_city,
-                 "--nw-check", nwck or chk] + list(extra))
+                 "--nw-check", nwck or chk, "--lab"] + list(extra))
         w = why or " ".join(str(x) for x in extra) or "stage"
         # THE THIRD THING A REFUSAL MUST NOT DO. `_live_intact` watches
         # the live slot and `_no_scratch` watches dotfiles; nothing
@@ -10177,7 +10215,7 @@ def _candidate_stager_body(_sh, _ids_made):
            f"cannot establish that the candidate's layers are its own"
            f"\n{r.out}{r.err}")
     _live_intact("missing live sidecar")
-    run(["python3", CC, "--city", live_city, "--out", f"{slots}/A/plan.blob"])
+    run(["python3", CC, "--city", live_city, "--out", f"{slots}/A/plan.blob", "--lab"])
 
     # Ambiguity is a refusal rather than a guess.
     os.makedirs(f"{slots}/C", exist_ok=True)
@@ -10326,7 +10364,7 @@ def _candidate_stager_body(_sh, _ids_made):
         f"lids=newns,seccomp brick={'56' * 32} layer={slid}\n")
     os.makedirs(f"{WORK}/cand-stale", exist_ok=True)
     run(["python3", CC, "--city", stale_city,
-         "--out", f"{WORK}/cand-stale/plan.blob"])
+         "--out", f"{WORK}/cand-stale/plan.blob", "--lab"])
     open(f"{WORK}/cand-stale/plan.blob.sha256", "w").write("deadbeef\n")
     r = run(["python3", f"{ROOT}/tools/stage-layers.py",
              f"{WORK}/cand-stale/plan.blob", "--root", pfx])
@@ -10982,7 +11020,7 @@ def test_baker_writes_the_declared_layout():
         f"cpus=0,4 mem-high=1K mem-max=2K io-rbps=3K io-wbps=4K "
         f"layer-bytes=5K cpu-weight=7 sched=other nice=8\n")
     blob = f"{WORK}/layout.blob"
-    b = run(["python3", CC, "--city", city, "--out", blob])
+    b = run(["python3", CC, "--city", city, "--out", blob, "--lab"])
     expect(b.returncode == 0, f"bake\n{b.out}{b.err}")
 
     d = open(blob, "rb").read()
@@ -11124,7 +11162,7 @@ def test_blob_size_ceiling():
         for a, b in edges:
             f.write(f"edge=m{a:02d},m{b:02d}\n")
     good = f"{WORK}/maxblob.blob"
-    b = run(["python3", CC, "--city", city, "--out", good])
+    b = run(["python3", CC, "--city", city, "--out", good, "--lab"])
     expect(b.returncode == 0, f"bake a maximal plan\n{b.out}{b.err}")
     got = os.path.getsize(good)
     expect(got == biggest,
@@ -11218,7 +11256,7 @@ def test_non_provision_at_max():
     open(city, "w").write("".join(
         f"house u{i:02d} {probe} kind=oneshot lids=none\n" for i in range(n)))
     blob = f"{WORK}/maxunits.blob"
-    b = run(["python3", CC, "--city", city, "--out", blob])
+    b = run(["python3", CC, "--city", city, "--out", blob, "--lab"])
     expect(b.returncode == 0, f"bake\n{b.out}{b.err}")
 
     rc, out = boot(plan=blob, hold=3000)
@@ -11811,7 +11849,7 @@ def _fold_house_body(made):
         f"house other /bin/other kind=longrun budget=7 "
         f"lids=newns,newnet,seccomp,landlock brick={H2} layer={lid2} "
         f"bind=/mnt\n")
-    b = run(["python3", CC, "--city", city, "--out", f"{slots}/A/plan.blob"])
+    b = run(["python3", CC, "--city", city, "--out", f"{slots}/A/plan.blob", "--lab"])
     expect(b.returncode == 0, f"bake the live plan\n{b.out}{b.err}")
     open(f"{slots}/current", "w").write("A\n")
     live_before = open(f"{slots}/A/plan.blob", "rb").read()
@@ -11995,7 +12033,7 @@ def _fold_house_body(made):
         f"house other /bin/other kind=longrun budget=7 "
         f"lids=newns,newnet,seccomp,landlock brick={H2} layer={lid2} "
         f"bind=/mnt\n")
-    wb = run(["python3", CC, "--city", want_city, "--out", f"{root}/want.blob"])
+    wb = run(["python3", CC, "--city", want_city, "--out", f"{root}/want.blob", "--lab"])
     expect(wb.returncode == 0, f"bake the expected city\n{wb.out}{wb.err}")
     expect(open(f"{root}/want.blob", "rb").read()
            == open(f"{slots}/B/plan.blob", "rb").read(),

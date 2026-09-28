@@ -230,7 +230,8 @@ def pick_candidate(slots, live):
     return others[0]
 
 
-def stage(slots, city, slot=None, root="", nw_check=None, quiet=False):
+def stage(slots, city, slot=None, root="", nw_check=None, quiet=False,
+          lab=False):
     live = live_slot(slots)
     target = slot if slot is not None else pick_candidate(slots, live)
 
@@ -313,10 +314,11 @@ def stage(slots, city, slot=None, root="", nw_check=None, quiet=False):
     os.makedirs(work)
     try:
         blob = os.path.join(work, "plan.blob")
-        r = subprocess.run(
-            [sys.executable, os.path.join(ROOT, "bakery", "nw-cc.py"),
-             "--city", city, "--out", blob],
-            capture_output=True, text=True)
+        cc_argv = [sys.executable, os.path.join(ROOT, "bakery", "nw-cc.py"),
+                   "--city", city, "--out", blob]
+        if lab:
+            cc_argv.append("--lab")
+        r = subprocess.run(cc_argv, capture_output=True, text=True)
         if r.returncode != 0:
             raise SystemExit(
                 "stage-candidate: the baker refused this city, so there is "
@@ -536,8 +538,11 @@ def main(argv=None):
     ap.add_argument("--root", default="")
     ap.add_argument("--nw-check", default=None, dest="nw_check")
     ap.add_argument("--quiet", action="store_true")
+    ap.add_argument("--lab", action="store_true",
+                     help="Permit lids=none in the staged city. For "
+                          "fixtures, not deployments.")
     a = ap.parse_args(argv)
-    stage(a.slots, a.city, a.slot, a.root, a.nw_check, a.quiet)
+    stage(a.slots, a.city, a.slot, a.root, a.nw_check, a.quiet, a.lab)
     return 0
 
 

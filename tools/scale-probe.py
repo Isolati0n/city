@@ -203,7 +203,7 @@ def probe(n_units, work, hold_ms=None):
         for i in range(n_units)))
     blob = os.path.join(work, f"c{n_units}.blob")
     rc, out, err = sh(["python3", os.path.join(tree, "bakery", "nw-cc.py"),
-                       "--city", city, "--out", blob])
+                       "--city", city, "--out", blob, "--lab"])
     if rc != 0:
         return dict(n=n_units, phase="bake", ok=False,
                     why=(out + err).strip()[-200:])

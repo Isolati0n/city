@@ -1058,3 +1058,10 @@ prose-count	CLAUDE.md	reverting just that one line in a scratch copy and watchin
 prose-count	blob.h	* n, and the compile-time bound above was the one place still spelling
 # matches the operator brief's own phrasing (docs/OPERATOR-BRIEF.md Section 2 item 1d: "one boot line"), naming a fixed deliverable, not a growable count
 prose-count	pid1.c	/* docs/OPERATOR-BRIEF.md Section 1d: one boot line naming
+# paired by the assertion immediately above it in the same test, which
+# requires p.returncode != 0 AND "--lab" in the output -- so this checks
+# the refused bake left no blob, only after confirming the refusal fired
+# for the right reason (naming --lab), not for any reason. `control`
+# ran the exact order-swap mutation this absence exists to catch (bake
+# before check) and confirmed it goes red.
+unpaired-absence	tests/run.py	expect(not os.path.exists(f"{WORK}/nope.blob"),

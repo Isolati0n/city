@@ -273,9 +273,18 @@ def bake_throwaway(name, fields, binds, layer_id, layer_bytes, out_blob):
         fh.write(line)
         city_path = fh.name
     try:
+        # --lab unconditionally: `lids=` here is not a fresh deployment
+        # decision, it is `fields["LIDS"]` echoed back from a unit that
+        # already passed a real baker once (this docstring's own opening
+        # paragraph calls the throwaway plan a re-serialization of a
+        # validated blob's fields). Item 1e's --lab gate is for a human
+        # authoring a new --city plan; a relaunch is neither new nor
+        # authored, so gating it a second time here would refuse a
+        # bare-lids house that was already live before this tool ever
+        # ran, for a decision this tool did not make.
         r = subprocess.run(
             [sys.executable, os.path.join(ROOT, "bakery", "nw-cc.py"),
-             "--city", city_path, "--out", out_blob],
+             "--city", city_path, "--out", out_blob, "--lab"],
             capture_output=True, text=True)
         if r.returncode != 0:
             raise SystemExit(

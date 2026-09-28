@@ -184,7 +184,8 @@ def one_config(stage, nwspawn, nwsup, nwcc, n_leaves, filler_count, gaps):
             lines.append("edge=hub,leaf{}\n".format(i))
         open(city, "w").writelines(lines)
         blob = os.path.join(workdir, "star.blob")
-        r = subprocess.run(["python3", nwcc, "--city", city, "--out", blob],
+        r = subprocess.run(["python3", nwcc, "--city", city, "--out", blob,
+                             "--lab"],
                             capture_output=True, text=True)
         if r.returncode != 0:
             return False, ["bake failed: {} {}".format(r.stdout, r.stderr)]

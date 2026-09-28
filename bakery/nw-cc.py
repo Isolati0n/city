@@ -565,7 +565,7 @@ def parse_lids(s: str) -> int:
     return lids
 
 
-def load_city(path: str):
+def load_city(path: str, lab: bool = False):
     houses = []
     edges = []
     for raw in open(path):
@@ -746,6 +746,25 @@ def load_city(path: str):
                     f"CITY's namespace. Omitting the key baked the "
                     f"identical byte, so a deliberate bare house and a "
                     f"forgotten one read the same.")
+            # `lids=none` IS LEGAL BYTES -- the check above already lets it
+            # through -- but a city plan is what a real deployment bakes,
+            # and a bare house there is exactly the measurement two
+            # paragraphs up describes: uid 0, no mount namespace of its
+            # own, everything it mounts or chroots into lands on the
+            # CITY's. That is a cost a deployment should pay on purpose,
+            # not inherit because a fixture's shortcut leaked into a real
+            # plan. `--lab` is the one way to say "this city file is a
+            # fixture, not a deployment" -- named at the baker's own
+            # invocation, not inferred from anything about the file's
+            # content or its name, because a bare house and a lab city are
+            # otherwise indistinguishable at this point exactly the way an
+            # omitted lids= and a deliberate lids=none used to be.
+            if lids == 0 and not lab:
+                raise SystemExit(
+                    f"house {name}: lids=none is refused in a city plan "
+                    f"without --lab. Pass --lab to the baker if this file "
+                    f"is a lab fixture and the bare house is deliberate; "
+                    f"a real deployment should not get one by accident.")
             # exec_path is resolved inside the brick, so it is already the
             # path the house will see and must not be rewritten against the
             # baker's cwd. Without a brick it names a machine path.
@@ -773,9 +792,16 @@ def main():
     # rule removes, on the path nobody was reading. `claims`. Both
     # in-tree callers (the Makefile and tools/mkboot.sh) already pass it.
     ap.add_argument("--lids")
+    # Scoped to --city on purpose: --probe already requires --lids with no
+    # default (below), including `--lids none`, and it always bakes a
+    # synthetic fixture rather than something meant for deployment -- so
+    # it needs no second gate on the same question.
+    ap.add_argument("--lab", action="store_true",
+                     help="Permit lids=none in a --city plan. For "
+                          "fixtures, not deployments.")
     args = ap.parse_args()
     if args.city:
-        houses, edges = load_city(args.city)
+        houses, edges = load_city(args.city, lab=args.lab)
     else:
         if not args.probe:
             raise SystemExit("--probe or --city required")
