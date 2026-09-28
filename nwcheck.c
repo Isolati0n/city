@@ -425,16 +425,26 @@ int nw_check(const void *blob, uint32_t len)
      * came back with them in blob.h's _Static_assert, the baker and both
      * specs, per invariant 3 -- but NOT as a resurrected runtime check
      * here: at today's NW_MAX_EDGES (128), the worst case is
-     * 8 + 2*64 + 2*128 = 392 against the same 1024 ceiling, still
-     * unreachable at any legal (unit, edge) count. Adding a check that
-     * cannot fire would be the exact shape this comment already warns
-     * against, one field later. Reinstating it for real needs
-     * NW_MAX_EDGES raised past roughly 444, or NW_MAX_FDS lowered, and is
-     * not something to do preemptively for a check with no failing case
-     * to exercise it. The bound is still enforced where it can actually
-     * bite: the _Static_assert in blob.h at compile time, and the baker
-     * at bake time. The real binding constraint on unit count is pid_max,
-     * which is not a descriptor property and is not modelled here. */
+     * NW_FD_NEED(NW_MAX_UNITS, NW_MAX_EDGES) = 8 + 2*64 + 2*128 = 392
+     * against the same 1024 ceiling, still unreachable at any legal
+     * (unit, edge) count. Adding a check that cannot fire would be the
+     * exact shape this comment already warns against, one field later.
+     * Reinstating it for real needs NW_MAX_EDGES raised past roughly
+     * 444, or NW_MAX_FDS lowered, and is not something to do
+     * preemptively for a check with no failing case to exercise it. The
+     * bound is still enforced where it can actually bite: the
+     * _Static_assert in blob.h at compile time, via the NW_FD_NEED
+     * macro -- that call, not the "392"/"444" spelled out above in this
+     * comment's own prose, is what cannot drift from the header
+     * unnoticed. The prose numbers are illustration and can go stale
+     * exactly like any other hand-typed number in this tree; a reader
+     * mutating NW_MAX_UNITS to check this comment's arithmetic gets a
+     * clean build regardless, which is worth knowing rather than
+     * assuming otherwise. `tcb-review`. See blob.h's own comment beside
+     * the macro for how the specs are now checked against it, and the baker
+     * at bake time. The real binding constraint on unit count is
+     * pid_max, which is not a descriptor property and is not modelled
+     * here. */
 
     return NW_OK;
 }

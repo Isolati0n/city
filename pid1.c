@@ -647,8 +647,8 @@ int main(int argc, char **argv)
      * simultaneously during its pre-loop wiring phase, the same peak
      * blob.h's _Static_assert already bounds at compile time. Missing
      * until fd-auditor reproduced it: this soft limit is what nw-spawn
-     * itself inherits across exec, so a plan with a tight fd budget
-     * plus enough edges passed this preflight (need looked small
+     * itself inherits across exec, so a plan with a tight descriptor
+     * ceiling plus enough edges passed this preflight (need looked small
      * enough against hard) and then died deep inside nw-spawn with a
      * raw, un-preflighted EMFILE from socketpair() -- the exact
      * "refuse loudly before forking" job this check exists to do,

@@ -1,7 +1,8 @@
 ------------------------------ MODULE Plan ------------------------------
 EXTENDS Integers, Sequences, FiniteSets
 
-CONSTANTS MaxUnits, MaxFds, Reserved, MaxBinds, LidNewNS, LidLandlock
+CONSTANTS MaxUnits, MaxFds, Reserved, MaxBinds, MaxEdges, LidNewNS, LidLandlock,
+          OracleH1E7, OracleH7E1
 
 (* The constants arrive from specs/Plan.cfg, generated out of blob.h by
    tools/gen-spec-limits.py. This ASSUME used to pin them to literals --
@@ -20,8 +21,9 @@ ASSUME /\ MaxUnits \in Nat \ {0}
        /\ MaxFds \in Nat \ {0}
        /\ Reserved \in Nat
        /\ MaxBinds \in Nat
+       /\ MaxEdges \in Nat
 
-VARIABLES n, kind, lids, brick, layer, binds, capacity
+VARIABLES n, e, kind, lids, brick, layer, binds, capacity
 N == n
 
 (* `Houses == 1..N` stood above the declaration of N until 2026-09-11.
@@ -39,7 +41,14 @@ N == n
    predicates this file records as not state-checked -- so LidNewNS == 999
    gave a clean run. `claims`. *)
 
-FdNeed == Reserved + 2 * n
+(* `e` is edges, back per docs/options/17-edges.md. This file's own
+   NoLiveRewrite note near the end of the module records what left with
+   edges the first time (HISTORY.md section 17: "e was the only
+   variable with a plausible runtime mutation path") -- the return here
+   is the same variable, restored rather than reinvented, ranging
+   0..MaxEdges because a plan with zero edges is the common case,
+   unlike n which is at least 1. *)
+FdNeed == Reserved + 2 * n + 2 * e
 
 (* Same limit as NW_MAX_BINDS in blob.h, MAX_BINDS in bakery/nw-cc.py and
    bindNeed in plan.als. Change one, change all four.
@@ -78,6 +87,7 @@ BindNeed == IF n = 0 THEN 0
    house's brick before it pivots; those ARE still paths. *)
 TypeOK ==
   /\ n \in 1..MaxUnits
+  /\ e \in 0..MaxEdges
   /\ kind \in [1..n -> {0, 1}]   (* 0 oneshot, 1 longrun; explicit, no default *)
   /\ FdNeed <= MaxFds
   /\ BindNeed <= MaxBinds
@@ -186,6 +196,7 @@ CapacityNeedsLayer ==
 
 Init ==
   /\ n \in 1..MaxUnits
+  /\ e \in 0..MaxEdges
   /\ kind = [i \in 1..n |-> 0]
   /\ lids = [i \in 1..n |-> {}]
   /\ brick = [i \in 1..n |-> ""]
@@ -193,7 +204,7 @@ Init ==
   /\ binds = [i \in 1..n |-> {}]
   /\ capacity = [i \in 1..n |-> 0]
 
-Next == UNCHANGED <<n, kind, lids, brick, layer, binds, capacity>>
+Next == UNCHANGED <<n, e, kind, lids, brick, layer, binds, capacity>>
 
 FdBudgetCovers == FdNeed <= MaxFds
 
@@ -204,12 +215,31 @@ FdBudgetCovers == FdNeed <= MaxFds
    FdArithmetic for -- the fd formula is one of the four places
    invariant 3 names, and its TLA+ copy was as unpinned as Alloy's was
    for the file's whole life. *)
-FdNeedAgrees == FdNeed = Reserved + n + n
+FdNeedAgrees == FdNeed = Reserved + n + n + e + e
 
-(* THE BOUNDARY, which a state count cannot see. Init ranges over n, and
-   asserting "64 distinct states" says how many were explored, not which:
-   `control` shifted Init to 0..MaxUnits-1, still got 64 states, and the
-   only case FdBudgetCovers exists for -- the largest legal city -- was
+(* OracleH1E7/OracleH7E1 are GENERATED CONSTANTS (specs/Plan.cfg, from
+   tools/gen-spec-limits.py compiling tools/fdneed-oracle.c against
+   blob.h's own NW_FD_NEED macro at these two points) -- not a further
+   hand-typed copy of the multiplier. FdNeedAgrees above pins FdNeed
+   against a second copy written in THIS SAME FILE, which is exactly
+   the class of check plan.md records as insufficient on its own: `* 2`
+   -> `* 3` in blob.h left both specs' internal self-checks clean,
+   because neither compared against blob.h itself. This does. Two
+   points rather than one, and each with only one of n/e large, so a
+   wrong unit coefficient, a wrong edge coefficient, and the two
+   coefficients swapped with each other are each caught by at least one
+   sample -- see plan.als's FdNeedOracleAgrees for the fuller reasoning,
+   identical on both sides. *)
+FdNeedOracleAgrees ==
+  /\ (n = 1 /\ e = 7) => FdNeed = OracleH1E7
+  /\ (n = 7 /\ e = 1) => FdNeed = OracleH7E1
+
+(* THE BOUNDARY, which a state count cannot see. Init ranges over n (and,
+   since edges returned, e), and asserting a distinct-states count says
+   how many were explored, not which: `control` shifted Init to
+   0..MaxUnits-1, before e existed, and still got the SAME count (64)
+   back, because a count says nothing about which states were in it --
+   the only case FdBudgetCovers exists for, the largest legal city, was
    never checked. This is a constant, so it holds regardless of what
    Init does. *)
 (* THE PROBE FOR THIS LIVES IN tests/run.py AND ITS CONSTANT IS THE
@@ -221,10 +251,18 @@ FdNeedAgrees == FdNeed = Reserved + n + n
    multiplier is the whole content of "PID 1 holds TWO log pipes per
    house".
 
-   The probe now uses Reserved + 2*MaxUnits - 1, derived from the
-   generated limits rather than typed: the honest predicate misses by
-   exactly one there, and every weakening that drops the multiplier or
-   Reserved still holds, so the two are separated.
+   The probe now uses vals['fdNeedWorstCase'] - 1 -- compiled by
+   tools/gen-spec-limits.py from blob.h's own NW_FD_NEED macro at
+   (MaxUnits, MaxEdges), not `Reserved + 2*MaxUnits - 1` retyped a
+   further time in Python. It was that retyped form from 2026-09-11
+   until edges reopened it: docs/options/17-edges.md's own build found
+   that a hand-typed Python copy of the multiplier is exactly the
+   fourth/fifth-place drift invariant 3 warns about, one level removed
+   from the specs themselves. The honest predicate misses by exactly
+   one there, and every weakening that drops a multiplier or Reserved
+   still holds, so the two are separated -- and now a header multiplier
+   that drifted from what LargestCityFits itself says is separated too,
+   since `tight` no longer assumes blob.h and this file agree.
 
    THAT PINS THE BOUNDARY FROM BELOW ONLY, and a second probe pins it
    from above. A must-fail run at T-1 excludes every weakening and admits
@@ -243,15 +281,19 @@ FdNeedAgrees == FdNeed = Reserved + n + n
    hold whenever MaxFds is large. Two predicates that agree throughout
    the legal range cannot pin each other; only a constant that separates
    them can. *)
-LargestCityFits == Reserved + 2 * MaxUnits <= MaxFds
+LargestCityFits == Reserved + 2 * MaxUnits + 2 * MaxEdges <= MaxFds
 
 (* NoLiveRewrite is deliberately NOT restated as a predicate here.
-   With edges removed, e was the only variable with a plausible runtime
-   mutation path -- nothing can add a unit or change a lid while the city
-   runs. UNCHANGED <<n, kind, lids>> would be trivially true and evaluated
-   by nothing, which reads as assurance without being any. The slot
-   discipline it stood for survives as an operational rule in CLAUDE.md.
-   See HISTORY.md section 17.
+   Edges are back (docs/options/17-edges.md) and `e` is a real variable
+   in this model again -- but still not a runtime mutation path: an
+   edge is resolved once by the baker and wired once at boot, before any
+   house runs, exactly like n. UNCHANGED <<n, e, kind, lids, ...>> in
+   Next above already says so for both; restating it as a NAMED
+   predicate would be trivially true and evaluated by nothing, which
+   reads as assurance without being any -- the same reason this was
+   true of `n` alone before `e` returned. The slot discipline it stood
+   for survives as an operational rule in CLAUDE.md. See HISTORY.md
+   section 17.
 
    HaltOnElectricianDeath is removed with the electrician: nw-spawn exits
    as its success path, so there is no death to halt on. *)

@@ -65,10 +65,11 @@ sections after this one and are deliberately not numbered here.
    Annotated for `tools/checkbrief.py`, one per site, each naming that
    file's own spelling — the symbol is written four ways and a grep for
    any one of them finds a quarter of it:
-   <<count:blob.h:NW_MAX_UNITS * 2 + NW_FD_RESERVED:2>>
+   <<filecontains:blob.h:#define NW_FD_NEED(nu, ne) (NW_FD_RESERVED + (nu) * 2 + (ne) * 2)>>
+   <<count:blob.h:NW_FD_NEED(NW_MAX_UNITS, NW_MAX_EDGES):2>>
    <<filecontains:bakery/nw-cc.py:FD_RESERVED + len(houses) * 2>>
-   <<filecontains:plan.als:plus[nwReserved[], 2.mul[#House]]>>
-   <<filecontains:Plan.tla:FdNeed == Reserved + 2 * n>>
+   <<filecontains:plan.als:plus[2.mul[#House], 2.mul[#Edge]]>>
+   <<filecontains:Plan.tla:FdNeed == Reserved + 2 * n + 2 * e>>
    and the two second copies that pin the others rather than being sites
    themselves, because losing one loses the only thing checking equality:
    <<filecontains:plan.als:assert FdArithmetic>>
@@ -893,7 +894,15 @@ What the map does not settle, because it is not a map question:
 
 **Who owns what, this week.** Grok owns `pid1.c`, `dawn.c` and the
 restart loop in `nwsup.c`. Claude owns the baker and the mount path in
-`nwsup.c`. Nobody else touches `plan.als` or `Plan.tla`.
+`nwsup.c`. Nobody else touches `plan.als` or `Plan.tla` **without the
+operator saying so directly** — docs/options/17-edges.md read this
+sentence as a freeze pending exactly that instruction, stopped short of
+editing either file, and named precisely what was left. The operator
+then authorized the edit for that specific, named gap (the edge term in
+`fdNeed`/`FdNeed`, per invariant 3); both files were changed on that
+authorization, not on a reading of this sentence alone. The sentence
+itself is unchanged for the next agent who has not been told anything:
+absent a direct instruction, it is still a freeze.
 
 **Fix it and flag it — and the narrow version is the rule.** When a
 handoff breaks the boot, fix it in the other agent's file rather than

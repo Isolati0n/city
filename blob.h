@@ -180,17 +180,35 @@
 
 /* The edge term. docs/options/17-edges.md, invariant 3's own drift
  * class: this arithmetic is quoted in bakery/nw-cc.py, plan.als's
- * fdNeed and Plan.tla's FdNeed too -- change one, change all four (plus
- * nwcheck.c's own independent re-check below, a fifth site the edge
- * era carried and the 2026-09-10 removal retired as unreachable dead
- * code once this term dropped to zero; see nwcheck.c). NW_MAX_EDGES * 2
+ * fdNeed and Plan.tla's FdNeed too -- change one, change all four.
+ * NOT a fifth site in nwcheck.c: that file's own comment at the
+ * retired fd-budget-check site NAMES this macro in prose, explaining
+ * why no runtime re-check was reinstated (the worst case is still
+ * unreachable under NW_MAX_FDS at any legal count) -- there is no
+ * check CODE there, dead or otherwise, and an earlier version of this
+ * comment read as though there were. `claims`. NW_MAX_EDGES * 2
  * because nw-spawn holds BOTH ends of every declared edge's socketpair
  * open simultaneously during its own pre-loop wiring phase, before any
  * unit has forked to inherit its share -- the worst case this assert
  * bounds is that phase, not steady state after boot, which is why an
  * edge term belongs beside the per-house term rather than replacing
- * it. */
-_Static_assert(NW_MAX_UNITS * 2 + NW_MAX_EDGES * 2 + NW_FD_RESERVED <= NW_MAX_FDS,
+ * it.
+ *
+ * NAMED as a macro, not just written inline, because "change one,
+ * change all four" above was true of the VALUES and not of this
+ * ARITHMETIC: tools/gen-spec-limits.py derives NW_MAX_UNITS,
+ * NW_MAX_EDGES and NW_FD_RESERVED into both specs, but the multiplier
+ * `2` was still hand-typed a second time in plan.als's fdNeed and a
+ * third time in Plan.tla's FdNeed, and nothing compared either against
+ * this expression -- `* 2` -> `* 3` here left both specs clean
+ * (plan.md records the measurement). tools/fdneed-oracle.c compiles
+ * against THIS macro and is run by gen-spec-limits.py at a few
+ * concrete (units, edges) points; plan.als's FdNeedOracleAgrees and
+ * Plan.tla's FdNeedOracleAgrees each check their own formula against
+ * those compiled values, so a drift in either direction -- this macro
+ * or a spec's own copy -- has something to disagree with. */
+#define NW_FD_NEED(nu, ne) (NW_FD_RESERVED + (nu) * 2 + (ne) * 2)
+_Static_assert(NW_FD_NEED(NW_MAX_UNITS, NW_MAX_EDGES) <= NW_MAX_FDS,
                "derived fd budget");
 
 /* AND BOUNDED FROM BELOW, which the two asserts above and below are not.
@@ -216,7 +234,7 @@ _Static_assert(NW_FD_RESERVED >= 6,
  * units, inside the range the budget allows. Limits are derived, never
  * declared twice (invariant 3). */
 #define NW_FD_SWEEP     NW_MAX_FDS
-_Static_assert(NW_MAX_UNITS * 2 + NW_MAX_EDGES * 2 + NW_FD_RESERVED <= NW_FD_SWEEP,
+_Static_assert(NW_FD_NEED(NW_MAX_UNITS, NW_MAX_EDGES) <= NW_FD_SWEEP,
                "sweep must cover the whole legal descriptor range");
 
 /* Slots in nwcheck.c's duplicate-name table. Not a plan-format limit -- no

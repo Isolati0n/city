@@ -59,6 +59,17 @@ sig Brick {}
 sig Layer {}
 sig Path {}
 
+/* docs/options/17-edges.md. Opaque, like Brick and Layer, and for the
+   same narrower reason: what this file's fd arithmetic needs is a
+   COUNT, and Alloy has no bare integer count to add a term to --
+   `#Edge` is what makes one exist. No `a`/`b` endpoint fields: the
+   structural rules an edge is subject to (index range, no self-edge,
+   no duplicate pair) are enforced in nwcheck.c and pinned by
+   test_checker_rejects_crafted_edges, not modelled here, the same
+   division of labour brickNeedsNewNS's neighbours already use for
+   their own NW_E_* checks. */
+sig Edge {}
+
 /* A declared capacity for the writable layer, opaque like Brick and Layer
    and for the narrower reason: the only thing the plan format asserts
    about the number is that declaring one requires a layer to bound
@@ -137,8 +148,12 @@ fact namesAreHouses { #House >= 1 }
    as being verified. Plan.tla carries the equivalent note; this file
    did not until `claims` asked why. */
 
-/* Derived budget: reserved + 2 per house, both from blob.h. */
-fun fdNeed[]: Int { plus[nwReserved[], 2.mul[#House]] }
+/* Derived budget: reserved + 2 per house + 2 per edge, all from blob.h,
+   matching NW_FD_NEED in blob.h and nwcheck.c's own re-check. The edge
+   term returned with docs/options/17-edges.md; it left with edges the
+   first time (HISTORY.md section 17) and the four/five-place drift
+   class applies to it exactly as it does to the house term beside it. */
+fun fdNeed[]: Int { plus[nwReserved[], plus[2.mul[#House], 2.mul[#Edge]]] }
 
 /* Same arithmetic as NW_MAX_BINDS in blob.h, MAX_BINDS in bakery/nw-cc.py
    and MaxBinds in Plan.tla. Change one, change all four.
@@ -181,14 +196,37 @@ pred sealed { lte[fdNeed[], nwMaxFds[]] and lte[bindNeed[], nwMaxBinds[]] }
    at boot. Both are BOUNDED to the scope on the command -- see the note
    at the foot of this file about what the scope is and is not. */
 assert FdArithmetic {
-  fdNeed[] = plus[nwReserved[], plus[#House, #House]]
+  fdNeed[] = plus[nwReserved[], plus[plus[#House, #House], plus[#Edge, #Edge]]]
 }
 assert Sealed {
   sealed
 }
 
+/* fdNeedOracle_1_7[] and fdNeedOracle_7_1[] are GENERATED --
+   tools/gen-spec-limits.py compiles tools/fdneed-oracle.c against
+   blob.h's own NW_FD_NEED macro and runs it at these two points -- not
+   a further hand-typed copy of the multiplier. FdArithmetic above pins
+   fdNeed[]'s formula against a SECOND copy written in THIS SAME FILE,
+   which catches an accidental typo but not a multiplier that drifted
+   from blob.h consistently in both copies: plan.md records the
+   measurement (`* 2` -> `* 3` in blob.h, both specs stayed clean). This
+   is the comparator that was missing.
+
+   Two points, not one, and each with only one of #House/#Edge large:
+   a single sample where both are large cannot tell "unit coefficient
+   wrong" from "edge coefficient wrong" apart, and a single sample
+   where only one is nonzero cannot catch the two coefficients being
+   swapped with each other. Swapping which count is 7 and which is 1
+   between the two samples catches that swap specifically. */
+assert FdNeedOracleAgrees {
+  (#House = 1 and #Edge = 7 => fdNeed[] = fdNeedOracle_1_7[])
+  and
+  (#House = 7 and #Edge = 1 => fdNeed[] = fdNeedOracle_7_1[])
+}
+
 check FdArithmetic for 8 but 12 Int
 check Sealed for 8 but 12 Int
+check FdNeedOracleAgrees for 8 but 12 Int
 
 /* NOT a unit limit. `for 8` is Alloy's search scope -- how large a model
    it will look for a counterexample in -- and it is 8 against an
@@ -204,11 +242,24 @@ check Sealed for 8 but 12 Int
    `but 12 Int` IS a real limit, and the suite pins it: it must cover
    NW_MAX_FDS. Do not read that as "the last hand-written number" --
    two rounds tried to write that sentence and both were wrong. `for 8`
-   above is hand-written three times and tracks nothing (no bound on
-   #House is declared here). Worse, `fdNeed`'s `2` tracks blob.h and is
+   above is hand-written on every check in this file and tracks nothing
+   (no bound on #House is declared here) -- do not give it a count,
+   for the reason the next paragraph demonstrates about this exact
+   sentence. `fdNeed`'s `2`s used to track blob.h in name only and be
    pinned by NOTHING: `claims` changed NW_MAX_UNITS * 2 to * 3 in the
    header and this file still checked clean, because the generator
-   emits limit values, not arithmetic. Alloy's signed 12-bit Int spans -2048..2047, so it
+   emitted limit values, not arithmetic. **That is no longer true.**
+   FdNeedOracleAgrees above compares fdNeed[] against
+   fdNeedOracle_1_7[]/fdNeedOracle_7_1[], compiled from blob.h's own
+   NW_FD_NEED macro rather than retyped. Both the ORIGINAL mutation
+   (NW_MAX_UNITS's own `* 2` -> `* 3`, Plan.tla's FdNeed left
+   unchanged) and the edge-coefficient equivalent were run against this
+   mechanism: on Plan.tla's TLC side, where a scratch `* 3` for units
+   alone reproduces cleanly, TLC reports `Invariant FdNeedOracleAgrees
+   is violated by the initial state ... e=7, n=1` -- the oracle,
+   recompiled from the mutated header, now disagrees with the spec's
+   own unchanged formula at exactly the sample built to expose a
+   unit-coefficient drift. Alloy's signed 12-bit Int spans -2048..2047, so it
    must cover NW_MAX_FDS; at 2048 the value wraps and the failure
    presents as a counterexample to Sealed plus a vacuous model -- the
    right problem under two wrong names. test_specs_are_checked asserts

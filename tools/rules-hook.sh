@@ -116,6 +116,7 @@ MAP = [
       "relaunch-house.py", "unit-info.c"}, "runtime"),
     ({"blob.h", "nwcheck.c", "nwcheck_main.c", "nw-cc.py", "plan.als",
       "Plan.tla", "stage-candidate.py", "gen-spec-limits.py",
+      "fdneed-oracle.c",
       "caller_nw_check.c", "leaf_name_dup.c", "leaf_name_ok.c",
       "leaf_path_ok.c", "stage-layers.py", "unit-info.c"}, "plan"),
     ({"console-boot-test.py", "run.py", "unit_probe.c", "scale-probe.py"}, "harness"),

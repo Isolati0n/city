@@ -1,6 +1,16 @@
 # 17 — Edges: bringing back inter-house sockets
 
-Status: **built, tested and reviewed this round.** `struct
+Status: **built, tested and reviewed this round** — `tcb-review`,
+`fd-auditor`, `control` and `claims` all ran against the code changes
+this note describes and found nothing outstanding as of their last
+pass. This line describes a past review; it is not itself gated —
+`tools/review-gate.sh` tracks TCB, suite and a fixed prose set
+(`CLAUDE.md`, `.claude/rules`, `.claude/agents`, `HISTORY.md`), and
+`docs/options/` is in none of them, so editing this file does not
+re-owe anything and this sentence cannot go stale that way. What it
+*can* go stale against is the code: run `sh tools/review-gate.sh
+--check` to see whether the TCB/suite/prose files this note describes
+have since changed. `struct
 nw_edge`, `NW_MAGIC` bumped to `NWPLAN11`, `NW_MAX_EDGES`, the
 `edge=<a>,<b>` plan syntax resolved to indices at the same moment
 binds already are (confirmed, not merely proposed — see "What has
@@ -15,11 +25,12 @@ getting no wire, backpressure, a 16-house ring with zero cross-talk,
 baker/checker refusals for bad edges, and a tight-fd-budget-plus-edges
 preflight pair).
 
-**Reviewed, and what that caught.** `tcb-review`, `fd-auditor` and
-`control` all ran (recorded via `tools/review-gate.sh --record`,
-`sh tools/review-gate.sh --check` now says `ok`), plus two `claims`
-passes on this note's own prose. They found and this round fixed two
-real, reproduced bugs, not stylistic nits:
+**Reviewed once already, and what that caught.** `tcb-review`,
+`fd-auditor` and `control` all ran and were recorded via
+`tools/review-gate.sh --record` against an earlier state of this round's
+content, plus two `claims` passes on this note's own prose at that
+point. They found and this round fixed two real, reproduced bugs in
+code, not stylistic nits:
 
 1. **The original leaked-wire-fd self-check killed every boot in an
    environment where nw-spawn's own inherited fd 0/1/2 happened to be
@@ -42,12 +53,19 @@ real, reproduced bugs, not stylistic nits:
 Both fixes were themselves re-reviewed (a second, narrowly-scoped
 `tcb-review`/`fd-auditor`/`control` round against the actual fixed
 code, since a review is keyed to content and editing after a review
-un-does it) before being recorded. `blob.h`'s own `_Static_assert` and
-`nwcheck.c`'s own (currently unreachable, documented as such) re-check
-carry the edge term; `bakery/nw-cc.py`'s `check()` carries it too.
-**`plan.als`'s `fdNeed` and `Plan.tla`'s `FdNeed` do not** — see
-"Ownership flag, resolved" below for why this round stopped there
-rather than guessing.
+un-does it) before being recorded. `blob.h`'s own `_Static_assert`
+carries the edge term (via the `NW_FD_NEED` macro, see below);
+`bakery/nw-cc.py`'s `check()` carries it too. **`nwcheck.c` does NOT
+carry a runtime re-check of it** — say this precisely, since an earlier
+draft of this paragraph claimed nwcheck.c "carries" the term as though
+live code existed there: `nwcheck.c`'s comment at the retired
+fd-budget-check site *names* `NW_FD_NEED` in prose, explaining why no
+check was reinstated (the worst case, 392, is still unreachable under
+1024 at any legal count) — there is no `if`, no `NW_E_*` return, nothing
+executable. `claims` found the overclaim. **`plan.als`'s `fdNeed` and
+`Plan.tla`'s `FdNeed` now carry the term too**, per an operator-authorized
+follow-up round — see "Ownership flag, resolved" below for the reading
+that stopped this round short of them at first, and what changed.
 
 ## Ownership flag, resolved (as far as the tree can resolve it)
 
@@ -81,21 +99,53 @@ two agents" — is textually possible but reads oddly given neither
 agent is the one named as their owner either. Genuinely ambiguous, and
 not resolvable by evidence in this tree.
 
-Per the operator's own instruction for exactly this case: everything
-else in this note is built, tested and reviewed (see the Status line at
-the top); `plan.als` and `Plan.tla` are untouched. `git status` confirms
-it. **What is left**:
-`plan.als`'s `fun fdNeed[]: Int { plus[nwReserved[], 2.mul[#House]] }`
-needs an edge term added (`plus[..., 2.mul[#Edge]]` or similar, which
-means adding an `Edge` signature to the model, not a one-line
-arithmetic edit — Alloy has no bare integer count to add a term to),
-and `Plan.tla`'s `FdNeed == Reserved + 2 * n` needs the analogous `+ 2
-* e` with `e` introduced as a model variable. Both also need their own
-second-copy pins (`assert FdArithmetic` in `plan.als`, `FdNeedAgrees`
-in `Plan.tla`) extended to cover the new term, matching how each
-already pins the existing `2 * n`. `test_specs_are_checked` in
-tests/run.py still passes unmodified either way, since it does not
-assert anything about edges.
+**UPDATE — the operator authorized this edit directly, and it is now
+done.** Everything below this line described the state where this note
+stopped short per the reading above; `CLAUDE.md`'s ownership sentence
+now records the authorization in place (see its own "Who owns what,
+this week" entry). What follows is kept as the record of what was
+missing and why, since the reasoning for the freeze reading is still
+correct for the next agent who has NOT been told directly.
+
+Both specs now carry the edge term. `plan.als` gained a `sig Edge {}`
+(opaque, matching `Brick`/`Layer`/`Capacity`'s precedent — no `a`/`b`
+endpoint fields, since the structural edge rules are nwcheck.c's job,
+not this file's) and `fdNeed[]` reads
+`plus[nwReserved[], plus[2.mul[#House], 2.mul[#Edge]]]`; `Plan.tla`
+gained `e` as a model variable (ranging `0..MaxEdges`, restored per its
+own retired-edges note rather than reinvented) and
+`FdNeed == Reserved + 2 * n + 2 * e`. Both specs' own second-copy pins
+(`assert FdArithmetic` in `plan.als`, `FdNeedAgrees` in `Plan.tla`) were
+extended to match.
+
+**The control this task also asked for, closing a gap plan.md records
+at length: nothing had ever compared either spec's fd-need ARITHMETIC
+against blob.h's, only the VALUES.** `blob.h` gained a named
+`NW_FD_NEED(nu, ne)` macro (both `_Static_assert`s now call it rather
+than repeating the expression), and `tools/fdneed-oracle.c` is a
+standalone program that compiles against it and prints the answer for
+CLI-given `(nu, ne)`. `tools/gen-spec-limits.py` runs that oracle at two
+sample points — `(1, 7)` and `(7, 1)`, chosen so a wrong unit
+coefficient, a wrong edge coefficient, or the two coefficients swapped
+with each other are each caught by at least one sample — and writes the
+results into the generated `limits.als`/`Plan.cfg` as
+`fdNeedOracle_1_7[]`/`fdNeedOracle_7_1[]` and
+`OracleH1E7`/`OracleH7E1`. Both specs gained a `FdNeedOracleAgrees`
+check comparing their own `fdNeed[]`/`FdNeed` against those compiled
+values. It also feeds `tests/run.py`'s `tight` boundary value (used by
+the existing `FdBudgetCovers`/`LargestCityFits` must-fail/must-hold
+probes), replacing a fourth hand-typed Python copy of the same
+multiplier with the compiled answer.
+
+**Verified working, not merely built.** Mutating blob.h's `NW_FD_NEED`
+macro to `(nu) * 3` (leaving edges at `* 2`) in a scratch copy and
+re-running `test_specs_are_checked` fails with `Invariant
+FdNeedOracleAgrees is violated by the initial state ... e=7, n=1` —
+the oracle, recompiled from the mutated header, disagrees with the
+unmutated spec's own formula at exactly the sample built to expose a
+unit-coefficient drift. `make test` is green on the unmutated tree
+(`specs-are-checked` reports 5 invariants, 3 Alloy checks, 8256 TLC
+states covering every legal `(unit, edge)` pair).
 
 ## Ownership flag — checked, not assumed (as filed before the build)
 
@@ -458,19 +508,29 @@ own fix).
 
 ## Next step
 
-**This section went through two stale versions before this one — kept
-as history rather than deleted, per the rule that a retired rule is
+**This section has gone through three stale versions before this one —
+kept as history rather than deleted, per the rule that a retired rule is
 re-filed, and correcting the record rather than deleting it here since
-each version's replacement is the evidence for why it was wrong.**
-First it said "no code this round," directly beneath a Status line and
-a COMMITMENT CHECK both written in the present tense about code that
-already existed — `claims` found that contradiction. It was then
-corrected to "land the outstanding tcb-review/fd-auditor/control
-passes," which was accurate at the time but is now stale itself: those
-passes ran, found and this round fixed two real bugs (see the Status
-line), were re-run against the fixes, and are recorded —
-`sh tools/review-gate.sh --check` reports `ok`. **What remains, per the
-"Ownership flag, resolved" section above: `plan.als`'s `fdNeed` and
-`Plan.tla`'s `FdNeed` still need their edge term**, blocked on the
-same ownership ambiguity this note flags rather than resolves. That is
-the one real next step this note still names.
+each version's replacement is the evidence for why it was wrong.** First
+it said "no code this round" beneath a Status line already describing
+built code. Then "land the outstanding tcb-review/fd-auditor/control
+passes," true when written and stale once those passes landed. Then
+"`plan.als`/`Plan.tla` still need their edge term," which a `claims`
+pass on the operator-authorized follow-up round falsified directly
+against the files: both specs carry the term (see the Status line and
+"Ownership flag, resolved" above) as of that round.
+
+**What that same `claims` pass found instead, and what genuinely
+remains:** four real defects in that round's own prose and one
+regression in already-merged code, all named and fixed in place (the
+`nwcheck.c`/`blob.h` overclaim about a re-check that doesn't exist as
+code, this section's own staleness, a `make checkbrief` contradiction
+the `plan.als` edit caused by changing the text CLAUDE.md's invariant-3
+annotation pins, and a stray use of the word "budget" in `pid1.c`'s own
+comment — added during the earlier edges-landing round, unrelated to
+this one, but tripping invariant 1's `absent-in` check — reworded rather
+than left). Fixing prose after a `claims` pass re-owes review per
+`tools/review-gate.sh`'s own content-keying; the actual next step is
+running `make test` clean against this final content, a fresh review
+round on what changed since the last recording, and landing. Nothing
+about the technical design is left open by this note.

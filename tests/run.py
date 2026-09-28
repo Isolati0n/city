@@ -10459,8 +10459,8 @@ def test_specs_are_checked():
         if not re.fullmatch(r"[A-Za-z_]\w*", t):
             break
         named.add(t)
-    expect(named == {"FdBudgetCovers", "FdNeedAgrees", "LargestCityFits",
-                     "TypeOK"},
+    expect(named == {"FdBudgetCovers", "FdNeedAgrees", "FdNeedOracleAgrees",
+                     "LargestCityFits", "TypeOK"},
            f"the generated Plan.cfg names invariants {sorted(named)}. "
            f"TLC checks exactly what is listed there and nothing else, "
            f"so one dropped from the generator is one checked never.")
@@ -10476,11 +10476,15 @@ def test_specs_are_checked():
            f"TLC rejected Plan.tla against blob.h's limits "
            f"({vals}).\n{tout[-2000:]}")
     m = re.search(r"(\d+) distinct states", tout)
-    expect(m and int(m.group(1)) == vals["nwMaxUnits"],
+    want_states = vals["nwMaxUnits"] * (vals["nwMaxEdges"] + 1)
+    expect(m and int(m.group(1)) == want_states,
            f"TLC explored {m.group(1) if m else '?'} states, expected one "
-           f"per legal unit count ({vals['nwMaxUnits']}). If Init stopped "
-           f"ranging over n, the invariant is being checked at one size "
-           f"and the run says nothing about the others.\n{tout[-1200:]}")
+           f"per legal (unit, edge) count ({vals['nwMaxUnits']} * "
+           f"({vals['nwMaxEdges']} + 1) = {want_states}, since e ranges "
+           f"0..MaxEdges and n ranges 1..MaxUnits independently). If Init "
+           f"stopped ranging over n or e, the invariant is being checked "
+           f"at fewer sizes and the run says nothing about the "
+           f"rest.\n{tout[-1200:]}")
 
     # MUST-FAIL PROBES FOR THE TLC SIDE. The Alloy checks have had these
     # since the jars landed; the TLC invariants had only hand-controls in
@@ -10500,22 +10504,46 @@ def test_specs_are_checked():
     # than "Invariant X is violated". Two different sentences for the
     # same outcome; accept either, per name.
     tla_src = open(os.path.join(ROOT, "Plan.tla")).read()
-    tight = vals["nwReserved"] + 2 * vals["nwMaxUnits"] - 1
+    # ORACLE-DERIVED, not `vals["nwReserved"] + 2 * vals["nwMaxUnits"] - 1`
+    # retyped here a further time. That Python-side literal `2` was itself
+    # a hand-typed copy of the same multiplier this whole mechanism exists
+    # to stop retyping -- it happened to agree with blob.h and Plan.tla's
+    # own `2`s, and a change to any ONE of the three would not have moved
+    # the other two. `fdNeedWorstCase` comes from gen-spec-limits.py
+    # compiling tools/fdneed-oracle.c against blob.h's own NW_FD_NEED
+    # macro at (MaxUnits, MaxEdges), so this boundary is now genuinely
+    # derived from the header rather than a fourth hand-typed copy.
+    tight = vals["fdNeedWorstCase"] - 1
     for nm, cfg_sub, tla_sub in (
             ("TypeOK", None,
              ("kind = [i \\in 1..n |-> 0]", "kind = [i \\in 1..n |-> 2]")),
             # NOT 16. Derived: the honest predicate misses by exactly
-            # one at Reserved + 2*MaxUnits - 1, while every weakening
-            # `control` found -- `n <= MaxFds`, `Reserved + MaxUnits <=
-            # MaxFds`, `MaxUnits <= MaxFds` -- still holds there. At 16
-            # all of them are false, so the probe certified the
-            # invariant's NAME and a green suite came back from a halved
-            # boundary. Derived rather than typed so it tracks the
-            # header; 135 today.
+            # one at `tight` (blob.h's own NW_FD_NEED, compiled and run
+            # at (MaxUnits, MaxEdges) -- see where `tight` is computed
+            # above), while every weakening `control` found -- `n <=
+            # MaxFds`, `Reserved + MaxUnits <= MaxFds`, `MaxUnits <=
+            # MaxFds` -- still holds there. At 16 all of them are false,
+            # so the probe certified the invariant's NAME and a green
+            # suite came back from a halved boundary. Derived rather
+            # than typed so it tracks the header; read the value off
+            # `tight` rather than a number here, which would go stale
+            # the moment NW_MAX_UNITS, NW_MAX_EDGES or NW_FD_RESERVED
+            # moves.
             ("FdBudgetCovers", ("MaxFds", tight), None),
             ("LargestCityFits", ("MaxFds", tight), None),
             ("FdNeedAgrees", None,
-             ("FdNeed == Reserved + 2 * n", "FdNeed == Reserved + n")),
+             ("FdNeed == Reserved + 2 * n + 2 * e",
+              "FdNeed == Reserved + n + 2 * e")),
+            # A DIFFERENT half of the same class: this one corrupts the
+            # ORACLE'S OWN generated value (a cfg CONSTANT) rather than
+            # the spec's formula, proving FdNeedOracleAgrees fires when
+            # the DISAGREEMENT originates on the C side of the
+            # comparison too, not only when the spec's text is edited.
+            # oracleH1E7 + 1 is still a plausible-looking integer, which
+            # is the point: nothing about the corrupted value's SHAPE
+            # gives it away, only the comparison does.
+            ("FdNeedOracleAgrees", ("OracleH1E7", vals["oracleH1E7"] + 1),
+             None),
     ):
         d = f"{lab}/mustfail-tlc-{nm}"
         os.makedirs(d, exist_ok=True)
@@ -10711,17 +10739,18 @@ def test_specs_are_checked():
            f"{aout[-1500:]}")
     checks = re.findall(r"\d+\.\s+check\s+(\w+)\s+.*?(SAT|UNSAT)", aout)
     runs = re.findall(r"\d+\.\s+run\s+(\w+)\s+.*?(SAT|UNSAT)", aout)
-    expect(len(checks) == 2 and len(runs) == 1,
-           f"expected two checks and one run from plan.als, parsed "
+    expect(len(checks) == 3 and len(runs) == 1,
+           f"expected three checks and one run from plan.als, parsed "
            f"checks={checks} runs={runs}. A command that stopped being "
            f"executed is a check that stopped happening.\n{aout[-1500:]}")
     # BY NAME. The arity guard pins how many checks ran, not which:
     # `control` renamed `check Sealed` to a second `check FdArithmetic`
-    # and the count stayed 2 while the check carrying the whole blob.h
-    # budget claim stopped running.
-    expect({n for n, _ in checks} == {"FdArithmetic", "Sealed"},
+    # and the count stayed 2 (now 3) while the check carrying the whole
+    # blob.h budget claim stopped running.
+    expect({n for n, _ in checks} ==
+           {"FdArithmetic", "Sealed", "FdNeedOracleAgrees"},
            f"plan.als ran checks {sorted(n for n, _ in checks)}, expected "
-           f"FdArithmetic and Sealed.\n{aout[-1500:]}")
+           f"FdArithmetic, Sealed and FdNeedOracleAgrees.\n{aout[-1500:]}")
     # For a `check`, SAT means a counterexample was FOUND.
     for name, verdict in checks:
         expect(verdict == "UNSAT",
@@ -10781,6 +10810,16 @@ def test_specs_are_checked():
             ("Sealed", "budget", "a budget too small for the scope"),
             ("Sealed", "binds", "a bind table smaller than the scope"),
             ("FdArithmetic", "union", "the `+` set-union form of fdNeed"),
+            # A DIFFERENT half of the same class from the union probe
+            # above: this one corrupts the GENERATED oracle value
+            # (limits.als's fdNeedOracle_1_7[]) rather than fdNeed[]'s
+            # own formula, proving FdNeedOracleAgrees fires when the
+            # disagreement originates on the compiled-from-blob.h side
+            # of the comparison, not only when plan.als's own text is
+            # edited -- the two probes together cover both directions
+            # a real drift could arrive from.
+            ("FdNeedOracleAgrees", "oracle",
+             "a corrupted generated oracle value"),
     ):
         d = f"{lab}/mustfail-{name}-{kind}"
         os.makedirs(d, exist_ok=True)
@@ -10808,10 +10847,21 @@ def test_specs_are_checked():
         elif kind == "binds":
             lm, nsub = re.subn(r"fun nwMaxBinds\[\]: Int \{[^}]*\}",
                                "fun nwMaxBinds[]: Int { 1 }", lm)
+        elif kind == "oracle":
+            # fdNeed[]'s OWN formula is untouched here -- only the
+            # GENERATED comparison value is corrupted, so a SAT result
+            # below is evidence the check compares against the oracle
+            # rather than trivially agreeing with whatever fdNeed[]
+            # happens to compute.
+            lm, nsub = re.subn(
+                r"fun fdNeedOracle_1_7\[\]: Int \{ (\d+) \}",
+                lambda m: f"fun fdNeedOracle_1_7[]: Int {{ {int(m.group(1)) + 1} }}",
+                lm)
         else:
             pl, nsub = re.subn(
                 r"fun fdNeed\[\]: Int \{[^}]*\}",
-                "fun fdNeed[]: Int { nwReserved[] + 2.mul[#House] }", pl)
+                "fun fdNeed[]: Int { nwReserved[] + 2.mul[#House] "
+                "+ 2.mul[#Edge] }", pl)
         expect(nsub == 1,
                f"the {name} probe rewrote {nsub} definitions, expected "
                f"exactly one. It locates the definition by its header, so "
@@ -10840,8 +10890,10 @@ def test_specs_are_checked():
     # invariant to a green suite under this exact line. An ok line that
     # overstates what ran is the announcement-not-effect defect on the
     # reporting side.
-    print(f"ok specs-are-checked (TLC: {vals['nwMaxUnits']} states, "
-          f"{len(named)} invariants incl. the boundary; Alloy: {len(checks)} checks "
+    print(f"ok specs-are-checked (TLC: {want_states} states "
+          f"({vals['nwMaxUnits']} units x {vals['nwMaxEdges']} + 1 edges), "
+          f"{len(named)} invariants incl. the boundary and the fd-need "
+          f"oracle; Alloy: {len(checks)} checks "
           f"clean at {have}-bit Int; every invariant and every check on "
           f"both sides shown failing when its own subject is broken, "
           f"one probe per predicate; "
