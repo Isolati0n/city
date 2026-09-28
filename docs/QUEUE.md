@@ -12,7 +12,7 @@ session restart: read both files, nothing else, to pick back up.
 If this file disagrees with the repo, the repo wins, and whoever notices
 fixes this file.
 
-Base at last edit: `553071e` (origin/main).
+Base at last edit: `3bcb850` (origin/main).
 
 ## Decision authority (Section 5 of the brief)
 
@@ -65,11 +65,32 @@ before all code.
 
 Status of each, current as of this commit:
 
-- **1a** (docs, `claims`): HISTORY §17 header note, `docs/options/11`
-  status line, `nwsup.c` stale `extra_fd` comment, commitment 2 restated
-  in `CLAUDE.md` and everywhere else it appears, report on where else
-  commitments text lives (`NEXUSWEAVE.md` is not in this tree). NOT
-  STARTED.
+- **1a** — DONE, `3bcb850`. HISTORY §17 header note, `docs/options/11`
+  status line ("design only" → "built"), `nwsup.c`'s `wait_house()`
+  comment (it contradicted its own later paragraph about the control
+  socket), commitment 2 restated verbatim as invariant 5's opening
+  sentence in `CLAUDE.md`. Restating it required first fixing it:
+  invariant 5's prior wording ("exactly three descriptors ... no third
+  thing") was false the moment edges came back — a wired house holds
+  3+k descriptors for k declared wires. Two `claims` rounds surfaced
+  the same stale "edges are gone" premise copied into
+  `.claude/rules/plan.md` (cycle-detection refusal), `.claude/rules/
+  runtime.md` (nw-spawn-exits bullet), `nwspawn.c` (a second stale
+  comment near the brick/bind env-var setup), and `docs/options/05`/
+  `06` (citations of the old wording; 05's "invariant-5 question"
+  section reframed, three further downstream echoes covered by one
+  top-of-file flag note rather than patched individually). Report on
+  where else commitments text lives: full quotes of commitment 2 exist
+  in three places, not two — `docs/OPERATOR-BRIEF.md` (source),
+  `CLAUDE.md` invariant 5, and `docs/options/05-house-persistent-storage.md`,
+  which this same commit's own rewrite of "## The invariant-5 question"
+  quotes it in full twice more — missed on the first writing of this
+  line, found by a `claims` re-check of this exact bullet.
+  `NEXUSWEAVE.md` is not in this tree, so there is no fourth file to
+  reconcile.
+  `make checkbrief`: 5 verified, 0 contradicted, 4 uncheckable.
+  `make test`: EXIT:0, PASSED WITH SKIPS (only the recorded vfat-ESP
+  skip).
 - **1b** (design note, `docs/options/22`, `claims` + batched questions):
   lock/unlock, the ten numbered questions from the brief. NOT STARTED.
   Blocks Phase 2 (Phase 2 requires this note approved).
