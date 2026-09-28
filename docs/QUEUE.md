@@ -58,11 +58,8 @@ before all code.
    packaged binary from another distro's container, not a from-source
    build), not a repeat of the same approach.
 4. `docs/QUEUE.md` seeded — `553071e`.
-
-## THIS ITEM — docs/OPERATOR-BRIEF.md + QUEUE.md rewrite (Section 0's first action)
-
-In progress: this commit. One `claims` pass before landing, per the
-brief's own instruction for this item.
+5. `docs/OPERATOR-BRIEF.md` landed verbatim, `docs/QUEUE.md` rewritten to
+   match (Section 0's first action) — `cbf931c`.
 
 ## Phase 1 — independent items, start now
 
@@ -81,12 +78,21 @@ Status of each, current as of this commit:
   unconditional signalfd beside pidfd, and their tests. Keep the
   pidfd_open-failure fallback tiers. `docs/options/16` marked superseded.
   NOT STARTED. Blocks Phase 2 (Phase 2 requires this landed).
-- **1d** (trusted core, AUTHORIZED edit to `pid1.c`): `NW_BOOT_NEED(n,e)`
-  macro in `blob.h`, used by the `_Static_assert`, `tools/gen-spec-limits.py`,
-  the baker, and the boot preflight; one new boot line printing
-  `BootNeed`/`RLIMIT_NOFILE` at city open. NOT STARTED. Supersedes item
-  1 of Stage 0 above (the fd-need term `de8a5e8` landed used the
-  conservative assert this item replaces).
+- **1d** — DONE, `74413db`. `NW_BOOT_NEED(n,e) = NW_FD_RESERVED + n + 2*e`
+  in `blob.h` (was `NW_FD_NEED`, `+2*n+2*e`), used everywhere invariant 3
+  requires agreement (both `_Static_assert`s, the baker,
+  `tools/gen-spec-limits.py`, `tools/bootneed-oracle.c`, both specs'
+  `fdNeed`/`FdNeed`/`FdArithmetic`/`FdNeedAgrees`/`LargestCityFits`), plus
+  the authorized `pid1.c` edit (pre-flight now calls the macro instead of
+  hand-typing it, and a new boot line at "city open" prints
+  `bootneed=`/`nofile_soft=`/`nofile_hard=`). Supersedes item 1 of Stage 0
+  above (the fd-need term `de8a5e8` landed used the conservative assert
+  this item replaced). `fd-auditor` found and fixed a real (currently
+  unreachable) 32-bit-narrowing risk in the macro's internal arithmetic;
+  `tcb-review` and `claims` found and fixed two further-out prose sections
+  (`CLAUDE.md`, `.claude/rules/plan.md`) plus one agent brief
+  (`.claude/agents/drift.md` + its `install-agents.sh` heredoc copy) that
+  still quoted the old formula after the direct-site edits landed.
 - **1e** (`bakery/`, `control` + one reviewer): baker refuses `lids=none`
   in a city plan, with an explicit lab flag for fixtures. NOT STARTED.
 - **1f** (trusted core, `control`+`tcb-review`): control-socket hardening
