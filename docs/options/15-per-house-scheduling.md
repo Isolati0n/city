@@ -296,6 +296,123 @@ than none. Not pursued further right now — this round's task was the
 measurement, and the reject path it supports is already built and
 reviewed above.
 
+## Closing the scheduler-binary gap — attempted, not closed
+
+Measured 2026-09-28, same environment as above. The prior round stopped
+at "no working policy artifact exists yet" by instruction. This round
+tried to close it: build a stock scheduler from source on the same
+GitHub-hosted `ubuntu-24.04` runner and actually load it, capped at
+five push-and-read iterations per the round's own instruction. **Real
+progress was made and the cap was hit before a scheduler ever ran**,
+so this section names exactly where it got stuck rather than claiming
+success. One workflow file
+(`.github/workflows/sched-ext-build-probe.yml`, pushed, iterated,
+deleted afterward — same "not kept" convention as the previous probe),
+five runs on `isolati0n/city`, run ids `36370410442`, `36371337617`,
+`36371601052`, `36371749674`, `36371863904` in that order:
+
+1. **`sudo apt-get install -y ... bpftool ...` refuses outright**:
+   `E: Package 'bpftool' has no installation candidate` — it is a
+   virtual package on this image, provided by `linux-tools-common`;
+   naming it directly rather than through a providing package is the
+   defect. Fixed by dropping the explicit name.
+2. **The clone target was wrong.** `sched-ext/scx` no longer carries
+   C schedulers at all — its own README says so in as many words: "C
+   schedulers like `scx_simple` were previously included in this
+   repository but have since been moved to
+   [scx-c-examples](https://github.com/sched-ext/scx-c-examples). The
+   schedulers in this repository now use Rust for userspace
+   components." `find . -iname "*scx_simple*"` against the freshly
+   cloned `scx` repo returned nothing, confirming the README rather
+   than resting on it alone. Fixed by cloning
+   `sched-ext/scx-c-examples` instead, whose own README was checked
+   before writing the fix, not assumed: it names `make all` as the
+   build command and `build/scheds/c/scx_simple` as the output path.
+3. **The installed `bpftool` wrapper does not work for the runner's
+   actual kernel.** The BPF object compiled clean
+   (`clang ... scx_simple.bpf.c -> scx_simple.bpf.o`), then skeleton
+   generation printed `WARNING: bpftool not found for kernel
+   6.17.0-1022` and the build died there. `linux-tools-generic` on
+   this image resolves to tools built for the image's own baked-in
+   kernel build (`6.8.0-142`), not the actual running
+   `6.17.0-1022-azure` kernel `uname -r` reports — a mismatch between
+   the image's package set and its running kernel, not a token this
+   workflow got wrong.
+4. **The exact fix the warning names does not fix it.** The warning
+   itself lists `linux-tools-6.17.0-1022-azure` as the package to
+   install. Installing it: `apt-get` reports
+   `linux-tools-6.17.0-1022-azure is already the newest version
+   (6.17.0-1022.22)` — already present — and `bpftool version`
+   immediately afterward still printed the identical "not found"
+   warning. Verified by re-invoking the tool after install, not
+   assumed from the install succeeding — that much is checked. The
+   likeliest reading is a gap in this runner image's cloud-kernel
+   packaging (the Azure-flavoured `linux-tools` package for this exact
+   kernel build not shipping a working `bpftool` binary), but that is
+   an inference from the symptom, not something separately confirmed —
+   no `dpkg -L` or equivalent was run to look inside the package
+   before iteration 5 moved to a different fix, so it is named here as
+   the working theory rather than an established fact.
+5. **Building a standalone `bpftool` from source got further than
+   apt could, and hit a new, different failure — not the same one
+   again.** Cloned `libbpf/bpftool` (which vendors its own `libbpf`
+   via git submodule, so it does not depend on this runner's system
+   `libbpf-dev` version), built it, installed it ahead of the broken
+   wrapper on `PATH`, and confirmed with `bpftool version` before
+   proceeding — this succeeded, and skeleton generation's own
+   "not found" warning did not recur. The BPF object compiled, the
+   skeleton generated clean, and the build reached the final
+   userspace link step:
+
+       cc ... scx_simple.c -o build/scheds/c/scx_simple -lbpf -lelf -lz -lzstd -lpthread
+       scx_simple.bpf.skel.h: In function 'scx_simple__create_skeleton':
+       scx_simple.bpf.skel.h:294:12: error: 'struct bpf_map_skeleton' has no member named 'link'
+         294 |         map->link = &obj->links.simple_ops;
+
+   Both halves of the version skew are directly quoted from this exact
+   run's own log (job `108769724560`), not inferred: an earlier step
+   in the same run shows `Setting up libbpf-dev:amd64
+   (1:1.3.0-2build2) ...` — the header the final `cc -lbpf` link step
+   used — and the self-built `bpftool`, in the step right after
+   building it, printed its own version banner: `bpftool v7.8.0`,
+   `using libbpf v1.8`. (Iteration 1's own
+   install step never reached the `libbpf-dev` line at all — `apt-get
+   install` under `set -e` aborts the whole package list on the first
+   unresolvable name, which is what it hit — so the version comes from
+   this run, the one whose link failure it explains, not an earlier
+   one.) `v1.8` generating a skeleton and `1.3.0`'s headers linking it
+   is the version skew directly, not an inference from the compile
+   error alone: the error naming a struct member (`link`) that an
+   older `struct bpf_map_skeleton` lacks is corroborating detail, not
+   the only evidence. Skeleton generator and link-time library
+   disagree about a struct layout — a version-skew defect, not a
+   missing-tool one. Closing it
+   needs the userspace compile to link against the *same* `libbpf`
+   the self-built `bpftool` used to generate the skeleton (its
+   submodule checkout, or a matching installed version), which is a
+   real next step this round's five-iteration budget did not reach.
+
+**Be exact about what this does and does not show, per this round's
+own instruction.** It shows a stock, unmodified `scx` scheduler's BPF
+half compiles clean against this runner's real kernel headers, and
+that the only blocker any of this round's runs actually reached is a
+build-tooling version mismatch this round diagnosed precisely but did
+not fix — not that it is the only one that exists. Nothing this round
+ran past a successful link, so whether the runner would even permit
+loading a BPF struct_ops program (privilege, `CAP_BPF` or equivalent
+in that environment) is untested and unclaimed either way. **It does
+not show a scheduler engaging `/sys/kernel/sched_ext/state`** — no run
+ever reached the point of executing a built binary, so none of the
+three checkpoints (before / while running / after) were captured this
+round; reporting any of them would be the same shape of overclaim this
+doc's own history already records twice (see the corrections above).
+**It does not prove Nexusweave's plan-driven loader**, which remains
+entirely unbuilt and unaddressed by either round's measurement.
+
+The workflow file is deleted, per the same "not kept" convention as
+the previous probe; the five run ids above are what this section's
+claims rest on, the same way the previous section names its three.
+
 ## Review findings, and what changed because of them
 
 **`tcb-review` — HIGH, reproduced, fixed.** `apply_sched_ext()` originally
