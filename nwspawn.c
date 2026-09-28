@@ -118,25 +118,88 @@ static int clear_cloexec(int fd)
  * placement happens at all, which is what removes the ordering
  * dependency rather than merely getting the order right this time.
  *
- * NOT CURRENTLY PINNED BY ANY TEST THAT RUNS, said honestly rather than
- * left to be discovered: `control` interleaved allocate-then-place here
- * and ran it against every wire test, including the 16-house ring (2
- * wires/house, the suite's densest case) -- all four still passed.
- * Manually driving a single house up to 40 wires reproduced the failure
- * only intermittently (found at every N from 5-40 in one batch, then
- * absent across ~60 further repetitions at the same N's), because
- * whether an interleaved scratch fd collides with an already-placed
- * target depends on exactly what else nw-spawn's fd table holds at that
- * instant, not on wire count alone. So this discipline is verified
- * correct BY INSPECTION (every scratch fd allocated after close_others()
- * has already swept the table is provably higher than any target a
- * still-batched wire could claim -- tcb-review traced this by hand) and
- * by one-off adversarial review, not by a deterministic regression test
- * -- a `CLAUDE.md`-sense hypothesis for automated coverage specifically,
- * though not for the reasoning above. Raising a permanent test's wire
- * count on the strength of a controls run that could not reproduce on
- * demand would trade a known gap for an unreliable one; recorded here
- * instead. */
+ * THREE SEPARATE COLLISION AXES, not one, and an earlier version of
+ * this comment covered two of them and claimed that was all of them --
+ * `tcb-review` built an isolated harness using this function's own
+ * primitives and reproduced the third live, which is why this says
+ * three now rather than two.
+ *
+ * AXIS 1: dup2(scratch, target) where scratch == target (the trivial
+ * case, when a wire's own scratch allocation happens to land exactly
+ * on its own target). dup2(fd,fd) is a true POSIX no-op and leaves
+ * FD_CLOEXEC SET -- verified directly, `dup2(fd,fd)` returns fd
+ * unchanged and a following F_GETFD still shows the bit. This function
+ * closes it by calling clear_cloexec(target) UNCONDITIONALLY after
+ * every dup2(scratch, target), never skipping it when scratch==target.
+ * Bug 5's mechanism -- "dup2(fd,fd) doesn't clear CLOEXEC" -- is
+ * exactly this gap, and the unconditional call is the attic's own fix
+ * for it (docs/options/17-edges.md's account).
+ *
+ * AXIS 2: a later wire's SCRATCH fd landing on an EARLIER wire's
+ * already-placed TARGET. Impossible regardless of batching order:
+ * F_DUPFD_CLOEXEC never returns an fd that is currently open, and an
+ * earlier target is occupied (by that wire's own placement) by the
+ * time a later wire's scratch is requested.
+ *
+ * AXIS 3 (`tcb-review`'s finding): a later wire's own SOURCE fd --
+ * wire_fd[j], an INPUT to this function, not something it allocated --
+ * numerically equal to an EARLIER wire's already-placed target. Axis 2
+ * says nothing about this: wire_fd[j] was never obtained through
+ * F_DUPFD_CLOEXEC inside this function, so that guarantee does not
+ * cover it. dup2(scratch, target) at an earlier k silently closes
+ * whatever sat at `target`; if wire_fd[j] (j > k, not yet processed)
+ * happened to equal that target, its data becomes permanently
+ * unreachable with no error anywhere -- reproduced live in an isolated
+ * harness built around wire_fd={20,21,3} (n_wires=3, target(0)=3):
+ * interleaved allocate-then-place lost wire 2's peer silently; the
+ * real batched code, given the identical adversarial input, did not.
+ * That is a genuine defect in this function taken IN ISOLATION.
+ *
+ * WHETHER AXIS 3 IS REACHABLE THROUGH NW-SPAWN'S ACTUAL CALLER is a
+ * separate question from whether pack_kit() alone is vulnerable to it,
+ * and `tcb-review` flagged not having settled that question as a
+ * HYPOTHESIS rather than asserting either way. It does not reach here.
+ * main() creates every edge's socketpair() BEFORE the per-unit loop
+ * begins, in edge-table order, with nothing closed between successive
+ * calls -- so edge_fd values are STRICTLY INCREASING with edge-table
+ * index k (the kernel always returns the lowest free descriptors, and
+ * nothing frees a lower one in between). A unit's own wire_fd[] is
+ * built by scanning k = 0..n_edges-1 and appending at most one value
+ * per k for edges touching this unit, so wire_fd[] inherits that same
+ * strict increase: wire_fd[0] < wire_fd[1] < ... for any legal plan,
+ * with wire_fd[0] >= 3 always (0/1/2 are already occupied when the
+ * first edge socketpair is created). For axis 3 to fire, some
+ * wire_fd[j] (j>0) would have to equal an earlier target 3+k (k<j) --
+ * algebraically, wire_fd[j] - j >= wire_fd[0] >= 3 for a strictly
+ * increasing integer sequence, while firing requires wire_fd[j] - j <=
+ * 2. Those cannot both hold, for any k, j or edge ordering: the isolated
+ * harness's wire_fd={20,21,3} could never arise from main()'s own edge
+ * creation, because 3 would have to be wire_fd[0], not wire_fd[2].
+ * `tools/fdorder-sweep.py`'s star topology (one hub wired to every
+ * leaf) already exercises the most adversarial real shape for this --
+ * the hub's wire_fd[] spans the FULL edge table, k=0..n_edges-1, the
+ * widest range any single unit's wires can cover -- and passed clean
+ * at up to 30 wires under both this code and the interleaved mutation,
+ * consistent with the algebra above rather than contradicting it.
+ *
+ * THIS IS A CLAIM ABOUT TWO FUNCTIONS AGREEING, not a self-contained
+ * property of pack_kit(): the invariant that rules axis 3 out --
+ * wire_fd[] strictly increasing, floor 3 -- is established by main()'s
+ * edge-creation loop, not by anything in this function. If that loop's
+ * structure ever changes (edges created per-unit instead of all
+ * upfront, or anything closes an fd between socketpair() calls), this
+ * paragraph's reasoning needs re-checking against the new code, not
+ * just re-trusting. Invariant 2's batch-before-place discipline still
+ * stands on its own for axis 2 and is worth keeping regardless -- axis
+ * 3 is why it is ALSO the right shape to keep pack_kit() self-contained
+ * rather than relying on a caller invariant it does not itself state.
+ *
+ * `tools/fdorder-sweep.py`'s filler-descriptor technique (below) tests
+ * axis 2 directly and does not construct axis 3 on its own -- a filler
+ * is disposable, never a sibling wire's real source -- so its clean
+ * 783-configuration result is evidence about axis 2, not axis 3; axis
+ * 3's evidence is the algebra above plus the star topology's incidental
+ * coverage. `tools/cloexec-proof.c` proves axis 1's premise directly. */
 static int pack_kit(int log_w, const int *wire_fd, int n_wires)
 {
     int nullfd = open("/dev/null", O_RDONLY | O_CLOEXEC);
