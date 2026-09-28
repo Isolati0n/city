@@ -1069,3 +1069,9 @@ unpaired-absence	tests/run.py	expect(not os.path.exists(f"{WORK}/nope.blob"),
 # separate MS_BIND|MS_REMOUNT|MS_RDONLY), not a growable count -- the
 # sentence names the two calls it is, and cannot silently become three
 prose-count	nwsup.c	* TWO STEPS, not MS_BIND|MS_RDONLY in one mount(2) call -- the
+# a section number citing an external document (docs/OPERATOR-BRIEF.md),
+# not a growable count of anything in this note
+prose-count	docs/options/22-lock-unlock.md	`docs/OPERATOR-BRIEF.md` Section 2 item 1b's ten questions from the
+# named list immediately following (state=, deaths=, last_exit=), not an
+# unnamed instance-count -- all three are spelled out in the same sentence
+prose-count	docs/options/22-lock-unlock.md	line, three fields, matching the existing line-based `OK\n`/`ERR
