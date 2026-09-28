@@ -256,8 +256,11 @@ strongest argument in this document for building promote before storage.
 `/run` and `/tmp` as tmpfs, mounted by dawn, for the system.
 
 **Per-house ephemeral state has no mechanism and should not get one here.**
-Invariant 5 says the init provisions nothing, and a tmpfs handed to a house is
-a third thing. A house with `NEWNS` cannot mount its own — `__NR_mount` is
+Invariant 5 (current wording: `docs/OPERATOR-BRIEF.md`'s "commitment 2" —
+this note originally cited the pre-edges "provisions nothing" phrasing,
+now stale) names exactly three provisioned categories — the standard kit,
+declared wires, and the supervisor's control endpoint — and a tmpfs handed
+directly to a house fits none of them. A house with `NEWNS` cannot mount its own — `__NR_mount` is
 absent from the `lids.c` allow-list, so a `lids=seccomp` house is killed for
 trying. Ephemeral per-house storage is the same question as persistent
 per-house storage and belongs in `05`, not here.

@@ -1,8 +1,24 @@
 # 11 — The start/stop channel
 
-Status: **design only. No code this round**, per instruction. This note
-answers the questions that were asked and states, rather than resolves,
-the ones that were explicitly reserved for the operator.
+Status: **built.** `nwsup.c` opens a per-unit listening control socket
+under `NW_CTL_DIR` and parses `START\n`/`STOP\n` (`n == 6`/`n == 5`
+`memcmp` against the fixed strings) — START on a live house is a no-op,
+STOP sets `stop_requested` and sends SIGTERM. This note's design-only
+status was correct when written and is stale now; kept below as the
+record of the design questions this mechanism answers, not edited to
+read as though it were written after the fact.
+
+**The "suspend/relaunch" shaping this note reasoned about throughout —
+most concretely the open question below on what STOP does to a unit's
+layer, framed as "a product decision about driftwm's suspend/relaunch
+behaviour" — is superseded.** Suspend/relaunch/hibernate/sleep-style
+features, including cgroup-freeze PAUSE/RESUME, were cut from scope
+entirely; what replaced them is the LOCK/UNLOCK feature
+(`docs/OPERATOR-BRIEF.md`, `docs/options/22` once landed), which answers
+the STOP-versus-death-versus-layer question this note left open by a
+different route (an unlocked house's exit, not a STOP, is what returns
+it to idle). START and STOP themselves are unaffected and stay exactly
+as built and described below.
 
 ## Given constraints, restated rather than re-derived
 

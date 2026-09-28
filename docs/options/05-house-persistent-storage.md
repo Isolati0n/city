@@ -7,6 +7,20 @@ convention. **[UNVERIFIED]** — `docs/options/` was empty in this repository, s
 (`03-fd-handle-allocator.md`, `04-rescue.md`, `S6-PARITY.md`). If `05` is
 taken, this file moves.
 
+**The "descriptive or prescriptive" framing this note argues from
+throughout (`## The invariant-5 question` below, and its downstream
+references at "Collides with invariant 5", "If invariant 5 is descriptive
+/ prescriptive", and the final decision list) is RETIRED.** It rested on
+invariant 5's pre-edges wording ("the init provisions nothing … there is
+no third thing"), which named zero categories and so was cleanly either
+absolute or not. The current wording (`docs/OPERATOR-BRIEF.md`'s
+"commitment 2") names three, closed-or-open depending on a question
+neither wording answers — see the rewritten `## The invariant-5 question`
+section for the actual current question (exhaustive vs. extensible). Every
+other place in this note that still poses the old descriptive/prescriptive
+choice is asking a question the current invariant text does not present
+in that shape; read them as historical framing, not current analysis.
+
 ## Contradiction check: VOID — not performed
 
 **No corpus was available.** `MASTER.md`, `DECISIONS.md`, `docs/` and the
@@ -61,11 +75,18 @@ create a directory. The creation contradiction this doc previously identified
 therefore dissolves — all three routes are legal, and the question is which is
 best.
 
-**And one new tension created by the fix.** `CLAUDE.md` invariant 5 now reads
-"**the init provisions nothing** … there is no third thing and no mechanism for
-granting one." Taken literally, that forecloses option C, because a dirfd is
-exactly a third thing. See *The invariant-5 question* below; it is the single
-decision that picks the delivery mechanism.
+**And one new tension created by the fix, AS INVARIANT 5 READ WHEN THIS WAS
+WRITTEN.** `CLAUDE.md` invariant 5 read "the init provisions nothing … there
+is no third thing and no mechanism for granting one" on 2026-09-10. It no
+longer does: edges brought a real, named exception (a wire is a fourth-and-up
+descriptor the plan legitimately provisions), and the invariant's current
+wording is "the init provisions only what the sealed plan names ... It never
+invents reachability" (`docs/OPERATOR-BRIEF.md`'s "commitment 2"). Whether
+that changed wording still forecloses option C, or opens a path for a
+declared dirfd the way a declared wire is now a declared exception, is a live
+question this note's own analysis below does not answer and was never asked
+to — re-read *The invariant-5 question* below against the CURRENT invariant
+text before treating its conclusion as current.
 
 ## The five questions
 
@@ -241,17 +262,31 @@ not *isolation*, and must be described that way.
 
 ## The invariant-5 question — the decision that picks delivery
 
-`CLAUDE.md` invariant 5 now reads: *the init provisions nothing … there is no
-third thing and no mechanism for granting one.*
+**Stale as of the CLAUDE.md invariant-5 rewrite this repository has since
+done; re-derived below rather than left quoting the retired text.**
+Invariant 5 read *"the init provisions nothing … there is no third thing
+and no mechanism for granting one"* when this note was written. It now
+reads *"the init provisions only what the sealed plan names: each house's
+standard kit (`/dev/null` and its log pipe), the wires the plan declares,
+and the supervisor's own control endpoint. It never invents
+reachability"* (`docs/OPERATOR-BRIEF.md`'s "commitment 2"). That rewrite
+happened because a THIRD category (wires) became real and had to be named
+— so "never a third thing" is no longer even what the invariant claims;
+the question this section actually needs is different from the one it
+was written to ask.
 
-- If that is **descriptive** — a statement of what is true today — then option
-  C is available and, with #3 discharged, is the better end state.
-- If it is **prescriptive** — never a third thing — then C is out permanently
-  and B is the only delivery mechanism, forever.
-
-This is not a detail. It decides whether storage arrives as a descriptor or a
-path, and it should be settled deliberately rather than inferred from wording
-written to describe the post-§17 state.
+- The current wording is a closed enumeration of three named categories,
+  none of which is a bare dirfd. Whether that list is meant to be
+  EXHAUSTIVE (in which case option C is out, on the same grounds the old
+  wording excluded it, just via enumeration rather than an absolute) or
+  EXTENSIBLE (in which case a declared dirfd could join the list the same
+  way a declared wire did, and option C becomes a fourth-category
+  proposal rather than a violation) is not settled by the invariant's own
+  text either way.
+- This is not a detail. It decides whether storage arrives as a
+  descriptor or a path, and it should be settled deliberately — as a
+  question about whether to add a fourth named category, not inferred
+  from wording that was never trying to answer it.
 
 ## Options
 

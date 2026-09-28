@@ -364,8 +364,14 @@ int main(int argc, char **argv)
             setenv("NW_SCHED_EXT", sxbuf, 1);
             /* The brick and the paths bound into it. Names, not descriptors:
              * nw-sup mounts them itself and the house opens what it needs.
-             * The init still provisions exactly /dev/null and a log pipe
-             * (invariant 5). */
+             * Neither a bind nor a brick adds to the descriptor table this
+             * process just built above (pack_kit(), my_wire_fd) -- that
+             * table is /dev/null, the log pipe, and one slot per declared
+             * wire, which is invariant 5's whole subject; this comment
+             * used to say "exactly /dev/null and a log pipe", true before
+             * edges came back and stale once wires became a legitimate
+             * fourth-and-up descriptor in the same table this function
+             * builds a few lines above. */
             /* HEX, because the field is 32 raw bytes now and an env var
              * is a NUL-terminated string. nw-sup composes the path from
              * it and re-validates the hex -- see the note there: this

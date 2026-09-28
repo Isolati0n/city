@@ -674,10 +674,15 @@ static void on_term(int sig)
 /*
  * Block until house `p` exits, by poll() on its pidfd.
  *
- * extra_fd, if >= 0, is a second poll member. This round nothing
- * real lives there (no start/stop socket, no log pipe). The slot
- * exists so the next fd is an array entry, not a rewrite of the
- * wait. A ready extra fd does not reap the house; we loop.
+ * extra_fd, if >= 0, is a second poll member. Both call sites below
+ * now always pass the unit's listening control socket (docs/options/11),
+ * live for the house's whole run -- see "THAT FALLBACK IS NO LONGER THE
+ * WHOLE STORY" further down for what that changed. This comment used to
+ * say "This round nothing real lives there (no start/stop socket, no
+ * log pipe)", true when the parameter was added and false since the
+ * control channel landed; a reader hitting that sentence first and this
+ * function's own later paragraph second was reading a contradiction
+ * inside one function. A ready extra fd does not reap the house; we loop.
  *
  * Reap is waitpid(p, ...) after poll says the pidfd is readable.
  * That waitpid does not block. It is not waitpid(-1): the pid is

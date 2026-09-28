@@ -47,8 +47,15 @@ environment — so a change to any link is a change to everything below it.
 - **`nw-spawn` exits, and that is success**, not something to watch for.
   Require a complete pid report *and* `WIFEXITED` with status 0. Its
   predecessor was fatal on death because it held the only copy of the
-  connection graph; with edges gone there is no graph and no mid-life. Do not
-  give the spawner one.
+  connection graph. Edges are back (`docs/options/17-edges.md`), but a
+  socketpair's two ends need no live process holding a third reference
+  once each end has been handed to its owning house via `fork()`
+  inheritance — `nwspawn.c` closes its own copies once every unit has
+  forked and exits normally after the loop, exactly as it always has, so
+  there is still no mid-life. (This used to say "with edges gone there
+  is no graph", which stopped being true the day edges came back; the
+  conclusion — no mid-life — never depended on there being no graph, only
+  on nothing needing to hold one open.) Do not give the spawner one.
 - **`nw-sup` owns the budget and the lids**, one authority per unit.
 
 ## Hard rules

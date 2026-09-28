@@ -315,11 +315,23 @@ The boundary that does matter here is not between files, it is **trust**:
 
 ## Refused deliberately
 
-- **Cycle detection.** Undefined, not deferred. A plan is a flat list of
-  units with no relations — there is no graph, so there is nothing to have a
-  cycle in. This file once claimed a counting-sort adjacency index for it.
-  Wanting it back means proposing a plan format with relations in it, which
-  is a design decision, not a restoration. `HISTORY.md` §16 and §17.
+- **Cycle detection.** Undefined, not deferred. This bullet's own premise
+  went stale the day edges came back and was left uncorrected for a
+  while — `docs/options/17-edges.md` named the gap itself rather than
+  leaving it for a future `claims` pass to find. A plan with edges
+  genuinely has a graph now (undirected, connectivity-only, but still
+  graph-theoretically capable of containing a cycle) — "there is no
+  graph" is false. The REFUSAL's conclusion stays correct for a
+  different reason: nothing here builds cycle detection, and an
+  undirected connectivity edge has no dependency semantics for a cycle
+  to mean anything about, so there is nothing worth detecting even
+  though there is, now, something to detect it IN. This file once
+  claimed a counting-sort adjacency index for it. Wanting real cycle
+  detection back means proposing a plan format with DIRECTED,
+  dependency-carrying relations (the still-deferred `gate` field is
+  exactly that proposal, and its own entry says cycle detection becomes
+  legal TCB work only while `gate` is single-valued) — a design
+  decision, not a restoration. `HISTORY.md` §16 and §17.
 - **Typing, ordering, capability-flow analysis.** None were ever built and
   after §17 none are definable. Fields are range-checked, which is not
   typing.

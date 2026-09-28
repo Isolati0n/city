@@ -885,6 +885,16 @@ meaningful because it is the edge that closed a cycle or crossed a confinement
 boundary.
 ## 17. Edges removed — 2026-09-10
 
+**Superseded by NWPLAN11.** Edges came back — `docs/options/17-edges.md`,
+`NW_MAGIC` bumped `NWPLAN10` -> `NWPLAN11` — and this section's account of
+why they were removed is kept exactly as written below, unedited, per
+this file's own convention: a record of the reasoning at the time, not a
+present-tense claim about the system as it stands today. Read
+`docs/options/17-edges.md` for the current state and the reasoning for
+bringing them back; read `.claude/rules/plan.md`'s "Built, for the
+fd-need formula specifically" section for what has changed about the fd
+term this section names below.
+
 Edges are gone from the system. Every section above this one is left exactly
 as written, including the thirteen bugs, section 15 and section 16 — which
 argue at length about a component that no longer exists. That is deliberate,

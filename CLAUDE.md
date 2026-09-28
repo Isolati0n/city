@@ -206,10 +206,26 @@ sections after this one and are deliberately not numbered here.
    and no reset. (This retraction previously claimed the grep returned
    nothing, which the commit that wrote it had already made false;
    `claims` ran it.)*
-5. **The init provisions no DESCRIPTORS — and that is the whole of what
-   this invariant says.** Every house gets `/dev/null` on 0 and its own
-   log pipe on 1 and 2. `close_others` sweeps the rest. There is no third
-   thing, and no mechanism for granting one.
+5. **The init provisions only what the sealed plan names: each house's
+   standard kit (`/dev/null` and its log pipe), the wires the plan
+   declares, and the supervisor's own control endpoint. It never invents
+   reachability.** (Quoted exactly from `docs/OPERATOR-BRIEF.md`'s
+   "commitment 2"; the standard kit is `/dev/null` on 0 and the log pipe
+   on 1 and 2, as it always has been. The prior wording — "no
+   descriptors... there is no third thing" — was written before edges
+   came back and was false the moment they did: a house wired into one
+   or more declared edges is born with more than three descriptors,
+   `3 + k` for `k` wires, per `pack_kit()`'s own layout comment in
+   `nwspawn.c`. `close_others` still sweeps everything outside the kit
+   and the wires — the only two categories in scope where it runs, in
+   the forked child before `nw-sup` is even exec'd, before the control
+   socket exists at all.) The supervisor's control endpoint
+   (`docs/options/11`'s `START`/`STOP` socket under `NW_CTL_DIR`) is
+   `nw-sup`'s own listening descriptor, not the house's, and a separate
+   mechanism keeps it that way: the socket is created `SOCK_CLOEXEC`, so
+   it cannot survive the house's own later `execv()`. It is named here
+   because it is provisioned by the same sealed-plan authority this
+   invariant is about, not because the house holds it.
 
    **It does not DROP capability, which is a different act and was
    stated here as if it were the same one.** Nothing in the TCB lowers
@@ -232,24 +248,32 @@ sections after this one and are deliberately not numbered here.
    What follows from it is invariant 6's business and not this one's:
    the lid set is the only thing that lowers it, and `lids=` is required
    in a city precisely so the height is declared rather than defaulted
-   into. (This replaces the pre-2026-09-10
-   statement "wiring is non-provision, not enforcement", which concerned
-   declared edges. Edges are erased permanently — `HISTORY.md` §17.)
+   into. (This replaces the pre-2026-09-10 statement "wiring is
+   non-provision, not enforcement", which concerned declared edges.
+   Edges were erased permanently as of `HISTORY.md` §17 — but not
+   permanently enough: they came back, `docs/options/17-edges.md`,
+   `NW_MAGIC` bumped to `NWPLAN11`, and `HISTORY.md` §17 now carries a
+   header note saying so rather than being edited. A wire IS a
+   provision now, by name, which is exactly why this invariant's
+   opening sentence names it.)
 
-   **A declared bind is not a third thing.** `bind=` makes a path *visible*
-   inside a house's brick; the house then opens it itself, with the name it
-   would have used anyway, because a bind is the same path inside and out.
-   Nothing is handed over. The invariant is about the descriptor table a house
-   is born with, and that is still exactly three descriptors.
+   **A declared bind is not an EXTRA thing beyond the three-plus-wires
+   baseline.** `bind=` makes a path *visible* inside a house's brick;
+   the house then opens it itself, with the name it would have used
+   anyway, because a bind is the same path inside and out. Nothing is
+   handed over. The invariant is about the descriptor table a house is
+   born with — `/dev/null`, its log pipe, and one slot per declared
+   wire — and a bind adds nothing to that count.
 
    **Neither is a writable layer.** Every house with a brick roots in that
    brick plus one writable area, so it can write beneath `/` — and create
    files there too, unless it declares `landlock`, which withholds
    `MAKE_REG` at the root (invariant 6). Either way it opens them itself,
    by name, with no descriptor passed in. The layer
-   changes what a house can *keep*, not what it is *given*. Three
-   descriptors, still, and `test_brick_is_a_root`'s census asserts it by
-   name on a house that has one.
+   changes what a house can *keep*, not what it is *given*. The same
+   baseline count, still, and `test_brick_is_a_root`'s census asserts it
+   by name on a house that has one (zero wires, so three descriptors
+   there specifically).
 6. **Lids are the only thing that decides what a house can *do*; a brick
    decides what it can *see*, and its layer is what it can *keep*.**
    Seccomp, Landlock and namespaces are applied
