@@ -32,6 +32,7 @@
   "console-house-reachable",
   "coverage-accounting",
   "crash-does-not-halt",
+  "ctl-dir-hardening",
   "ctl-exec-resets-sigchld-mask",
   "ctl-freeze-after-execv-still-works",
   "ctl-freeze-and-cont",
