@@ -53,10 +53,27 @@ jobs:
             linux-tools-generic
           # bpftool is a virtual package here (E: Package 'bpftool' has no
           # installation candidate) -- linux-tools-generic already
-          # provides the real binary for the running kernel. Verify
-          # rather than assume: iteration 1 asked apt for it by name and
-          # apt named the providers instead of installing anything.
+          # provides the wrapper binary. `which bpftool` alone is not
+          # enough, per harness.md's "detect the capability, not a tool
+          # that implies it": iteration 3 found the wrapper installed and
+          # on PATH but refusing to run --
+          #   WARNING: bpftool not found for kernel 6.17.0-1022
+          # -- because linux-tools-generic on this runner image resolves
+          # to tools for the image's baked-in kernel build, not the
+          # actual running azure-flavoured kernel `uname -r` reports.
+          # The warning itself names the fix: a kernel-exact or
+          # azure-flavour package. Try exact first, azure-flavour second,
+          # and PROVE it works by actually invoking it, not by checking
+          # PATH.
           which bpftool || (echo "bpftool still missing after install" && exit 1)
+          KREL="$(uname -r)"
+          if ! bpftool version >/dev/null 2>&1; then
+            echo "bpftool wrapper present but non-functional for $KREL -- installing a matching package"
+            sudo apt-get install -y "linux-tools-${KREL}" \
+              || sudo apt-get install -y linux-tools-azure \
+              || echo "neither linux-tools-${KREL} nor linux-tools-azure had an installation candidate"
+          fi
+          bpftool version || (echo "bpftool still non-functional after installing a kernel-matched package" && exit 1)
           clang --version
           meson --version
 
@@ -99,21 +116,12 @@ jobs:
           set -e
           cd /tmp/scx
           make all
-
-      - name: Attempt build via meson (fallback, if the repo carries one)
-        id: meson_build
-        if: steps.make_build.outcome != 'success'
-        continue-on-error: true
-        run: |
-          set -e
-          cd /tmp/scx
-          if [ -f meson.build ]; then
-            meson setup build -Dbuildtype=release
-            meson compile -C build scx_simple
-          else
-            echo "no meson.build -- make was the only documented path, and it failed"
-            exit 1
-          fi
+          # No meson fallback: iteration 3's meson attempt against this
+          # exact repo failed with the build system naming itself
+          # retired -- "Meson builds are deprecated and have been
+          # removed... please switch to make for C schedulers" -- so a
+          # second attempt through it is not a fallback, it is repeating
+          # a question this tree has already answered.
 
       - name: Locate the built scx_simple binary
         id: locate
