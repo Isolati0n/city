@@ -60,10 +60,19 @@ jobs:
           clang --version
           meson --version
 
-      - name: Clone sched-ext/scx
+      - name: Clone sched-ext/scx-c-examples
         run: |
           set -e
-          git clone --depth 1 https://github.com/sched-ext/scx.git /tmp/scx
+          # Iteration 2 found that the C schedulers, including scx_simple,
+          # were moved out of sched-ext/scx into this separate repo -- the
+          # cloned scx repo's own README says so in as many words ("C
+          # schedulers like scx_simple were previously included in this
+          # repository but have since been moved to scx-c-examples"), and
+          # scx no longer has a scheds/c directory at all. Verified before
+          # writing this, not assumed: fetched scx-c-examples's own README
+          # first, which names `make all` as the build command and
+          # `build/scheds/c/scx_simple` as the output path.
+          git clone --depth 1 https://github.com/sched-ext/scx-c-examples.git /tmp/scx
           cd /tmp/scx
           git submodule update --init --recursive --depth 1 || echo "no submodules, or submodule init failed non-fatally"
           echo "=== top-level listing ==="
@@ -83,26 +92,26 @@ jobs:
           echo "=== find scx_simple source ==="
           find . -iname "*scx_simple*" 2>&1 || true
 
-      - name: Attempt build via meson (repo-root, C schedulers only)
-        id: meson_build
+      - name: Attempt build via make (this repo's own documented path)
+        id: make_build
         continue-on-error: true
         run: |
           set -e
           cd /tmp/scx
-          meson setup build -Dbuildtype=release
-          meson compile -C build scx_simple
+          make all
 
-      - name: Attempt build via scheds/c Makefile (fallback)
-        id: make_build
-        if: steps.meson_build.outcome != 'success'
+      - name: Attempt build via meson (fallback, if the repo carries one)
+        id: meson_build
+        if: steps.make_build.outcome != 'success'
         continue-on-error: true
         run: |
           set -e
-          if [ -d /tmp/scx/scheds/c ]; then
-            cd /tmp/scx/scheds/c
-            make scx_simple || make
+          cd /tmp/scx
+          if [ -f meson.build ]; then
+            meson setup build -Dbuildtype=release
+            meson compile -C build scx_simple
           else
-            echo "no scheds/c directory -- meson is the only path, and it failed"
+            echo "no meson.build -- make was the only documented path, and it failed"
             exit 1
           fi
 
