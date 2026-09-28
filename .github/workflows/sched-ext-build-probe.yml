@@ -49,8 +49,14 @@ jobs:
           sudo apt-get install -y \
             clang llvm lld libelf-dev libbpf-dev zlib1g-dev libzstd-dev \
             pkg-config meson ninja-build cmake m4 build-essential \
-            libseccomp-dev libcap-dev bpftool linux-tools-common \
+            libseccomp-dev libcap-dev linux-tools-common \
             linux-tools-generic
+          # bpftool is a virtual package here (E: Package 'bpftool' has no
+          # installation candidate) -- linux-tools-generic already
+          # provides the real binary for the running kernel. Verify
+          # rather than assume: iteration 1 asked apt for it by name and
+          # apt named the providers instead of installing anything.
+          which bpftool || (echo "bpftool still missing after install" && exit 1)
           clang --version
           meson --version
 
