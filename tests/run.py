@@ -503,7 +503,7 @@ def stage_layers(blob, reset=True):
     expect(r.returncode == 0, f"stage-layers failed\n{r.out}{r.err}")
 
 
-def boot(slot=None, plan=None, extra=None, hold=800, nofile=None):
+def boot(slot=None, plan=None, extra=None, hold=800, nofile=None, env=None):
     # Staged here so no test can forget it, and so the suite exercises the
     # production ordering: layers exist BEFORE the boot that needs them.
     # stage_layers() resets an id the FIRST time it sees it in this
@@ -526,6 +526,16 @@ def boot(slot=None, plan=None, extra=None, hold=800, nofile=None):
             import resource
             resource.setrlimit(resource.RLIMIT_NOFILE, (soft, hard))
         kw["preexec_fn"] = _cap
+    if env is not None:
+        # Extra env for every house in the plan -- not per-house, since
+        # the plan format hands every unit the SAME process environment
+        # (a plan differentiates units by name and by its own fields,
+        # never by injecting distinct env vars per unit). Merged onto
+        # the harness's own environment rather than replacing it, so
+        # PATH and friends survive.
+        merged = os.environ.copy()
+        merged.update(env)
+        kw["env"] = merged
     p = run(cmd, **kw)
     out = (p.stdout or b"").decode("utf-8", "replace") + (p.stderr or b"").decode("utf-8", "replace")
     return p.returncode, out
@@ -914,7 +924,7 @@ def test_halt_falls_back_to_exit_when_not_pid_1():
 def test_bad_crc():
     bad = f"{WORK}/bad.blob"
     d = bytearray(open(f"{SLOTS}/A/plan.blob", "rb").read())
-    d[16] ^= 0xFF
+    d[hdr_size() - 4] ^= 0xFF
     open(bad, "wb").write(d)
     chk = run([f"{BIN}/nw-check", bad])
     expect(chk.returncode == 1 and "crc32" in (chk.err + chk.out), "check crc")
@@ -1027,6 +1037,76 @@ def test_fd_preflight_names_the_shortfall():
            f"accepting half did not start all {n} houses\n{out2}")
     print(f"ok fd-preflight (need={need} hard={hard_lo} shortfall={shortfall}; "
           f"same plan opens at hard={need} with synthetic soft=8)")
+
+
+def test_fd_preflight_names_the_shortfall_with_edges():
+    """The edge term in pid1.c's preflight `need`, pinned the same shape
+    test_fd_preflight_names_the_shortfall pins the house term.
+
+    fd-auditor reproduced a real defect this test closes: pid1.c's
+    preflight computed `need = NW_FD_RESERVED + n_houses` with no edge
+    term at all, so a plan with a tight fd budget AND declared edges
+    could pass the preflight (need looked small enough against hard)
+    and then die deep inside nw-spawn with a raw, un-preflighted EMFILE
+    from socketpair() -- exactly the failure this check exists to turn
+    into a named, loud refusal instead. None of the other edge tests
+    catch this: they all run under generous default ulimits where
+    2*n_edges never approaches the ceiling, so the gap was invisible to
+    every one of them. This is a missing DIRECTION (accept vs refuse
+    under a tight budget), not a missing test.
+
+    Two houses, one edge: need = reserved + 2 + 2*1. The refusing half
+    pins the three named numbers with the edge term folded in; the
+    accepting half boots the SAME plan at exactly `need` and requires
+    the edge to actually wire -- proving the raised soft limit is
+    enough for nw-spawn's own socketpair() calls to succeed, not merely
+    enough for the preflight arithmetic to accept."""
+    reserved = int(blob_h("NW_FD_RESERVED"))
+    n = 2
+    n_edges = 1
+    need = reserved + n + 2 * n_edges
+    city = f"{WORK}/fd-preflight-edges.city"
+    open(city, "w").write(
+        f"house ea {BIN}/unit-wire kind=oneshot lids=none\n"
+        f"house eb {BIN}/unit-wire kind=oneshot lids=none\n"
+        "edge=ea,eb\n")
+    blob = f"{WORK}/fd-preflight-edges.blob"
+    b = run(["python3", CC, "--city", city, "--out", blob])
+    expect(b.returncode == 0, f"bake fd-preflight-edges\n{b.err}{b.out}")
+    expect("edges=1" in b.out, f"baker did not report the declared edge\n{b.out}")
+
+    hard_lo = need - 1
+    shortfall = need - hard_lo
+    rc, out = boot(plan=blob, hold=200, nofile=(8, hard_lo))
+    expect(halted(rc, out), f"refusal rc={rc}\n{out}")
+    expect("plan sealed" in out,
+           f"never reached the check (plan did not seal)\n{out}")
+    m = re.search(r"HALT: fd need=(\d+) hard=(\d+) shortfall=(\d+)$", out, re.M)
+    expect(m is not None, f"refusal did not match the HALT: fd shape\n{out}")
+    got = tuple(int(x) for x in m.groups())
+    expect(got == (need, hard_lo, shortfall),
+           f"refusal named need/hard/shortfall {got}, expected "
+           f"{(need, hard_lo, shortfall)} -- the edge term is missing or "
+           f"wrong if this is short by 2*n_edges\n{out}")
+    expect("FAIL edge socketpair" not in out,
+           f"refused too late -- nw-spawn reached socketpair() before "
+           f"the preflight refused\n{out}")
+
+    rc2, out2 = boot(plan=blob, hold=1200, nofile=(8, need))
+    expect(city_closed(rc2, out2), f"accepting half did not open\n{out2[-2000:]}")
+    expect("HALT: fd " not in out2, f"accepted plan still refused\n{out2}")
+    expect("[ea]" in out2 and "wires=1" in out2,
+           f"ea did not report exactly one wire under the tight budget\n"
+           f"{out2[-2000:]}")
+    expect("[eb]" in out2 and "wires=1" in out2,
+           f"eb did not report exactly one wire under the tight budget\n"
+           f"{out2[-2000:]}")
+    expect(re.search(r"\[ea\].*read \d+ bytes: hello from eb", out2),
+           f"ea never received eb's message under the tight budget\n"
+           f"{out2[-2000:]}")
+    print(f"ok fd-preflight-with-edges (need={need} hard={hard_lo} "
+          f"shortfall={shortfall} for {n} houses + {n_edges} edge; same "
+          f"plan opens and actually wires at hard={need})")
 
 
 def test_log_pipe_peak_is_one_end_per_house():
@@ -1162,7 +1242,7 @@ def test_baker_rejects():
     def _lids_byte(blob, i=0):
         off = unit_layout()
         d = open(blob, "rb").read()
-        return d[20 + i * off["_size"] + off["lids"]]
+        return d[hdr_size() + i * off["_size"] + off["lids"]]
 
     okl = f"{WORK}/okl-city.txt"
     open(okl, "w").write("house a /bin/true kind=oneshot lids=none\n")
@@ -1364,7 +1444,7 @@ def test_difftest():
 
     # The flipped crc this docstring used to promise.
     d = bytearray(open(f"{SLOTS}/A/plan.blob", "rb").read())
-    d[16] ^= 0x01
+    d[hdr_size() - 4] ^= 0x01
     flipped = f"{WORK}/difftest-flipped.blob"
     open(flipped, "wb").write(bytes(d))
     r = run([f"{BIN}/nw-check", flipped])
@@ -5864,15 +5944,16 @@ def test_path_traversal_refused():
     p = run(["python3", CC, "--city", esc, "--out", good])
     expect(p.returncode == 0, f"bake\n{p.out}{p.err}")
 
-    EXEC_OFF = 20 + int(blob_h("NW_NAME_LEN"))     # hdr + name
+    EXEC_OFF = hdr_size() + int(blob_h("NW_NAME_LEN"))     # hdr + name
     EXEC_LEN = int(blob_h("NW_PATH_LEN"))
     d = bytearray(open(good, "rb").read())
     expect(bytes(d[EXEC_OFF:EXEC_OFF + 10]) == b"/bin/brick",
            "exec_path is not where the layout says it is")
     evil = b"/bin/../../etc/x"
     d[EXEC_OFF:EXEC_OFF + EXEC_LEN] = evil + b"\x00" * (EXEC_LEN - len(evil))
-    d[16:20] = b"\x00\x00\x00\x00"
-    d[16:20] = struct.pack("<I", zlib.crc32(bytes(d)) & 0xFFFFFFFF)
+    _crc_off = hdr_size() - 4
+    d[_crc_off:_crc_off + 4] = b"\x00\x00\x00\x00"
+    d[_crc_off:_crc_off + 4] = struct.pack("<I", zlib.crc32(bytes(d)) & 0xFFFFFFFF)
     bad = f"{WORK}/esc.blob"
     open(bad, "wb").write(bytes(d))
 
@@ -6531,6 +6612,170 @@ def test_many_brick_houses_all_start():
           f"all ran, zero loop-device contention, zero restarts)")
 
 
+def test_edge_bidirectional_exchange():
+    """docs/options/17-edges.md. A plan declaring one edge between two
+    houses: they exchange bytes in both directions. `unit-wire` discovers
+    its own wires from NW_WIRE_<fd> at runtime and, in the default "echo"
+    mode, writes "hello from <name>" on each and reads one line back --
+    so a message from BOTH houses appearing, each naming the OTHER as
+    sender, is what "bidirectional" means here, not merely that a
+    connection exists."""
+    city = f"{WORK}/edge2.city"
+    open(city, "w").write(
+        f"house ealpha {BIN}/unit-wire kind=oneshot lids=none\n"
+        f"house ebeta {BIN}/unit-wire kind=oneshot lids=none\n"
+        "edge=ealpha,ebeta\n")
+    blob = f"{WORK}/edge2.blob"
+    b = run(["python3", CC, "--city", city, "--out", blob])
+    expect(b.returncode == 0, f"bake\n{b.out}{b.err}")
+    expect("edges=1" in b.out, f"baker did not report the declared edge\n{b.out}")
+    rc, out = boot(plan=blob, hold=1200)
+    expect(city_closed(rc, out), f"edge2 rc={rc}\n{out[-2000:]}")
+    expect("[ealpha]" in out and "wires=1" in out,
+           f"ealpha did not report exactly one wire\n{out[-2000:]}")
+    expect("[ebeta]" in out and "wires=1" in out,
+           f"ebeta did not report exactly one wire\n{out[-2000:]}")
+    expect(re.search(r"\[ealpha\].*read \d+ bytes: hello from ebeta", out),
+           f"ealpha never received ebeta's message\n{out[-2000:]}")
+    expect(re.search(r"\[ebeta\].*read \d+ bytes: hello from ealpha", out),
+           f"ebeta never received ealpha's message\n{out[-2000:]}")
+    print("ok edge-bidirectional-exchange")
+
+
+def test_edge_unwired_house_gets_no_wire():
+    """A house NOT named in any edge receives no wire fd, verified via
+    /proc/<pid>/fd (through unit-wire's own NW_WIRE_<fd> probe, which is
+    exactly the census a house itself can take of its own table) as well
+    as the wired pair still exchanging normally in the same city --
+    proving the third house's absence of a wire is specific to it, not a
+    sign the whole mechanism silently did nothing."""
+    city = f"{WORK}/edge3.city"
+    open(city, "w").write(
+        f"house ealpha {BIN}/unit-wire kind=oneshot lids=none\n"
+        f"house ebeta {BIN}/unit-wire kind=oneshot lids=none\n"
+        f"house egamma {BIN}/unit-wire kind=oneshot lids=none\n"
+        "edge=ealpha,ebeta\n")
+    blob = f"{WORK}/edge3.blob"
+    b = run(["python3", CC, "--city", city, "--out", blob])
+    expect(b.returncode == 0, f"bake\n{b.out}{b.err}")
+    rc, out = boot(plan=blob, hold=1200)
+    expect(city_closed(rc, out), f"edge3 rc={rc}\n{out[-2000:]}")
+    expect(re.search(r"\[egamma\].*wires=0", out),
+           f"egamma (named in no edge) reported a nonzero wire count\n{out[-2000:]}")
+    expect(re.search(r"\[ealpha\].*wires=1", out)
+           and re.search(r"\[ebeta\].*wires=1", out),
+           f"the wired pair did not both report one wire, in the same "
+           f"city as the unwired house\n{out[-2000:]}")
+    print("ok edge-unwired-house-gets-no-wire")
+
+
+def test_many_houses_many_edges_no_collision():
+    """Bug-13's class: 32 of 33 units at 46 edges wrote output into a
+    peer's connection, because the old electrician computed descriptor
+    numbers from a fixed BASE + i formula that collided with the log
+    pipe's own base at that scale. This design has no such formula --
+    every wire fd is a scratch allocation via F_DUPFD_CLOEXEC, placed
+    only after every scratch this unit needs has been collected, per
+    invariant 2 -- but the control this project trusts is running it at
+    a scale where a regression to that shape would actually bite, not
+    reasoning that the new code cannot have the old bug.
+
+    16 houses in a ring (house i wired to house (i+1) mod 16, 16 edges
+    total) -- comparable to the historical 33-unit, 46-edge scale that
+    found bug 13, in a topology no single edge=<a>,<b> pair could
+    satisfy by accident. Every house is asserted individually: it
+    reports exactly 2 wires (ring degree), and BOTH messages it reads
+    name its two actual ring neighbours -- not some other house's name,
+    which is exactly what a fd-range collision would produce (a house
+    reading bytes that were written to a DIFFERENT house's peer)."""
+    n = 16
+    city = f"{WORK}/ring.city"
+    lines = [f"house r{i:02d} {BIN}/unit-wire kind=oneshot lids=none\n"
+             for i in range(n)]
+    lines += [f"edge=r{i:02d},r{(i + 1) % n:02d}\n" for i in range(n)]
+    open(city, "w").write("".join(lines))
+    blob = f"{WORK}/ring.blob"
+    b = run(["python3", CC, "--city", city, "--out", blob])
+    expect(b.returncode == 0, f"bake\n{b.out}{b.err}")
+    expect(f"edges={n}" in b.out, f"baker did not report {n} edges\n{b.out}")
+    rc, out = boot(plan=blob, hold=3000)
+    expect(city_closed(rc, out), f"ring rc={rc}\n{out[-3000:]}")
+
+    for i in range(n):
+        name = f"r{i:02d}"
+        left = f"r{(i - 1) % n:02d}"
+        right = f"r{(i + 1) % n:02d}"
+        wm = re.search(rf"\[{name}\] t=\d+ms wires=(\d+)", out)
+        expect(wm, f"{name} never reported its wire count\n{out[-3000:]}")
+        expect(wm.group(1) == "2",
+               f"{name} reported {wm.group(1)} wires, not the ring degree "
+               f"2 -- a collision could silently drop or duplicate a "
+               f"wire\n{out[-3000:]}")
+        got_peers = set(re.findall(
+            rf"\[{name}\] t=\d+ms wire\[\d+\] fd=\d+ read \d+ bytes: "
+            rf"hello from (r\d+)", out))
+        expect(got_peers == {left, right},
+               f"{name} should have heard from exactly {{{left}, {right}}} "
+               f"but heard from {got_peers} -- a value from any other "
+               f"house means its wire fd was reading a peer's connection, "
+               f"bug 13's exact shape\n{out[-3000:]}")
+
+    print(f"ok many-houses-many-edges-no-collision ({n} houses in a ring, "
+          f"{n} edges, every house heard from exactly its two real "
+          f"neighbours)")
+
+
+def test_edge_backpressure():
+    """A writer against a full peer buffer blocks (these are blocking
+    AF_UNIX SOCK_STREAM sockets -- no O_NONBLOCK is ever set), and
+    proceeds once the reader drains. NW_WIRE_BYTES is set well past any
+    plausible socket buffer (2 MiB, against a Linux default of roughly
+    208 KiB for an AF_UNIX SOCK_STREAM) so the writer cannot finish in
+    one burst without the kernel's own flow control engaging, and the
+    reader delays deterministically before reading anything at all --
+    forcing the writer to actually sit blocked rather than merely
+    finishing fast by chance. unit-wire timestamps every log line
+    against its own monotonic start, so "writer finished" is checked
+    against "reader's delay had already elapsed", which a shared file
+    could not be made to do at all: nothing about a file blocks a
+    writer on a slow reader."""
+    delay_ms = 900
+    total_bytes = 2 * 1024 * 1024
+    city = f"{WORK}/edgebp.city"
+    open(city, "w").write(
+        f"house bpw {BIN}/unit-wire kind=oneshot lids=none\n"
+        f"house bpr {BIN}/unit-wire kind=oneshot lids=none\n"
+        "edge=bpw,bpr\n")
+    blob = f"{WORK}/edgebp.blob"
+    b = run(["python3", CC, "--city", city, "--out", blob])
+    expect(b.returncode == 0, f"bake\n{b.out}{b.err}")
+    rc, out = boot(plan=blob, hold=2500, env={
+        "NW_WIRE_WRITER": "bpw", "NW_WIRE_READER": "bpr",
+        "NW_WIRE_BYTES": str(total_bytes),
+        "NW_WIRE_READER_DELAY_MS": str(delay_ms),
+    })
+    expect(city_closed(rc, out), f"edgebp rc={rc}\n{out[-2000:]}")
+
+    done = re.search(r"\[bpw\] t=(\d+)ms bp-writer done, wrote (\d+) bytes", out)
+    expect(done, f"writer never reported completion\n{out[-2000:]}")
+    expect(int(done.group(2)) == total_bytes,
+           f"writer completed with the wrong total: {done.group(2)}\n{out[-2000:]}")
+    writer_done_ms = int(done.group(1))
+    expect(writer_done_ms >= delay_ms,
+           f"writer finished at t={writer_done_ms}ms, before the reader's "
+           f"{delay_ms}ms delay could have elapsed -- it was never "
+           f"genuinely blocked, which means this socket did not exert "
+           f"real backpressure\n{out[-2000:]}")
+
+    drained = re.search(r"\[bpr\] t=(\d+)ms bp-reader drained (\d+) bytes", out)
+    expect(drained, f"reader never reported completion\n{out[-2000:]}")
+    expect(int(drained.group(2)) == total_bytes,
+           f"reader drained the wrong total: {drained.group(2)}\n{out[-2000:]}")
+
+    print(f"ok edge-backpressure (writer blocked until t={writer_done_ms}ms, "
+          f"past the reader's {delay_ms}ms delay; {total_bytes} bytes each way)")
+
+
 def test_brick_hash_revalidated_at_the_supervisor():
     """nw-sup re-validates the hash before it composes a path.
 
@@ -6940,6 +7185,134 @@ def test_baker_refuses_bad_layers():
           "distinct layers still accepted)")
 
 
+def test_baker_refuses_bad_edges():
+    """Every edge refusal the baker makes, with the reason asserted.
+
+    Mirrors test_baker_refuses_bad_layers: a self-edge, a duplicate pair
+    (checked unordered -- a,b then b,a), and a dangling reference to a
+    house that does not exist, each refused by its own reason at bake
+    time. The pairing, from the accepting side, closes the same gap
+    plan.md warns about for every such rule: a baker that refuses every
+    plan containing an edge would satisfy all three refusal cases too."""
+    city = f"{WORK}/badedge.city"
+    cases = [
+        ("house a /bin/true kind=oneshot lids=none\n"
+         "edge=a,a",
+         "cannot be wired to itself", "a house wired to itself"),
+        ("house a /bin/true kind=oneshot lids=none\n"
+         "house b /bin/true kind=oneshot lids=none\n"
+         "edge=a,b\nedge=b,a",
+         "already wired", "the same pair declared twice, reversed"),
+        ("house a /bin/true kind=oneshot lids=none\n"
+         "edge=a,ghost",
+         "no house named", "an edge naming a house that does not exist"),
+    ]
+    for line, reason, what in cases:
+        open(city, "w").write(line + "\n")
+        p = run(["python3", CC, "--city", city, "--out", f"{WORK}/be.blob"])
+        expect(p.returncode != 0, f"baker accepted {what}\n{p.out}{p.err}")
+        expect(reason in (p.out + p.err),
+               f"wrong reason for {what}: expected {reason!r}\n"
+               f"{p.out}{p.err}")
+    # The pairing, from the accepting side.
+    open(city, "w").write(
+        "house a /bin/true kind=oneshot lids=none\n"
+        "house b /bin/true kind=oneshot lids=none\n"
+        "edge=a,b\n")
+    p = run(["python3", CC, "--city", city, "--out", f"{WORK}/be.blob"])
+    expect(p.returncode == 0,
+           f"the baker refused a legal edge\n{p.out}{p.err}")
+    expect("edges=1" in p.out, f"baker did not report the edge\n{p.out}")
+    print("ok baker-refuses-bad-edges (a self-edge, a reversed duplicate "
+          "and a dangling reference, each by its own reason; a legal "
+          "edge still accepted)")
+
+
+def test_checker_rejects_crafted_edges():
+    """Each edge rule in nw_check, crafted, with the reason asserted --
+    the same discipline test_checker_rejects_crafted_binds already
+    applies to binds, for the same reason: the baker refuses all three
+    at bake time, which is exactly the arrangement plan.md forbids
+    relying on alone. A blob can arrive from anywhere.
+
+    Both directions on the index check: an out-of-range endpoint AND a
+    self-edge (in range, but a == b) are both `edge endpoint index`,
+    checked by a single rule in nwcheck.c -- so both crafted cases
+    exercise it, not just one. The duplicate case is checked unordered,
+    matching the baker's own semantics."""
+    NAME, PATH, BRICK = (int(blob_h(x)) for x in
+                         ("NW_NAME_LEN", "NW_PATH_LEN", "NW_BRICK_HASH"))
+    HDR, USZ = hdr_size(), unit_layout()["_size"]
+    city = f"{WORK}/cedge.city"
+    good = f"{WORK}/cedge-ok.blob"
+    open(city, "w").write(
+        "house e0 /bin/true kind=oneshot lids=none\n"
+        "house e1 /bin/true kind=oneshot lids=none\n"
+        "edge=e0,e1\n")
+    p = run(["python3", CC, "--city", city, "--out", good])
+    expect(p.returncode == 0, f"bake\n{p.out}{p.err}")
+    base = bytearray(open(good, "rb").read())
+    NUNITS, NBINDS, NEDGES = 2, 0, 1
+    expect(len(base) == HDR + NUNITS * USZ + NBINDS * (2 + PATH) + NEDGES * 4,
+           f"layout: {len(base)} bytes")
+    EDGE0 = HDR + NUNITS * USZ + NBINDS * (2 + PATH)
+    expect(struct.unpack_from("<HH", base, EDGE0) == (0, 1),
+           "the edge does not name units 0 and 1 where the layout says")
+
+    def craft(why, edits):
+        d = bytearray(base)
+        for off, val in edits:
+            d[off] = val
+        _crc_off = hdr_size() - 4
+        d[_crc_off:_crc_off + 4] = b"\x00\x00\x00\x00"
+        d[_crc_off:_crc_off + 4] = struct.pack("<I", zlib.crc32(bytes(d)) & 0xFFFFFFFF)
+        path = f"{WORK}/cedge-{why}.blob"
+        open(path, "wb").write(bytes(d))
+        return path
+
+    cases = [
+        ("oob", [(EDGE0, 0xFF), (EDGE0 + 1, 0xFF)],
+         "an out-of-range endpoint", "edge endpoint index"),
+        ("self", [(EDGE0 + 2, 0), (EDGE0 + 3, 0)],
+         "a self-edge (a == b == 0)", "edge endpoint index"),
+    ]
+    for why, edits, what, reason in cases:
+        r = run([f"{BIN}/nw-check", craft(why, edits)])
+        expect(r.returncode != 0, f"nw-check accepted {what}\n{r.out}{r.err}")
+        expect(reason in (r.out + r.err),
+               f"wrong reason for {what} -- a rejection for another reason "
+               f"would satisfy a returncode check and pin nothing"
+               f"\n{r.out}{r.err}")
+
+    # The duplicate case needs a second edge, which the base blob does
+    # not have -- crafted with its own hand-built blob rather than
+    # reusing `base`, adding one more edge=(0,1) so the table holds two
+    # identical (unordered) pairs.
+    dup = bytearray(base[:EDGE0])
+    dup += struct.pack("<HH", 0, 1)  # the original edge
+    dup += struct.pack("<HH", 1, 0)  # the same pair, reversed
+    dup[8:12] = struct.pack("<I", NUNITS)
+    dup[12:16] = struct.pack("<I", NBINDS)
+    dup[16:20] = struct.pack("<I", 2)  # n_edges = 2
+    _crc_off = hdr_size() - 4
+    dup[_crc_off:_crc_off + 4] = b"\x00\x00\x00\x00"
+    dup[_crc_off:_crc_off + 4] = struct.pack("<I", zlib.crc32(bytes(dup)) & 0xFFFFFFFF)
+    dpath = f"{WORK}/cedge-dup.blob"
+    open(dpath, "wb").write(bytes(dup))
+    r = run([f"{BIN}/nw-check", dpath])
+    expect(r.returncode != 0, f"nw-check accepted a duplicate edge\n{r.out}{r.err}")
+    expect("duplicate edge" in (r.out + r.err),
+           f"wrong reason for a duplicate edge\n{r.out}{r.err}")
+
+    # The pairing: unmodified, all rules satisfied, must be ACCEPTED.
+    r = run([f"{BIN}/nw-check", good])
+    expect(r.returncode == 0,
+           f"nw-check rejected a legal plan with an edge\n{r.out}{r.err}")
+    print("ok checker-rejects-crafted-edges (an out-of-range endpoint, a "
+          "self-edge and a duplicate pair, each refused by its own reason; "
+          "the legal plan with an edge still accepted)")
+
+
 def test_baker_constants_match_the_header():
     """Every constant the baker resolves out of blob.h, against the
     COMPILER's answer for the same name.
@@ -6984,6 +7357,14 @@ def test_baker_constants_match_the_header():
         "NW_LID_NEWNET": cc.LID_NEWNET,
         "NW_MAX_UNITS": cc.MAX_UNITS,
         "NW_MAX_BINDS": cc.MAX_BINDS,
+        # NW_MAX_EDGES, hand-spelled in bakery/nw-cc.py beside its three
+        # siblings above -- reproduced by tcb-review: lowering blob.h's
+        # copy to 64 while the baker's MAX_EDGES stayed 128 left this
+        # test green and let the baker bake (and report success on) a
+        # 65-edge plan that the real nw-check then refused with "edge
+        # count", the exact "baker accepted, nw-check rejects" gap this
+        # test exists to close for every other paired constant.
+        "NW_MAX_EDGES": cc.MAX_EDGES,
         "NW_NAME_LEN": cc.NAME_LEN,
         "NW_PATH_LEN": cc.PATH_LEN,
         "NW_BRICK_HASH": cc.BRICK_HASH,
@@ -7359,12 +7740,13 @@ def test_brick_needs_newns():
     # moving this line. It failed as "nw-check must reject a brick without
     # NEWNS", an offset error wearing a rule violation's message, which is
     # a true-looking failure about the wrong thing.
-    lids_off = 20 + unit_layout()["lids"]
+    lids_off = hdr_size() + unit_layout()["lids"]
     expect(d[lids_off] & 4, "expected the NEWNS bit where the layout says")
     d[lids_off] &= ~4
-    d[16:20] = b"\x00\x00\x00\x00"
+    _crc_off = hdr_size() - 4
+    d[_crc_off:_crc_off + 4] = b"\x00\x00\x00\x00"
     crc = zlib.crc32(bytes(d)) & 0xFFFFFFFF
-    d[16:20] = struct.pack("<I", crc)
+    d[_crc_off:_crc_off + 4] = struct.pack("<I", crc)
     bad = f"{WORK}/brick-nons.blob"
     open(bad, "wb").write(bytes(d))
     r = run([f"{BIN}/nw-check", bad])
@@ -8249,7 +8631,7 @@ def test_dupname_refused():
     expect(n >= 4, f"this test needs at least 4 units, blob.h says {n}")
     NAME, PATH, BRICK = (int(blob_h(x)) for x in
                          ("NW_NAME_LEN", "NW_PATH_LEN", "NW_BRICK_HASH"))
-    HDR = 20
+    HDR = hdr_size()
     USZ = unit_layout()["_size"]
 
     city = f"{WORK}/dup.city"
@@ -8267,8 +8649,9 @@ def test_dupname_refused():
         d[off:off + NAME] = name.encode().ljust(NAME, b"\0")
 
     def seal(d, why):
-        d[16:20] = b"\x00\x00\x00\x00"
-        d[16:20] = struct.pack("<I", zlib.crc32(bytes(d)) & 0xFFFFFFFF)
+        _crc_off = hdr_size() - 4
+        d[_crc_off:_crc_off + 4] = b"\x00\x00\x00\x00"
+        d[_crc_off:_crc_off + 4] = struct.pack("<I", zlib.crc32(bytes(d)) & 0xFFFFFFFF)
         path = f"{WORK}/dup-{why}.blob"
         open(path, "wb").write(bytes(d))
         return path
@@ -8425,7 +8808,7 @@ def test_checker_rejects_crafted_fields():
     rejected for a different reason would satisfy `returncode != 0`."""
     NAME, PATH, BRICK = (int(blob_h(x)) for x in
                          ("NW_NAME_LEN", "NW_PATH_LEN", "NW_BRICK_HASH"))
-    HDR = 20
+    HDR = hdr_size()
     KIND_OFF = HDR + unit_layout()["kind"]  # kind, then budget, lids, sched_ext
     LIDS_OFF = KIND_OFF + 2                   # lids is the third byte of the trailer
 
@@ -8468,8 +8851,9 @@ def test_checker_rejects_crafted_fields():
         d = bytearray(base)
         for off, val in edits:
             d[off] = val
-        d[16:20] = b"\x00\x00\x00\x00"
-        d[16:20] = struct.pack("<I", zlib.crc32(bytes(d)) & 0xFFFFFFFF)
+        _crc_off = hdr_size() - 4
+        d[_crc_off:_crc_off + 4] = b"\x00\x00\x00\x00"
+        d[_crc_off:_crc_off + 4] = struct.pack("<I", zlib.crc32(bytes(d)) & 0xFFFFFFFF)
         path = f"{WORK}/crafted-{why}.blob"
         open(path, "wb").write(bytes(d))
         return path
@@ -8709,7 +9093,7 @@ def test_checker_rejects_crafted_binds():
     case bite rather than the exit code."""
     NAME, PATH, BRICK = (int(blob_h(x)) for x in
                          ("NW_NAME_LEN", "NW_PATH_LEN", "NW_BRICK_HASH"))
-    HDR, USZ = 20, unit_layout()["_size"]
+    HDR, USZ = hdr_size(), unit_layout()["_size"]
     BSZ = 2 + PATH
     city = f"{WORK}/cbind.city"
     good = f"{WORK}/cbind-ok.blob"
@@ -8732,8 +9116,9 @@ def test_checker_rejects_crafted_binds():
         d = bytearray(base)
         for off, val in edits:
             d[off] = val
-        d[16:20] = b"\x00\x00\x00\x00"
-        d[16:20] = struct.pack("<I", zlib.crc32(bytes(d)) & 0xFFFFFFFF)
+        _crc_off = hdr_size() - 4
+        d[_crc_off:_crc_off + 4] = b"\x00\x00\x00\x00"
+        d[_crc_off:_crc_off + 4] = struct.pack("<I", zlib.crc32(bytes(d)) & 0xFFFFFFFF)
         path = f"{WORK}/cbind-{why}.blob"
         open(path, "wb").write(bytes(d))
         return path
@@ -8791,7 +9176,7 @@ def test_checker_rejects_crafted_resources():
     tell them apart -- the refusal is the baker's and it is bake-time
     only, like `lids=`. blob.h says so where the code for it would have
     gone."""
-    HDR = 20
+    HDR = hdr_size()
     USZ = unit_layout()["_size"]
     NUNITS, VICTIM = 3, 2
     ul, rl = unit_layout(), res_layout()
@@ -8858,8 +9243,9 @@ def test_checker_rejects_crafted_resources():
         d = bytearray(base)
         for off, val in edits:
             d[off] = val
-        d[16:20] = b"\x00\x00\x00\x00"
-        d[16:20] = struct.pack("<I", zlib.crc32(bytes(d)) & 0xFFFFFFFF)
+        _crc_off = hdr_size() - 4
+        d[_crc_off:_crc_off + 4] = b"\x00\x00\x00\x00"
+        d[_crc_off:_crc_off + 4] = struct.pack("<I", zlib.crc32(bytes(d)) & 0xFFFFFFFF)
         path = f"{WORK}/cres-{why}.blob"
         open(path, "wb").write(bytes(d))
         return path
@@ -9040,6 +9426,22 @@ def res_layout():
                f"resource layout parse has stopped matching and the "
                f"crafted cases below would be writing the wrong bytes")
     return at
+
+
+def hdr_size():
+    """sizeof(struct nw_hdr), from blob.h's own _Static_assert rather than
+    a hand-written literal -- six call sites spelled `HDR = 20` until
+    docs/options/17-edges.md added n_edges to the header and moved it to
+    24, which is exactly invariant 3's drift class one level down from a
+    plan-format limit: the struct's own total size, hand-copied instead
+    of derived. One parse here rather than six literals that can each go
+    stale independently."""
+    src = open(os.path.join(STAGE, "src", "blob.h")).read()
+    m = re.search(r"_Static_assert\(sizeof\(struct nw_hdr\)\s*==\s*(\d+)", src)
+    expect(m is not None,
+           "blob.h has no `_Static_assert(sizeof(struct nw_hdr) == N` -- "
+           "the header-size derivation has stopped matching")
+    return int(m.group(1))
 
 
 def unit_layout():
@@ -9246,8 +9648,9 @@ def test_old_magic_is_refused_as_magic():
     # wrong, so nothing but the magic can be the reason.
     old = magic[:-2] + f"{int(magic[-2:]) - 1:02d}"
     d[:8] = old.encode()
-    d[16:20] = b"\x00\x00\x00\x00"
-    d[16:20] = struct.pack("<I", zlib.crc32(bytes(d)) & 0xFFFFFFFF)
+    _crc_off = hdr_size() - 4
+    d[_crc_off:_crc_off + 4] = b"\x00\x00\x00\x00"
+    d[_crc_off:_crc_off + 4] = struct.pack("<I", zlib.crc32(bytes(d)) & 0xFFFFFFFF)
     stale = f"{WORK}/magic-old.blob"
     open(stale, "wb").write(bytes(d))
     expect(os.path.getsize(stale) == os.path.getsize(good),
@@ -10487,7 +10890,7 @@ def test_baker_writes_the_declared_layout():
       the byte positions can catch that one."""
     NAME, PATH, BRICK = (int(blob_h(x)) for x in
                          ("NW_NAME_LEN", "NW_PATH_LEN", "NW_BRICK_HASH"))
-    HDR = 20
+    HDR = hdr_size()
     L = unit_layout()
     USZ = L["_size"]
     city = f"{WORK}/layout.city"
@@ -10637,22 +11040,35 @@ def test_blob_size_ceiling():
     NAME, PATH, BRICK = (int(blob_h(x)) for x in
                          ("NW_NAME_LEN", "NW_PATH_LEN", "NW_BRICK_HASH"))
     nu, nb = int(blob_h("NW_MAX_UNITS")), int(blob_h("NW_MAX_BINDS"))
-    HDR, USZ, BSZ = 20, unit_layout()["_size"], 2 + PATH
-    biggest = HDR + nu * USZ + nb * BSZ
+    ne = int(blob_h("NW_MAX_EDGES"))
+    HDR, USZ, BSZ, ESZ = hdr_size(), unit_layout()["_size"], 2 + PATH, 4
+    biggest = HDR + nu * USZ + nb * BSZ + ne * ESZ
 
-    # A maximal plan: every unit has a brick (a bind requires one) and the
-    # bind table is full. The baker refuses a bind whose unit has no brick,
-    # so this is the shape, not a crafted blob.
-    # A hash, not a path -- phase 3. Any 64 hex chars: this plan is never
-    # booted, only sized, so the image behind it need not exist.
+    # A maximal plan: every unit has a brick (a bind requires one), the
+    # bind table is full, AND the edge table is full -- NW_BLOB_MAX now
+    # accounts for all three tables at their ceiling (docs/options/17),
+    # so a "maximal plan" that leaves edges at zero is not actually at
+    # the ceiling any more; it has up to NW_MAX_EDGES * 4 bytes of slack
+    # the ceiling reserves for edges. 128 distinct, self-edge-free pairs
+    # among 64 units: (i, i+1) and (i, i+2) mod nu, which cannot collide
+    # with each other as unordered pairs at this nu (checked by
+    # construction, not asserted here -- the len(set(...)) check below
+    # is the actual proof).
     brick = "de" * 32
     city = f"{WORK}/maxblob.city"
+    edges = [(i, (i + 1) % nu) for i in range(nu)] + \
+            [(i, (i + 2) % nu) for i in range(nu)]
+    expect(len(edges) == ne, f"generated {len(edges)} edges, need {ne}")
+    expect(len({frozenset(e) for e in edges}) == ne,
+           "the generated edges are not all distinct unordered pairs")
     with open(city, "w") as f:
         for i in range(nu):
             binds = "".join(f" bind=/etc/hosts{'' if j == 0 else ''}"
                             for j in range(nb // nu + (1 if i < nb % nu else 0)))
             f.write(f"house m{i:02d} /bin/true kind=oneshot "
                     f"lids=newns brick={brick} layer=l-p{i:04d}{binds}\n")
+        for a, b in edges:
+            f.write(f"edge=m{a:02d},m{b:02d}\n")
     good = f"{WORK}/maxblob.blob"
     b = run(["python3", CC, "--city", city, "--out", good])
     expect(b.returncode == 0, f"bake a maximal plan\n{b.out}{b.err}")
@@ -11892,6 +12308,7 @@ def main():
         test_rescue, test_halt_spawner,
         test_halt_falls_back_to_exit_when_not_pid_1, test_bad_crc,
         test_fd_preflight_names_the_shortfall,
+        test_fd_preflight_names_the_shortfall_with_edges,
         test_log_pipe_peak_is_one_end_per_house,
         test_rules_hook_delivers_from_any_cwd,
         test_rules_hook_refuses_a_tree_it_cannot_root_in,
@@ -11942,7 +12359,9 @@ def main():
         test_layer_bytes_enforces_capacity,
         test_layer_bytes_representation_switch_refused,
         test_many_brick_houses_all_start, test_brick_needs_newns,
-        test_baker_refuses_bad_layers,
+        test_edge_bidirectional_exchange, test_edge_unwired_house_gets_no_wire,
+        test_edge_backpressure, test_many_houses_many_edges_no_collision,
+        test_baker_refuses_bad_layers, test_baker_refuses_bad_edges,
         test_baker_refuses_bad_resources,
         test_baker_constants_match_the_header,
         test_leading_zero_hash_is_a_brick,
@@ -11956,7 +12375,7 @@ def main():
         test_blob_size_ceiling,
         test_checker_rejects_crafted_fields,
         test_leading_zero_hash_reaches_the_supervisor,
-        test_checker_rejects_crafted_binds,
+        test_checker_rejects_crafted_binds, test_checker_rejects_crafted_edges,
         test_checker_rejects_crafted_resources,
         test_magic_moves_with_the_layout,
         test_old_magic_is_refused_as_magic,

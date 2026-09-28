@@ -13,7 +13,7 @@ CFLAGS = -Wall -Wextra -O2 -g -std=gnu11 -ffile-prefix-map=$(CURDIR)=.
 # the stage a parallel run is using.
 STAGE ?= /tmp/nw-init-run
 
-all: nw-dawn nw-root nw-spawn nw-check nw-sup nw-rescue unit-probe unit-boom unit-badcall unit-term unit-brick unit-slowdie unit-dieterm unit-lastwords unit-lastwordsmany unit-orphan unit-orphanslow unit-layer unit-layer-fill unit-bindfile unit-firehose unit-info unit-firstfail
+all: nw-dawn nw-root nw-spawn nw-check nw-sup nw-rescue unit-probe unit-boom unit-badcall unit-term unit-brick unit-slowdie unit-dieterm unit-lastwords unit-lastwordsmany unit-orphan unit-orphanslow unit-layer unit-layer-fill unit-bindfile unit-firehose unit-info unit-firstfail unit-wire
 
 # blob.h IS A PREREQUISITE, and leaving it off is not cosmetic. dawn now
 # includes it for NW_BRICK_MNT, and the whole justification for that include
@@ -94,6 +94,12 @@ unit-orphan: houses/orphan.c
 unit-firehose: houses/firehose.c
 	$(CC) $(CFLAGS) -o $@ houses/firehose.c
 
+# docs/options/17-edges.md's fixture. Discovers its own wires from
+# NW_WIRE_<fd> at runtime rather than a fixed count, so one binary
+# covers zero, one or several wires.
+unit-wire: houses/wire.c
+	$(CC) $(CFLAGS) -o $@ houses/wire.c
+
 # Same source, a child that outlives any hold the suite uses. Two
 # binaries rather than one configurable at runtime: a house is exec'd
 # with no arguments and a clean environment, so a knob would have to be
@@ -171,7 +177,7 @@ stage: all
 	cp -f nw-dawn nw-root nw-spawn nw-check nw-sup nw-rescue \
 	      unit-probe unit-boom unit-badcall unit-term unit-brick unit-slowdie unit-dieterm \
 	      unit-lastwords unit-lastwordsmany unit-orphan unit-orphanslow \
-      unit-layer unit-layer-fill unit-bindfile unit-firehose unit-info unit-firstfail $(STAGE)/nw/bin/
+      unit-layer unit-layer-fill unit-bindfile unit-firehose unit-info unit-firstfail unit-wire $(STAGE)/nw/bin/
 	chmod +x $(STAGE)/nw/bin/*
 	# The sources the staged binaries were built from, staged with them.
 	# tests/run.py's hash probe compiles nwcheck.c to ask which slot a name

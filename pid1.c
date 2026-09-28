@@ -641,8 +641,22 @@ int main(int argc, char **argv)
     n_houses = h->n_units;
 
     /* Pre-flight, before the first fork. need = reserved + one write
-     * end per house (the interleave dropped the 2n peak). Compared
-     * to the HARD limit: soft is not the ceiling.
+     * end per house (the interleave dropped the 2n peak), PLUS twice
+     * every declared edge -- docs/options/17-edges.md's own worst
+     * case, nw-spawn holding BOTH ends of every edge's socketpair open
+     * simultaneously during its pre-loop wiring phase, the same peak
+     * blob.h's _Static_assert already bounds at compile time. Missing
+     * until fd-auditor reproduced it: this soft limit is what nw-spawn
+     * itself inherits across exec, so a plan with a tight fd budget
+     * plus enough edges passed this preflight (need looked small
+     * enough against hard) and then died deep inside nw-spawn with a
+     * raw, un-preflighted EMFILE from socketpair() -- the exact
+     * "refuse loudly before forking" job this check exists to do,
+     * silently skipped for the one term this file had never carried.
+     * Invariant 3's drift class, one site wider than the design note's
+     * own list of five: this is the runtime accept/reject decision
+     * against the real machine's rlimit, not a compile-time bound.
+     * Compared to the HARD limit: soft is not the ceiling.
      *
      * THE RAISE BELOW IS NOT AN OPTIMISATION, which this comment,
      * blob.h and .claude/rules/runtime.md all said for one round --
@@ -655,10 +669,13 @@ int main(int argc, char **argv)
      * again at n=6, soft=10. fd-auditor and claims, independently,
      * from different rungs.
      *
-     * "need" HERE IS PID 1's OWN DESCRIPTOR COUNT, not any house's --
-     * NW_FD_RESERVED plus one log_w per house, the table this process
-     * itself is about to hold. It is not sized for any one house;
-     * nothing here reads or applies the plan's resource block. A house's own
+     * "need" HERE IS THE WHOLE BOOT CHAIN'S PEAK, not any one house's --
+     * NW_FD_RESERVED plus one log_w per house plus twice every edge,
+     * because the rlimit this preflight sets is inherited across exec
+     * by nw-spawn (which actually creates the edge sockets) and then by
+     * every house in turn, not held open by PID 1 itself. It is not
+     * sized for any one house; nothing here reads or applies the plan's
+     * resource block. A house's own
      * descriptor limit is a different, still-unbuilt mechanism: it
      * belongs in that per-house resource block, which nwsup.c does not
      * apply yet (.claude/rules/runtime.md's "The resource block is in
@@ -690,17 +707,18 @@ int main(int argc, char **argv)
      *
      * Practical reach: PID 1 starts at the kernel's default soft limit
      * (1024 on an ordinary boot) and `need` tops out at
-     * NW_FD_RESERVED + NW_MAX_UNITS, which stays under it at today's
-     * limits -- so in production this raise, and its EPERM fallback,
-     * should almost never run at all. That is a claim about this
-     * kernel's defaults, not about the code, and belongs measured in
-     * QEMU rather than asserted here. */
+     * NW_FD_RESERVED + NW_MAX_UNITS + 2*NW_MAX_EDGES, which stays under
+     * it at today's limits -- so in production this raise, and its
+     * EPERM fallback, should almost never run at all. That is a claim
+     * about this kernel's defaults, not about the code, and belongs
+     * measured in QEMU rather than asserted here. */
     {
         struct rlimit rl;
         if (getrlimit(RLIMIT_NOFILE, &rl) < 0)
             halt_now("getrlimit nofile");
         unsigned long long need =
-            (unsigned long long)NW_FD_RESERVED + (unsigned long long)n_houses;
+            (unsigned long long)NW_FD_RESERVED + (unsigned long long)n_houses
+            + 2ull * (unsigned long long)h->n_edges;
         unsigned long long hard = (rl.rlim_max == RLIM_INFINITY)
             ? ~0ull : (unsigned long long)rl.rlim_max;
         if (rl.rlim_max != RLIM_INFINITY && need > (unsigned long long)rl.rlim_max) {

@@ -1,10 +1,103 @@
 # 17 — Edges: bringing back inter-house sockets
 
-Status: **design note only. No code this round**, per instruction —
-this is a bigger, ownership-ambiguous change and is not to proceed to
-implementation without the operator seeing the design first.
+Status: **built, tested and reviewed this round.** `struct
+nw_edge`, `NW_MAGIC` bumped to `NWPLAN11`, `NW_MAX_EDGES`, the
+`edge=<a>,<b>` plan syntax resolved to indices at the same moment
+binds already are (confirmed, not merely proposed — see "What has
+changed" below), the wiring itself in `nwspawn.c` (pre-loop socketpair
+creation, `F_DUPFD_CLOEXEC`-batch-then-place per invariant 2, the
+per-generation... per-edge close, the wiring census, and a structural
+self-check that a house's own leftover edge fds are actually closed),
+and the two structural checks in `nwcheck.c` and `bakery/nw-cc.py` are
+all built and tested — `make test` is green, including seven new tests
+exercising this feature (bidirectional exchange, an unwired house
+getting no wire, backpressure, a 16-house ring with zero cross-talk,
+baker/checker refusals for bad edges, and a tight-fd-budget-plus-edges
+preflight pair).
 
-## Ownership flag — checked, not assumed
+**Reviewed, and what that caught.** `tcb-review`, `fd-auditor` and
+`control` all ran (recorded via `tools/review-gate.sh --record`,
+`sh tools/review-gate.sh --check` now says `ok`), plus two `claims`
+passes on this note's own prose. They found and this round fixed two
+real, reproduced bugs, not stylistic nits:
+
+1. **The original leaked-wire-fd self-check killed every boot in an
+   environment where nw-spawn's own inherited fd 0/1/2 happened to be
+   socket-backed** (a QEMU unix-socket serial console is an ordinary
+   way to get this), regardless of whether any edge was ever declared
+   — fd-auditor reproduced it live. Fixed by checking only the specific
+   descriptors nw-spawn itself created (`edge_fd[k][0/1]` via
+   `fcntl(fd, F_GETFD)` answering `EBADF`), never scanning the whole
+   fd table.
+2. **`pid1.c`'s fd preflight never carried an edge term**, so a plan
+   with a tight fd budget plus declared edges could pass the preflight
+   and then die deep inside nw-spawn with a raw, un-preflighted `EMFILE`
+   — fd-auditor reproduced this too. Fixed by adding `2 * n_edges` to
+   the preflight's `need`, a sixth site for invariant 3's arithmetic
+   beyond the design note's original list of five (named in pid1.c's
+   own comment). A new test, `test_fd_preflight_names_the_shortfall
+   _with_edges`, closes the gap: no existing test had combined a tight
+   fd budget with declared edges.
+
+Both fixes were themselves re-reviewed (a second, narrowly-scoped
+`tcb-review`/`fd-auditor`/`control` round against the actual fixed
+code, since a review is keyed to content and editing after a review
+un-does it) before being recorded. `blob.h`'s own `_Static_assert` and
+`nwcheck.c`'s own (currently unreachable, documented as such) re-check
+carry the edge term; `bakery/nw-cc.py`'s `check()` carries it too.
+**`plan.als`'s `fdNeed` and `Plan.tla`'s `FdNeed` do not** — see
+"Ownership flag, resolved" below for why this round stopped there
+rather than guessing.
+
+## Ownership flag, resolved (as far as the tree can resolve it)
+
+**`git log` cannot disambiguate Grok from Claude for `plan.als` or
+`Plan.tla`, but it is not silent either, and the first version of this
+paragraph overclaimed by saying it was.** Most commits touching either
+file — `ddfcb56`, `6b20b28`, `3646f1c` among them — are attributed to a
+generic author, `nwdev <nwdev@localhost>`, regardless of which agent
+actually wrote them. But `fbefb29` — the commit that *removed* edges in
+the first place, touching both `plan.als` and `Plan.tla` — is authored
+`Claude <noreply@anthropic.com>` (`git show --stat fbefb29 -- plan.als
+Plan.tla` confirms it touches both), and several later commits on other
+files are authored `Isolati0n <nwdev@localhost>`. So there is a
+per-agent signal in the tree for these two files; what it does *not*
+do is name "Grok" anywhere — `git log --all` shows only `Claude`,
+`Isolati0n`, `nwdev` and the nw-init pid1/dawn commit identities, never
+a Grok-attributed one. The practical reading below is unchanged by
+this correction (neither agent is positively named as owner in
+`CLAUDE.md`'s sentence, whichever wrote what before), but the premise
+that got there was wrong and is fixed here rather than left standing.
+`claims` found it.
+
+**My reading of `CLAUDE.md`'s sentence: "Nobody else touches `plan.als`
+or `Plan.tla`" most naturally means nobody touches them this week at
+all** — neither Grok nor Claude is named as their owner in that
+sentence (only "the baker and the mount path in `nwsup.c`" is named
+for Claude, and `plan.als`/`Plan.tla` are named separately, negatively),
+so "else" has nobody positive to except. Read this way, the sentence is
+a freeze, not an assignment. A second reading — "nobody besides these
+two agents" — is textually possible but reads oddly given neither
+agent is the one named as their owner either. Genuinely ambiguous, and
+not resolvable by evidence in this tree.
+
+Per the operator's own instruction for exactly this case: everything
+else in this note is built, tested and reviewed (see the Status line at
+the top); `plan.als` and `Plan.tla` are untouched. `git status` confirms
+it. **What is left**:
+`plan.als`'s `fun fdNeed[]: Int { plus[nwReserved[], 2.mul[#House]] }`
+needs an edge term added (`plus[..., 2.mul[#Edge]]` or similar, which
+means adding an `Edge` signature to the model, not a one-line
+arithmetic edit — Alloy has no bare integer count to add a term to),
+and `Plan.tla`'s `FdNeed == Reserved + 2 * n` needs the analogous `+ 2
+* e` with `e` introduced as a model variable. Both also need their own
+second-copy pins (`assert FdArithmetic` in `plan.als`, `FdNeedAgrees`
+in `Plan.tla`) extended to cover the new term, matching how each
+already pins the existing `2 * n`. `test_specs_are_checked` in
+tests/run.py still passes unmodified either way, since it does not
+assert anything about edges.
+
+## Ownership flag — checked, not assumed (as filed before the build)
 
 `CLAUDE.md`'s "Who owns what, this week" reads: *"Grok owns `pid1.c`,
 `dawn.c` and the restart loop in `nwsup.c`. Claude owns the baker and
@@ -365,6 +458,19 @@ own fix).
 
 ## Next step
 
-`claims` review of this note. **No code this round** — report back with
-this note's answers, the ownership flag above, and the attic diagnosis
-corrections, and wait for direction before implementing anything.
+**This section went through two stale versions before this one — kept
+as history rather than deleted, per the rule that a retired rule is
+re-filed, and correcting the record rather than deleting it here since
+each version's replacement is the evidence for why it was wrong.**
+First it said "no code this round," directly beneath a Status line and
+a COMMITMENT CHECK both written in the present tense about code that
+already existed — `claims` found that contradiction. It was then
+corrected to "land the outstanding tcb-review/fd-auditor/control
+passes," which was accurate at the time but is now stale itself: those
+passes ran, found and this round fixed two real bugs (see the Status
+line), were re-run against the fixes, and are recorded —
+`sh tools/review-gate.sh --check` reports `ok`. **What remains, per the
+"Ownership flag, resolved" section above: `plan.als`'s `fdNeed` and
+`Plan.tla`'s `FdNeed` still need their edge term**, blocked on the
+same ownership ambiguity this note flags rather than resolves. That is
+the one real next step this note still names.

@@ -11,9 +11,14 @@
  *
  * Its predecessor, the electrician, stayed alive and inert because it held
  * the only copy of the connection graph; its death mid-life was unrecoverable
- * and PID 1 halted on it. With edges removed there is no graph to hold, so
- * this process has no mid-life and normal exit is the success path. PID 1
- * waits for exit 0 rather than watching for death.
+ * and PID 1 halted on it. Edges are back (docs/options/17-edges.md), and
+ * this process does NOT inherit that mid-life: a socketpair's two ends need
+ * no live process holding a third reference once each end has been handed
+ * to its owning house via fork() inheritance, so every edge's socketpair is
+ * created before the per-unit loop, closed here once every unit has forked,
+ * and this process still exits normally after the loop, exactly as it did
+ * with no edges at all. PID 1 waits for exit 0 rather than watching for
+ * death, unchanged.
  *
  * TCB.
  */
@@ -28,6 +33,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/socket.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -95,20 +101,61 @@ static int clear_cloexec(int fd)
     return fcntl(fd, F_SETFD, fl & ~FD_CLOEXEC);
 }
 
-/* A unit's descriptors: /dev/null on 0, its own log pipe on 1 and 2, nothing
- * else. With edges gone there is no BASE + i arithmetic left here at all --
- * the class behind bugs 5, 9 and 13 went out with the wiring. */
-static int pack_kit(int log_w)
+/* A unit's descriptors: /dev/null on 0, its own log pipe on 1 and 2, and
+ * (docs/options/17-edges.md) every wire this unit was declared into,
+ * contiguous from 3. No BASE + i arithmetic: every slot is either fixed
+ * (0/1/2) or assigned by counting up from a scratch allocation the
+ * kernel picked, never computed from a unit's table position -- the
+ * class behind bugs 5, 9 and 13.
+ *
+ * INVARIANT 2's DISCIPLINE, NAMED SO A FUTURE EDIT DOES NOT VIOLATE IT:
+ * every scratch descriptor this unit needs -- the log pipe AND every
+ * wire -- is collected via F_DUPFD_CLOEXEC BEFORE any of them is
+ * dup2-ed to a final slot. Interleaving allocate-then-place risks a
+ * later scratch fd landing on a target slot an earlier wire already
+ * claimed; batching first means every scratch fd is guaranteed fresh
+ * and distinct from 0/1/2 and from each other's targets before any
+ * placement happens at all, which is what removes the ordering
+ * dependency rather than merely getting the order right this time.
+ *
+ * NOT CURRENTLY PINNED BY ANY TEST THAT RUNS, said honestly rather than
+ * left to be discovered: `control` interleaved allocate-then-place here
+ * and ran it against every wire test, including the 16-house ring (2
+ * wires/house, the suite's densest case) -- all four still passed.
+ * Manually driving a single house up to 40 wires reproduced the failure
+ * only intermittently (found at every N from 5-40 in one batch, then
+ * absent across ~60 further repetitions at the same N's), because
+ * whether an interleaved scratch fd collides with an already-placed
+ * target depends on exactly what else nw-spawn's fd table holds at that
+ * instant, not on wire count alone. So this discipline is verified
+ * correct BY INSPECTION (every scratch fd allocated after close_others()
+ * has already swept the table is provably higher than any target a
+ * still-batched wire could claim -- tcb-review traced this by hand) and
+ * by one-off adversarial review, not by a deterministic regression test
+ * -- a `CLAUDE.md`-sense hypothesis for automated coverage specifically,
+ * though not for the reasoning above. Raising a permanent test's wire
+ * count on the strength of a controls run that could not reproduce on
+ * demand would trade a known gap for an unreliable one; recorded here
+ * instead. */
+static int pack_kit(int log_w, const int *wire_fd, int n_wires)
 {
     int nullfd = open("/dev/null", O_RDONLY | O_CLOEXEC);
     if (nullfd < 0) return -1;
     int logn = fcntl(log_w, F_DUPFD_CLOEXEC, 3);
     if (logn < 0) return -1;
 
-    int keep[2];
+    /* ALL scratch allocation first, no placement yet. */
+    int wire_scratch[NW_MAX_EDGES];
+    for (int k = 0; k < n_wires; k++) {
+        wire_scratch[k] = fcntl(wire_fd[k], F_DUPFD_CLOEXEC, 3);
+        if (wire_scratch[k] < 0) return -1;
+    }
+
+    int keep[2 + NW_MAX_EDGES];
     keep[0] = nullfd;
     keep[1] = logn;
-    close_others(keep, 2);
+    for (int k = 0; k < n_wires; k++) keep[2 + k] = wire_scratch[k];
+    close_others(keep, 2 + n_wires);
 
     if (dup2(nullfd, 0) < 0) return -1;
     if (dup2(logn, 1) < 0) return -1;
@@ -117,6 +164,18 @@ static int pack_kit(int log_w)
     if (logn > 2) close(logn);
     if (clear_cloexec(0) < 0 || clear_cloexec(1) < 0 || clear_cloexec(2) < 0)
         return -1;
+
+    /* Placement, now that every scratch fd is already allocated. Target
+     * slots are 3, 4, 5... contiguous, in the order this unit's wires
+     * were collected -- the order does not carry meaning (edges are
+     * unordered connectivity, not typed ports), it only has to be
+     * stable so NW_WIRE_<slot> names the same fd it is set beside. */
+    for (int k = 0; k < n_wires; k++) {
+        int target = 3 + k;
+        if (dup2(wire_scratch[k], target) < 0) return -1;
+        if (wire_scratch[k] != target) close(wire_scratch[k]);
+        if (clear_cloexec(target) < 0) return -1;
+    }
     return 0;
 }
 
@@ -161,10 +220,52 @@ int main(int argc, char **argv)
     const struct nw_hdr *h = nw_hdr(blob);
     const struct nw_unit *u = nw_units(blob);
     const struct nw_bind *bd = nw_binds(blob);
+    const struct nw_edge *ed = nw_edges(blob);
     if ((int)h->n_units != nlogs) die("log/unit mismatch");
+
+    /* docs/options/17-edges.md. Every socketpair created BEFORE the
+     * per-unit loop begins, mirroring the attic's own "create every pair
+     * first" -- the single most important commitment this design makes:
+     * nw-spawn's predecessor stayed alive holding the only copy of the
+     * connection graph, and its mid-life death was unrecoverable. A
+     * socketpair's two ends need no live process holding a third
+     * reference once each end has been handed to its owning house via
+     * fork() inheritance, so nw-spawn closes its own copies once every
+     * unit has forked (below) and exits normally after the loop, exactly
+     * as it always has -- no mid-life, no graph held open. */
+    int edge_fd[NW_MAX_EDGES][2];
+    for (uint32_t k = 0; k < h->n_edges; k++)
+        if (socketpair(AF_UNIX, SOCK_STREAM, 0, edge_fd[k]) < 0)
+            die("edge socketpair");
+
+    /* The wiring census, ground truth read from the same table the
+     * assignment below is computed from -- not a second, separately
+     * maintained list. Every edge must contribute to exactly two units'
+     * counts; bug 5's symptom was zero. */
+    uint32_t wired_total = 0;
 
     pid_t pids[NW_MAX_UNITS];
     for (uint32_t i = 0; i < h->n_units; i++) {
+        /* This unit's own wires, resolved from the edge table nw_check
+         * already bounds-checked (a < n_units, b < n_units, a != b) --
+         * so every edge is seen by exactly one of the two units it
+         * names, on two different iterations of this same loop. */
+        int my_wire_fd[NW_MAX_EDGES];
+        uint32_t my_wire_peer[NW_MAX_EDGES];
+        int n_wires = 0;
+        for (uint32_t k = 0; k < h->n_edges; k++) {
+            if (ed[k].a == i) {
+                my_wire_fd[n_wires] = edge_fd[k][0];
+                my_wire_peer[n_wires] = ed[k].b;
+                n_wires++;
+            } else if (ed[k].b == i) {
+                my_wire_fd[n_wires] = edge_fd[k][1];
+                my_wire_peer[n_wires] = ed[k].a;
+                n_wires++;
+            }
+        }
+        wired_total += (uint32_t)n_wires;
+
         int pp[2];
         if (pipe2(pp, O_CLOEXEC) < 0) die("pid pipe");
         pid_t mid = fork();
@@ -179,7 +280,12 @@ int main(int argc, char **argv)
                 _exit(0);
             }
             close(pp[1]);
-            if (pack_kit(logw[i]) < 0) die("pack kit");
+            if (pack_kit(logw[i], my_wire_fd, n_wires) < 0) die("pack kit");
+            for (int k = 0; k < n_wires; k++) {
+                char envk[24];
+                snprintf(envk, sizeof envk, "NW_WIRE_%d", 3 + k);
+                setenv(envk, u[my_wire_peer[k]].name, 1);
+            }
             char lbuf[8], bbuf[8], kbuf[8], nbuf[8], sxbuf[8];
             snprintf(lbuf, sizeof lbuf, "%u", (unsigned)u[i].lids);
             snprintf(bbuf, sizeof bbuf, "%u", (unsigned)u[i].budget);
@@ -252,6 +358,81 @@ int main(int argc, char **argv)
 
     for (int i = 0; i < nlogs; i++)
         close(logw[i]);
+
+    /* Every unit has now forked and inherited its own copies via fork()
+     * (the same reasoning `pp`, this loop's own pid-reporting pipe,
+     * already relies on) -- so nw-spawn's own copies of every edge's
+     * socketpair are closed here, in bulk, the same way the log pipes
+     * just above are: bulk-close at the end of the loop rather than
+     * incrementally per-edge, matching this file's own existing idiom
+     * rather than inventing a second one. No wire fd may survive past
+     * this point; the fd census a test takes of this process's own
+     * /proc/self/fd is what proves it, not this comment. */
+    for (uint32_t k = 0; k < h->n_edges; k++) {
+        close(edge_fd[k][0]);
+        close(edge_fd[k][1]);
+    }
+
+    /* The census itself: ground truth built as a side effect of doing
+     * the wiring (each unit's own n_wires, summed above), not a second
+     * list maintained to compare against. Before the pid report -- the
+     * same "a complete report or nothing" contract invariant 4 already
+     * requires of this exit path for the ordinary case.
+     *
+     * WHAT THIS GUARDS AGAINST, SAID HONESTLY: not a bad BLOB -- nw_check
+     * already guarantees a < n_units, b < n_units and a != b for every
+     * edge before this file's main() ever runs (re-verified above via
+     * nw_check(blob, n)), so given a valid blob this sum is 2*n_edges by
+     * construction: every edge is seen by exactly one of `ed[k].a == i`
+     * or `ed[k].b == i` on exactly two distinct iterations of the outer
+     * unit loop. tcb-review flagged this as possibly-unreachable and it
+     * is, against nwcheck.c's own guarantee. What it is NOT unreachable
+     * against is a future bug in the four lines immediately above this
+     * one -- an edit to the `if`/`else if` pair, or to what gets pushed
+     * into `my_wire_fd`, that silently drops or double-counts a wire
+     * while nw_check's own guarantee stays intact. This is a regression
+     * guard on nw-spawn's OWN assignment loop, not a second validation
+     * of the blob. */
+    if (wired_total != 2 * h->n_edges) die("edge wiring census");
+
+    /* A STRUCTURAL check that the bulk-close above actually worked,
+     * rather than trusting that it did -- but checking exactly the
+     * descriptors nw-spawn itself created, not every descriptor in its
+     * table. An earlier version of this check scanned /proc/self/fd for
+     * ANY descriptor whose target starts "socket:" and died on the
+     * first one found. That is wrong: nw-spawn never sanitizes its OWN
+     * fd 0/1/2 (only a house's, inside pack_kit) -- they are whatever
+     * PID 1 inherited, unexamined, all the way from whatever exec'd the
+     * boot chain, and in an environment where that happens to be a unix
+     * socket (a QEMU serial console backed by `-serial unix:...` is an
+     * ordinary way to do this, and this project already builds toward
+     * QEMU-based real-boot testing), the check killed every boot with
+     * "leaked wire fd" regardless of whether any edge was ever declared.
+     * Reproduced and fixed: fd-auditor.
+     *
+     * The fix checks only the specific fds this process itself opened --
+     * every edge_fd[k][0] and edge_fd[k][1] -- and requires each to
+     * already be closed (F_GETFD answering EBADF) after the bulk-close
+     * loop above. That is exactly "did the close loop above actually
+     * close everything it created", with no way to fire on a descriptor
+     * nw-spawn never touched. */
+    for (uint32_t k = 0; k < h->n_edges; k++) {
+        for (int side = 0; side < 2; side++) {
+            int fd = edge_fd[k][side];
+            int fl = fcntl(fd, F_GETFD);
+            if (fl >= 0) {
+                /* Genuine leak: the fd is still open, fcntl did not fail,
+                 * so errno was never set by this call and may be stale
+                 * from something unrelated earlier in the process --
+                 * die()'s message always prints errno, and printing a
+                 * leftover value here would read as diagnostic of a
+                 * cause it has nothing to do with. tcb-review. */
+                errno = 0;
+                die("leaked wire fd");
+            }
+            if (errno != EBADF) die("leaked wire fd");
+        }
+    }
 
     uint32_t nu = h->n_units;
     if (write(report_fd, &nu, sizeof nu) != (ssize_t)sizeof nu) die("report n");

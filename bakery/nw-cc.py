@@ -36,6 +36,10 @@ NAME_LEN, PATH_LEN, BRICK_HASH = 32, 128, 32
 # reach. `drift`.
 BRICK_HEX = BRICK_HASH * 2
 MAX_UNITS, MAX_BINDS, FD_RESERVED, MAX_FDS = 64, 128, 8, 1024
+# docs/options/17-edges.md. Hand-spelled beside its three siblings above,
+# matching how they are already kept (not read through _const() -- see
+# the comment there about what that function actually covers).
+MAX_EDGES = 128
 KIND_ONESHOT, KIND_LONGRUN = 0, 1
 KINDS = {"oneshot": KIND_ONESHOT, "longrun": KIND_LONGRUN}
 LID_SECCOMP, LID_LANDLOCK, LID_NEWNS, LID_NEWNET = 1, 2, 4, 8
@@ -227,7 +231,7 @@ def path_clean(p: str) -> bool:
     return p.startswith("/") and ".." not in p.split("/")
 
 
-def check(houses, binds):
+def check(houses, binds, edges=()):
     names = [h["name"] for h in houses]
     if len(names) != len(set(names)):
         raise SystemExit("duplicate name")
@@ -235,8 +239,17 @@ def check(houses, binds):
         raise SystemExit("unit count")
     if len(binds) > MAX_BINDS:
         raise SystemExit("bind count")
+    if len(edges) > MAX_EDGES:
+        raise SystemExit("edge count")
     idx = {n: i for i, n in enumerate(names)}
-    need = FD_RESERVED + len(houses) * 2
+    # docs/options/17-edges.md: the edge term returning to the fd-need
+    # formula, invariant 3's drift class -- the same arithmetic is in
+    # blob.h's _Static_assert, nwcheck.c's own (unreachable at today's
+    # constants, see the comment there) re-check, plan.als's fdNeed and
+    # Plan.tla's FdNeed. nw-spawn holds both ends of every edge's
+    # socketpair open simultaneously during its pre-loop wiring phase,
+    # which is the peak this formula bounds.
+    need = FD_RESERVED + len(houses) * 2 + len(edges) * 2
     if need > MAX_FDS:
         raise SystemExit("fd budget")
     for h in houses:
@@ -382,9 +395,38 @@ def check(houses, binds):
     return idx
 
 
-def bake(path, houses):
+def bake(path, houses, edges_raw=()):
     binds = [(i, p) for i, h in enumerate(houses) for p in h["binds"]]
-    check(houses, binds)
+    # docs/options/17-edges.md: resolved to indices HERE, from the same
+    # `houses` list binds are already resolved against via
+    # `enumerate(houses)` two lines up -- the single last step that
+    # packs the blob, with no reordering between building this idx and
+    # emitting the blob. That is the fix for bug 4's class (the baker
+    # computing an index before the unit table's final order was fixed,
+    # then reordering underneath it): one canonical order, one place
+    # anything is resolved against it.
+    idx = {h["name"]: i for i, h in enumerate(houses)}
+    edges = []
+    seen_pairs = set()
+    for a_name, b_name in edges_raw:
+        if a_name not in idx:
+            raise SystemExit(f"edge={a_name},{b_name}: no house named {a_name!r}")
+        if b_name not in idx:
+            raise SystemExit(f"edge={a_name},{b_name}: no house named {b_name!r}")
+        a, b = idx[a_name], idx[b_name]
+        if a == b:
+            raise SystemExit(
+                f"edge={a_name},{b_name}: a house cannot be wired to itself")
+        pair = frozenset((a, b))
+        if pair in seen_pairs:
+            raise SystemExit(
+                f"edge={a_name},{b_name}: this pair is already wired -- "
+                f"two edges between the same two houses would give one of "
+                f"them two sockets to a peer that both look like the "
+                f"declared one")
+        seen_pairs.add(pair)
+        edges.append((a, b))
+    check(houses, binds, edges)
     unit = b""
     for h in houses:
         unit += pad(h["name"], NAME_LEN) + pad(h["exec"], PATH_LEN)
@@ -402,11 +444,20 @@ def bake(path, houses):
     table = b""
     for u, p in binds:
         table += struct.pack("<H", u) + pad(p, PATH_LEN)
+    # docs/options/17-edges.md. Follows the bind table, matching
+    # nw_edges()'s own accessor arithmetic in blob.h (units, then binds,
+    # then edges) -- the three orderings have to agree or a reader gets
+    # the extent of one table wrong and reads garbage from the next.
+    edge_table = b""
+    for a, b in edges:
+        edge_table += struct.pack("<HH", a, b)
     # Must equal NW_MAGIC in blob.h. tests/run.py asserts that agreement;
     # the version moves when the layout moves -- see the comment there.
-    prefix = b"NWPLAN10" + struct.pack("<II", len(houses), len(binds))
-    crc = zlib.crc32(prefix + struct.pack("<I", 0) + unit + table) & 0xFFFFFFFF
-    blob = prefix + struct.pack("<I", crc) + unit + table
+    prefix = b"NWPLAN11" + struct.pack("<III", len(houses), len(binds),
+                                        len(edges))
+    crc = zlib.crc32(prefix + struct.pack("<I", 0) + unit + table
+                      + edge_table) & 0xFFFFFFFF
+    blob = prefix + struct.pack("<I", crc) + unit + table + edge_table
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     open(path, "wb").write(blob)
     digest = hashlib.sha256(blob).hexdigest()
@@ -442,7 +493,8 @@ def bake(path, houses):
         "".join(f'{h["layer"]} {h["brick"]} {h["res"]["layer_bytes"]}\n'
                 for h in houses if h["layer"]))
     print(f"wrote {path} units={len(houses)} binds={len(binds)} "
-          f"crc=0x{crc:08x} bytes={len(blob)} sha256={digest}")
+          f"edges={len(edges)} crc=0x{crc:08x} bytes={len(blob)} "
+          f"sha256={digest}")
     # WHICH HOUSES HAVE NO BLOCK, NAMED. The absence has to be visible
     # without inventing a number to make it visible -- a default would
     # be a limit nobody chose, failing in the direction hardest to
@@ -512,11 +564,26 @@ def parse_lids(s: str) -> int:
 
 def load_city(path: str):
     houses = []
+    edges = []
     for raw in open(path):
         line = raw.split("#", 1)[0].strip()
         if not line:
             continue
         parts = line.split()
+        # docs/options/17-edges.md. `edge=<house-a>,<house-b>` is its own
+        # top-level line, not a house sub-key -- an edge names two houses,
+        # not one, so it does not belong under a single `house` line the
+        # way `bind=` does. Names are resolved to indices in bake(), from
+        # the same final `houses` list binds are already resolved
+        # against, not here.
+        if len(parts) == 1 and parts[0].startswith("edge="):
+            _, _, v = parts[0].partition("=")
+            ab = v.split(",")
+            if len(ab) != 2 or not ab[0] or not ab[1]:
+                raise SystemExit(
+                    f"bad edge line (want edge=<house-a>,<house-b>): {line}")
+            edges.append((ab[0], ab[1]))
+            continue
         if parts[0] == "house":
             name, exe = parts[1], parts[2]
             budget = 3
@@ -689,7 +756,7 @@ def load_city(path: str):
                                 brick, binds, layer, res, sched_ext))
         else:
             raise SystemExit(f"bad city line: {line}")
-    return houses
+    return houses, edges
 
 
 def main():
@@ -705,7 +772,7 @@ def main():
     ap.add_argument("--lids")
     args = ap.parse_args()
     if args.city:
-        houses = load_city(args.city)
+        houses, edges = load_city(args.city)
     else:
         if not args.probe:
             raise SystemExit("--probe or --city required")
@@ -717,7 +784,8 @@ def main():
                 "which is what lids= being required in a city file exists "
                 "to stop. Use --lids none to say no lids.")
         houses = default_city(os.path.abspath(args.probe), parse_lids(args.lids))
-    bake(args.out, houses)
+        edges = []
+    bake(args.out, houses, edges)
 
 
 if __name__ == "__main__":

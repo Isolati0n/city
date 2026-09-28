@@ -17,7 +17,28 @@
 #ifndef PROOF_BINDS
 #define PROOF_BINDS 0u
 #endif
-#define LEN ((uint32_t)NW_BLOB_SIZE(PROOF_UNITS, PROOF_BINDS))
+/* docs/options/17-edges.md. Same shape as PROOF_BINDS: pinned via
+ * __CPROVER_assume below, default 0 so every existing invocation of
+ * this harness (proofs/run.sh does not pass -DPROOF_EDGES) explores
+ * exactly the same space it always did, at the same unwind cost.
+ *
+ * NOT EXTENDED TO COVER THE EDGE LOOP ITSELF. Unlike PROOF_BINDS, which
+ * has a matching PROOF_BIND_REACHED reachability control and a bind
+ * assertion block below, nothing here asserts anything about edges --
+ * this compiles and remains sound at PROOF_EDGES=0 (the edge loop in
+ * nw_check() never executes its body, the same vacuous-but-safe shape
+ * PROOF_BINDS=0 has for the bind loop), but proofs/run.sh's own
+ * loop-unwind-bound machinery (BIND_LOOP's `loop_id` computation) has
+ * no matching entry for the edge loop, and this was not verified
+ * against a real cbmc run -- `make proof` needs cbmc, is tens of
+ * minutes, and is explicitly not part of `make test`'s gate. Extending
+ * this proof to actually exercise PROOF_EDGES=1 (mirroring
+ * PROOF_BINDS=1's own reachability control) is a real next step this
+ * round did not reach, named here rather than silently left. */
+#ifndef PROOF_EDGES
+#define PROOF_EDGES 0u
+#endif
+#define LEN ((uint32_t)NW_BLOB_SIZE(PROOF_UNITS, PROOF_BINDS, PROOF_EDGES))
 
 int nondet_int(void);
 uint32_t nondet_u32(void);
@@ -98,10 +119,12 @@ int main(void)
     /* Pin the shape. SOUNDNESS ARGUMENT, because narrowing the input space
      * by accident is exactly what made that run worthless:
      *
-     * nw_check computes need = NW_BLOB_SIZE(n_units, n_binds) and returns
-     * NW_E_SIZE when len != need, BEFORE the unit loop and before anything
-     * asserted below. At this LEN the only (n_units, n_binds) satisfying
-     * that equation is the pair assumed here. So every input excluded
+     * nw_check computes need = NW_BLOB_SIZE(n_units, n_binds, n_edges) and
+     * returns NW_E_SIZE when len != need, BEFORE the unit loop and before
+     * anything asserted below. At this LEN the only (n_units, n_binds,
+     * n_edges) satisfying that equation is the triple assumed here (edges
+     * pinned at PROOF_EDGES=0 -- see this file's own note on what that
+     * does and does not cover). So every input excluded
      * provably returns NW_E_SIZE and can never reach NW_OK, which is the
      * only branch under which anything is asserted. Nothing that could
      * falsify a post-condition is removed.
@@ -113,6 +136,7 @@ int main(void)
         const struct nw_hdr *hh = nw_hdr(blob);
         __CPROVER_assume(hh->n_units == PROOF_UNITS);
         __CPROVER_assume(hh->n_binds == PROOF_BINDS);
+        __CPROVER_assume(hh->n_edges == PROOF_EDGES);
     }
 
     int r = nw_check(blob, LEN);

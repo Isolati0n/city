@@ -395,7 +395,7 @@ def fold_house(slots, city, unit, root="", nw_check=None, new_layer=None,
     live_blob = os.path.join(slots, live, "plan.blob")
     _verify_city_is_live(city, live_blob, quiet)
 
-    houses = baker.load_city(city)
+    houses, _edges = baker.load_city(city)
     target = next((h for h in houses if h["name"] == unit), None)
     if target is None:
         raise SystemExit(

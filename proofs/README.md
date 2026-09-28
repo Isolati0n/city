@@ -32,7 +32,7 @@ assumes names are non-empty and NUL-padded because `name_ok` runs first in
 | `leaf_path_ok.c` | `path_ok_len` | every `NW_PATH_LEN`-byte string |
 | `leaf_name_ok.c` | `name_ok` | every `NW_NAME_LEN`-byte string |
 | `leaf_name_dup.c` | `field_dup` at the `layer` offset (see the status note below for `name`'s) | every pair of non-empty NUL-padded field values (**not** all 2^(8·32) byte strings: the padding is assumed, and `leaf_name_ok.c` proves `name_ok` delivers it) |
-| `caller_nw_check.c` | `nw_check` | every byte of a one-unit blob **except the 8 that carry `n_units`/`n_binds`**, leaves abstracted; run again at one bind |
+| `caller_nw_check.c` | `nw_check` | every byte of a one-unit blob **except the 12 that carry `n_units`/`n_binds`/`n_edges`**, leaves abstracted; run again at one bind. **`n_edges` is pinned to 0 and nothing here asserts anything about an edge** — docs/options/17-edges.md added the field and the loop that reads it, and this harness was updated only enough to stay sound at `PROOF_EDGES=0` (the same vacuous-but-safe shape `PROOF_BINDS=0` has), not extended to exercise it the way `PROOF_BINDS=1` exercises binds. Real coverage of the edge loop is a named gap, not a claim made here. |
 
 `leaf_name_dup` proves the property the runtime actually depends on: running
 `field_dup` over units in order against a table that started empty reports a

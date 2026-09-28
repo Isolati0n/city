@@ -72,3 +72,8 @@ NWPLAN09 dca20164a04adbc87f36184ee5cb23e4d04ce8cbfb005089766146b422ddd728
 # change the "NOT caught... changing what a byte MEANS" gap in blob.h's
 # own layout-guard comment named. Bumped rather than argued around.
 NWPLAN10 e15563449416e13d290b296fc3a0327a5dc1ca0cf7e2cbd8eb1453bc567c876f
+# NWPLAN11: docs/options/17-edges.md added struct nw_edge and a new
+# n_edges field in struct nw_hdr (between n_binds and crc32, moving
+# crc32's own offset). A field added and an offset moved are both
+# layout changes this ledger's signature hashes directly.
+NWPLAN11 44051f89224b00944d7530d94085286ce29e1eb5da1a2f19cf0c265eb73076cb

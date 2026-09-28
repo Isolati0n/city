@@ -25,6 +25,7 @@ Usage: sudo python3 tools/console-boot-test.py
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -34,6 +35,34 @@ import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TOKEN = "NWCONSOLE-8f2c1a"
+
+
+def _hdr_and_lids_offset():
+    """(sizeof(struct nw_hdr), nw_unit's lids offset), derived from
+    blob.h rather than hand-copied -- the same drift class tests/run.py's
+    hdr_size()/unit_layout() helpers exist to close, one level along in a
+    script that sits outside that suite. This file hardcoded both (20
+    and 226) until docs/options/17-edges.md added n_edges to nw_hdr and
+    moved the header to 24 bytes: the hardcoded 20 then read four bytes
+    short of nw_unit's real lids field -- landing inside the tail of
+    that same unit's own zero-padded `layer` field (offsets 192-223),
+    not in an edge table, since this plan declares no edges at all and
+    the blob it bakes has no edge table to land in -- and this check
+    read 0x00 where it expected the baked value. `claims` corrected the
+    original telling of this, which named the wrong field."""
+    src = open(os.path.join(ROOT, "blob.h")).read()
+    m = re.search(r"_Static_assert\(sizeof\(struct nw_hdr\)\s*==\s*(\d+)", src)
+    if m is None:
+        raise SystemExit(
+            "FAIL: blob.h has no `_Static_assert(sizeof(struct nw_hdr) == "
+            "N` -- the header-size derivation has stopped matching")
+    hdr_size = int(m.group(1))
+    lm = re.search(r"^\s*NW_AT\(nw_unit,\s*lids,\s*(\d+)\)\s*;", src, re.M)
+    if lm is None:
+        raise SystemExit(
+            "FAIL: blob.h has no NW_AT(nw_unit, lids, ...) -- the layout "
+            "parse has stopped matching")
+    return hdr_size, int(lm.group(1))
 
 
 class Unavailable(Exception):
@@ -537,9 +566,10 @@ def main():
               "the house, budget exhausted, as required)")
 
         # PIN: the baked blob's lids byte is exactly newns|landlock|newnet
-        # (14) -- no seccomp bit, no stray bit either. Offsets from
-        # blob.h: nw_hdr is 20 bytes, lids is nw_unit's byte 226, and this
-        # plan bakes exactly one unit, so the byte is at 20 + 226 = 246.
+        # (14) -- no seccomp bit, no stray bit either. The header size
+        # and nw_unit's lids offset come from blob.h itself (see
+        # _hdr_and_lids_offset above), and this plan bakes exactly one
+        # unit, so the byte is at NW_HDR_SIZE + LIDS_OFFSET_IN_UNIT.
         plan_blob_path = os.path.join(workroot, "lids-pin.blob")
         b = subprocess.run(
             ["python3", os.path.join(ROOT, "bakery/nw-cc.py"),
@@ -549,8 +579,7 @@ def main():
             print(f"FAIL: re-baking for the lids pin\n{b.stdout}{b.stderr}")
             return 1
         blob = open(plan_blob_path, "rb").read()
-        NW_HDR_SIZE = 20
-        LIDS_OFFSET_IN_UNIT = 226
+        NW_HDR_SIZE, LIDS_OFFSET_IN_UNIT = _hdr_and_lids_offset()
         got_lids = blob[NW_HDR_SIZE + LIDS_OFFSET_IN_UNIT]
         want_lids = 0x02 | 0x04 | 0x08  # LANDLOCK | NEWNS | NEWNET, no SECCOMP
         if got_lids != want_lids:

@@ -28,7 +28,10 @@ static const char *errs[] = {
     "nice out of range",
     "mem-high must be below mem-max",
     "nice without a declared sched=other",
-    "layer capacity without a layer"
+    "layer capacity without a layer",
+    "edge count",
+    "edge endpoint index",
+    "duplicate edge"
 };
 
 _Static_assert(sizeof errs / sizeof errs[0] == NW_E__COUNT,
@@ -223,7 +226,8 @@ int nw_check(const void *blob, uint32_t len)
     }
     if (h->n_units < 1 || h->n_units > NW_MAX_UNITS) return NW_E_UNITS;
     if (h->n_binds > NW_MAX_BINDS) return NW_E_BINDS;
-    uint32_t need = (uint32_t)NW_BLOB_SIZE(h->n_units, h->n_binds);
+    if (h->n_edges > NW_MAX_EDGES) return NW_E_EDGES;
+    uint32_t need = (uint32_t)NW_BLOB_SIZE(h->n_units, h->n_binds, h->n_edges);
     if (len != need) return NW_E_SIZE;
 
     unsigned char tmp_hdr[sizeof(struct nw_hdr)];
@@ -394,13 +398,43 @@ int nw_check(const void *blob, uint32_t len)
         if (!nw_unit_has_brick(&u[b[i].unit])) return NW_E_BINDIDX;
     }
 
-    /* The runtime fd-budget check was retired on 2026-09-10. With edges gone
-     * the worst case is 8 + 2*64 = 136 against a 1024 ceiling, so it could not
-     * fire at any legal unit count -- dead code in a TCB file that read as a
-     * live safety property. The bound is still enforced where it can actually
-     * bite: the _Static_assert in blob.h at compile time, and the baker at
-     * bake time. The real binding constraint on unit count is pid_max, which
-     * is not a descriptor property and is not modelled here. */
+    const struct nw_edge *ed = nw_edges(blob);
+    for (uint32_t i = 0; i < h->n_edges; i++) {
+        if (ed[i].a >= h->n_units || ed[i].b >= h->n_units || ed[i].a == ed[i].b)
+            return NW_E_EDGEIDX;
+        /* Duplicate-pair check, bounded by NW_MAX_EDGES (128) rather than
+         * an open-addressed hash: field_dup's own header comment names the
+         * scale that justified a hash table -- 64k UNITS, 15.26s nested vs
+         * 0.10s hashed. An edge table an order of magnitude smaller than
+         * that bound does not need the same machinery; a nested scan here
+         * is at most 128*127/2 comparisons, not the class this project
+         * built a hash table to escape. Unordered: (a,b) and (b,a) name
+         * the same socketpair. */
+        for (uint32_t j = 0; j < i; j++) {
+            int same = (ed[i].a == ed[j].a && ed[i].b == ed[j].b)
+                    || (ed[i].a == ed[j].b && ed[i].b == ed[j].a);
+            if (same) return NW_E_EDGEDUP;
+        }
+    }
+
+    /* The runtime fd-budget check was retired on 2026-09-10, when edges
+     * (and their fd term) left the format: the worst case was 8 + 2*64 =
+     * 136 against a 1024 ceiling, and could not fire at any legal unit
+     * count -- dead code in a TCB file that read as a live safety
+     * property. Edges are back (docs/options/17-edges.md) and the term
+     * came back with them in blob.h's _Static_assert, the baker and both
+     * specs, per invariant 3 -- but NOT as a resurrected runtime check
+     * here: at today's NW_MAX_EDGES (128), the worst case is
+     * 8 + 2*64 + 2*128 = 392 against the same 1024 ceiling, still
+     * unreachable at any legal (unit, edge) count. Adding a check that
+     * cannot fire would be the exact shape this comment already warns
+     * against, one field later. Reinstating it for real needs
+     * NW_MAX_EDGES raised past roughly 444, or NW_MAX_FDS lowered, and is
+     * not something to do preemptively for a check with no failing case
+     * to exercise it. The bound is still enforced where it can actually
+     * bite: the _Static_assert in blob.h at compile time, and the baker
+     * at bake time. The real binding constraint on unit count is pid_max,
+     * which is not a descriptor property and is not modelled here. */
 
     return NW_OK;
 }

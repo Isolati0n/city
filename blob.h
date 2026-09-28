@@ -17,7 +17,14 @@
  * a rule for whoever changes the layout, not something the code enforces.
  * The asserts below say so in every message they print, because that is
  * the one moment a reader is guaranteed to be looking. */
-#define NW_MAGIC        "NWPLAN10"
+/* Bumped 10 -> 11 on 2026-09-28: docs/options/17-edges.md. struct nw_edge
+ * is a new declaration (NW_AT/NW_EXTENT/NW_TYPE below) and nw_hdr grew
+ * n_edges -- both are layout changes under the same rule the 05 -> 06
+ * bump states above: the magic and the layout move together or the
+ * diagnosis on a stale blob lies. plan-formats.txt has the row, re-derived
+ * by tests/run.py's own test_magic_moves_with_the_layout, never hand-
+ * computed. */
+#define NW_MAGIC        "NWPLAN11"
 #define NW_NAME_LEN     32
 #define NW_PATH_LEN     128
 /* PHASE 3: THE PLAN CARRIES A HASH, NOT A PATH. `brick` is 32 raw bytes of
@@ -115,6 +122,13 @@
    to leave either behind. */
 #define NW_BRICK_HEX    (NW_BRICK_HASH * 2)
 #define NW_MAX_BINDS    128
+/* docs/options/17-edges.md: an edge is a plan-time declaration exactly
+ * like a bind, checked the same way (nwcheck.c: index range, no self-
+ * edge, no duplicate; nwspawn.c: a wiring census). Shaped like
+ * NW_MAX_BINDS rather than derived from it -- there is no relation
+ * between "how many paths a house binds" and "how many peers it is
+ * wired to" for a shared bound to express. */
+#define NW_MAX_EDGES    128
 #define NW_MAX_UNITS    64
 /* Chosen, not counted, and the difference is the point. Nothing below
  * enumerates eight descriptors, because nothing ever did: 8 was a budget
@@ -164,7 +178,19 @@
    nw-sup uses it as-is because it runs after. docs/plans/01. */
 #define NW_BRICK_MNT    "/nw/mnt"
 
-_Static_assert(NW_MAX_UNITS * 2 + NW_FD_RESERVED <= NW_MAX_FDS,
+/* The edge term. docs/options/17-edges.md, invariant 3's own drift
+ * class: this arithmetic is quoted in bakery/nw-cc.py, plan.als's
+ * fdNeed and Plan.tla's FdNeed too -- change one, change all four (plus
+ * nwcheck.c's own independent re-check below, a fifth site the edge
+ * era carried and the 2026-09-10 removal retired as unreachable dead
+ * code once this term dropped to zero; see nwcheck.c). NW_MAX_EDGES * 2
+ * because nw-spawn holds BOTH ends of every declared edge's socketpair
+ * open simultaneously during its own pre-loop wiring phase, before any
+ * unit has forked to inherit its share -- the worst case this assert
+ * bounds is that phase, not steady state after boot, which is why an
+ * edge term belongs beside the per-house term rather than replacing
+ * it. */
+_Static_assert(NW_MAX_UNITS * 2 + NW_MAX_EDGES * 2 + NW_FD_RESERVED <= NW_MAX_FDS,
                "derived fd budget");
 
 /* AND BOUNDED FROM BELOW, which the two asserts above and below are not.
@@ -190,7 +216,7 @@ _Static_assert(NW_FD_RESERVED >= 6,
  * units, inside the range the budget allows. Limits are derived, never
  * declared twice (invariant 3). */
 #define NW_FD_SWEEP     NW_MAX_FDS
-_Static_assert(NW_MAX_UNITS * 2 + NW_FD_RESERVED <= NW_FD_SWEEP,
+_Static_assert(NW_MAX_UNITS * 2 + NW_MAX_EDGES * 2 + NW_FD_RESERVED <= NW_FD_SWEEP,
                "sweep must cover the whole legal descriptor range");
 
 /* Slots in nwcheck.c's duplicate-name table. Not a plan-format limit -- no
@@ -399,10 +425,36 @@ struct nw_bind {
     char     path[NW_PATH_LEN];
 } __attribute__((packed));
 
+/* docs/options/17-edges.md. An undirected connectivity declaration between
+ * two named units, resolved to blob-level indices by the baker -- the same
+ * pattern nw_bind.unit already uses, and checked the same way: nwcheck.c
+ * requires a < n_units, b < n_units, a != b (no self-edge) and no
+ * duplicate pair, independently of whatever the baker already refused.
+ *
+ * NO PORT, NO TYPE, NO DIRECTION. One socket kind this round --
+ * AF_UNIX/SOCK_STREAM, wired by nw-spawn before any house runs -- and
+ * `a`/`b` carry no more meaning than "these two units get a socketpair."
+ * plan.md's Refused-deliberately section on cycle detection has to be
+ * read against this: a plan with edges now genuinely has a graph
+ * (undirected, connectivity-only), so "there is no graph" stops being
+ * true of the format the day this type exists -- nothing here proposes
+ * detecting a cycle in it, but the premise sentence, not the refusal
+ * itself, needs updating wherever it is next touched. */
+struct nw_edge {
+    uint16_t a;
+    uint16_t b;
+} __attribute__((packed));
+
 struct nw_hdr {
     char     magic[8];
     uint32_t n_units;
     uint32_t n_binds;
+    /* docs/options/17-edges.md. Placed beside n_binds, the other
+     * variable-length-table count, rather than at the end after crc32
+     * -- crc32 covers the whole body including this field, so its own
+     * position must precede crc32's, and grouping every count together
+     * is what a reader expects from the two that were already here. */
+    uint32_t n_edges;
     uint32_t crc32;
 } __attribute__((packed));
 
@@ -550,16 +602,23 @@ NW_AT(nw_bind, unit, 0);  NW_TYPE(nw_bind, unit, uint16_t);
 NW_AT(nw_bind, path, 2);  NW_EXTENT(nw_bind, path, NW_PATH_LEN);
 NW_ARR_TYPE(nw_bind, path, char, NW_PATH_LEN);
 
+_Static_assert(sizeof(struct nw_edge) == 4,
+               "edge size drifted: a field was added, removed or resized");
+NW_AT(nw_edge, a, 0);  NW_TYPE(nw_edge, a, uint16_t);
+NW_AT(nw_edge, b, 2);  NW_TYPE(nw_edge, b, uint16_t);
+
 _Static_assert(sizeof(NW_MAGIC) - 1 == 8, "magic must fill nw_hdr.magic");
-_Static_assert(sizeof(struct nw_hdr) == 20, "hdr is magic[8] + 3 * u32");
+_Static_assert(sizeof(struct nw_hdr) == 24, "hdr is magic[8] + 4 * u32");
 NW_AT(nw_hdr, magic,   0);   NW_EXTENT(nw_hdr, magic, 8);
 NW_AT(nw_hdr, n_units, 8);   NW_TYPE(nw_hdr, n_units, uint32_t);
 NW_AT(nw_hdr, n_binds, 12);  NW_TYPE(nw_hdr, n_binds, uint32_t);
-NW_AT(nw_hdr, crc32,   16);  NW_TYPE(nw_hdr, crc32,   uint32_t);
+NW_AT(nw_hdr, n_edges, 16);  NW_TYPE(nw_hdr, n_edges, uint32_t);
+NW_AT(nw_hdr, crc32,   20);  NW_TYPE(nw_hdr, crc32,   uint32_t);
 
-#define NW_BLOB_SIZE(nu, nb) \
+#define NW_BLOB_SIZE(nu, nb, ne) \
     (sizeof(struct nw_hdr) + (nu) * sizeof(struct nw_unit) \
-                           + (nb) * sizeof(struct nw_bind))
+                           + (nb) * sizeof(struct nw_bind) \
+                           + (ne) * sizeof(struct nw_edge))
 
 /* The largest a legal blob can be. Every reader of a blob sizes its buffer
  * and its size check from this, so there is nothing to keep in sync: raising
@@ -573,7 +632,7 @@ NW_AT(nw_hdr, crc32,   16);  NW_TYPE(nw_hdr, crc32,   uint32_t);
  * accepts makes PID 1 print `plan size` and halt. Every failure was loud, so
  * this is the same class as NW_DUP_SLOTS caught earlier rather than a bug
  * that shipped -- and the class is what invariant 3 is about. */
-#define NW_BLOB_MAX ((uint32_t)NW_BLOB_SIZE(NW_MAX_UNITS, NW_MAX_BINDS))
+#define NW_BLOB_MAX ((uint32_t)NW_BLOB_SIZE(NW_MAX_UNITS, NW_MAX_BINDS, NW_MAX_EDGES))
 
 /* Buffer size for a blob reader: one byte more than the largest legal blob,
  * so a read that fills the buffer is proof the file is too big. Without the
@@ -630,6 +689,12 @@ enum {
     NW_E_MEMORDER = 22,   /* throttle at or above the backstop */
     NW_E_NICEPOL = 23,    /* nice without a declared sched=other */
     NW_E_CAPNOLAYER = 24, /* layer capacity with no layer to bound */
+    /* docs/options/17-edges.md. Three codes, one per distinct refusal
+     * reason, the same "an operator reading it would have to guess"
+     * argument the resource block's own codes are commented with above. */
+    NW_E_EDGES = 25,      /* edge count exceeds NW_MAX_EDGES */
+    NW_E_EDGEIDX = 26,    /* an endpoint out of range, or a self-edge */
+    NW_E_EDGEDUP = 27,    /* the same unordered pair declared twice */
     /* THERE IS NO CODE FOR A DECLARED ZERO. `cpu-weight=0` and an
      * omitted cpu-weight are the same byte, so this checker cannot tell
      * them apart and a code for it would be unreachable -- the shape
@@ -677,6 +742,19 @@ static inline const struct nw_bind *nw_binds(const void *blob)
     const struct nw_hdr *h = nw_hdr(blob);
     return (const struct nw_bind *)((const char *)blob + sizeof(struct nw_hdr)
                                     + h->n_units * sizeof(struct nw_unit));
+}
+
+/* Edges follow binds, matching the header's own field order (n_units,
+ * n_binds, n_edges) and NW_BLOB_SIZE's parameter order -- a reader that
+ * gets one of the three tables' extents wrong reads garbage from the
+ * next, so the three orderings are kept identical rather than left free
+ * to drift apart. */
+static inline const struct nw_edge *nw_edges(const void *blob)
+{
+    const struct nw_hdr *h = nw_hdr(blob);
+    return (const struct nw_edge *)((const char *)blob + sizeof(struct nw_hdr)
+                                    + h->n_units * sizeof(struct nw_unit)
+                                    + h->n_binds * sizeof(struct nw_bind));
 }
 
 /* "DOES THIS UNIT HAVE A BRICK?" -- the only legal interrogation of the
