@@ -508,15 +508,23 @@ avoid a count both failed, so: **read the commands in `plan.als`, and
 treat any number in prose as unverified.**
 
 **And the qualifier is still too generous — but say what it is pinned
-*against*.** `plan.als` hand-writes the fd multiplier
-(`plus[nwReserved[], 2.mul[#House]]`) and so does `Plan.tla`
-(`FdNeed == Reserved + 2 * n`), and that `2` must track `blob.h`, which
-is exactly what invariant 3's "the arithmetic appears in four places"
-says. Nothing pins it **against the header**: `claims` changed `* 2` to
-`* 3` in both of `blob.h`'s `_Static_assert`s and both specs ran clean,
-because `tools/gen-spec-limits.py` emits the four limit values and the
-two lid bits and no arithmetic at all — the generated files come out
-byte-identical.
+*against*.** `plan.als` hand-writes the fd coefficients in `fdNeed[]`
+and so does `Plan.tla` in `FdNeed`, and each coefficient must track
+`blob.h`, which is exactly what invariant 3's "the arithmetic appears
+in four places" says. (This used to quote the literal expressions —
+`2.mul[#House]`, `Reserved + 2 * n` — and both went stale the moment
+`docs/OPERATOR-BRIEF.md` Section 1.3 changed the house coefficient from
+2 to 1; the coefficients are now unequal between house and edge terms,
+which is itself the reason to name the predicate rather than retype its
+body here.) At the time this section was first written, nothing pinned
+it **against the header**: `claims` changed `* 2` to `* 3` in both of
+`blob.h`'s `_Static_assert`s and both specs ran clean, because
+`tools/gen-spec-limits.py` emitted the four limit values and the two
+lid bits and no arithmetic at all — the generated files came out
+byte-identical. **That gap is closed now** — the "Built, for the
+fd-need formula specifically" section below this one is where the
+oracle mechanism that closes it lives; this paragraph's own measurement
+predates it and is kept as the record of why the mechanism was built.
 
 Each *is* pinned against a second hand-written copy in its own file:
 `assert FdArithmetic` for Alloy, `FdNeedAgrees` for TLC, and each turns
@@ -533,12 +541,14 @@ bakery/nw-cc.py
 ```
 
 `blob.h` has `NW_FD_RESERVED`, the baker `FD_RESERVED`, `plan.als`
-`nwReserved[]`, `Plan.tla` `Reserved`; the multiplier is `* 2` in three
-places and `2.mul[...]` in Alloy. Read the sites, do not search for a
-name. This was got wrong twice in one exchange on 2026-09-12 — once by
-concluding the arithmetic had shrunk to two places, and once by
-concluding `Plan.tla` had dropped it, which `sed -n 42p Plan.tla`
-disproves.
+`nwReserved[]`, `Plan.tla` `Reserved`. (The reserved TERM is written
+four ways; the two COEFFICIENTS beside it — house and edge — are a
+separate count, unequal since `docs/OPERATOR-BRIEF.md` Section 1.3, and
+this sentence used to conflate them as one shared "the multiplier".)
+Read the sites, do not search for a name. This was got wrong twice in
+one exchange on 2026-09-12 — once by concluding the arithmetic had
+shrunk to two places, and once by concluding `Plan.tla` had dropped it,
+which `sed -n 42p Plan.tla` disproves.
 
 And when you count them, **`assert FdArithmetic` in `plan.als` and
 `FdNeedAgrees` in `Plan.tla` are not sites.** They are the deliberate
@@ -574,11 +584,11 @@ than the fix.
 <!-- nw-init:absent-ok specs/limits.als -->
 **Built, for the fd-need formula specifically, when edges reopened it and
 the operator authorized the follow-up spec edit that had been stopped
-short pending exactly that.** `blob.h` gained a named `NW_FD_NEED(nu, ne)`
-macro (both `_Static_assert`s call it rather than repeating the
-expression), `tools/fdneed-oracle.c` compiles against it and prints the
-answer for CLI-given `(nu, ne)`, and `tools/gen-spec-limits.py` runs it at
-two sample points, writing the results into the generated
+short pending exactly that.** `blob.h` gained a named macro (both
+`_Static_assert`s call it rather than repeating the expression), a
+standalone oracle program compiles against it and prints the answer for
+CLI-given `(units, edges)`, and `tools/gen-spec-limits.py` runs it at two
+sample points, writing the results into the generated
 `specs/limits.als`/`specs/Plan.cfg` as
 `fdNeedOracle_1_7[]`/`fdNeedOracle_7_1[]` and
 `OracleH1E7`/`OracleH7E1`. Both specs gained a `FdNeedOracleAgrees`
@@ -587,31 +597,47 @@ compiled values — which is genuinely a THIRD kind of pin, not a second
 hand-typed copy: `FdArithmetic`/`FdNeedAgrees` compare a formula against
 another copy written in the SAME file (catches an accidental typo, not a
 coordinated drift); `FdNeedOracleAgrees` compares it against a value
-compiled from `blob.h` itself. Verified: a scratch mutation of the macro's
-unit coefficient (`* 2` -> `* 3`, specs left untouched) leaves
-`FdArithmetic`/`FdNeedAgrees` green and turns `FdNeedOracleAgrees` red —
-`TLC` reports `Invariant FdNeedOracleAgrees is violated by the initial
+compiled from `blob.h` itself. Verified at the time: a scratch mutation of
+the macro's unit coefficient (`* 2` -> `* 3`, specs left untouched) left
+`FdArithmetic`/`FdNeedAgrees` green and turned `FdNeedOracleAgrees` red —
+`TLC` reported `Invariant FdNeedOracleAgrees is violated by the initial
 state ... e=7, n=1`. `docs/options/17-edges.md` carries the fuller build
 record.
 
-**This closes the gap for the fd-need arithmetic, and — one level
-removed, not by design — for `LargestCityFits` too.** `tests/run.py`'s
-`tight` boundary value (the must-fail/must-hold pair for
-`FdBudgetCovers` and `LargestCityFits`) now reads `vals['fdNeedWorstCase']
-- 1`, the oracle's own answer at `(MaxUnits, MaxEdges)`, replacing a
-Python-side `Reserved + 2*MaxUnits - 1` that was itself a fourth
-hand-typed copy of the multiplier. Since `LargestCityFits`'s own formula
-(`Reserved + 2*MaxUnits + 2*MaxEdges <= MaxFds`, still hand-typed
-separately in `Plan.tla`, sharing no code with `FdNeed`) is exactly what
-that boundary probe tests, a divergence between it and `blob.h`'s macro
-now moves the probe's `tight` value without moving `LargestCityFits`'s
-own threshold, and the must-fail/must-hold pair catches the mismatch —
-covered as a side effect of where the constant came from, not because
-anything was built for `LargestCityFits` by name.
+<!-- nw-init:absent-ok tools/fdneed-oracle.c -->
+**The macro and the oracle were renamed once, in `docs/OPERATOR-BRIEF.md`
+Section 1.3, along with the formula's own house coefficient.** `blob.h`'s
+macro is `NW_BOOT_NEED(n, e) = NW_FD_RESERVED + n + 2*e`, was
+`NW_FD_NEED(nu, ne) = NW_FD_RESERVED + nu*2 + ne*2` — the interleave had
+already dropped the real per-house peak to one write end, and the
+compile-time bound was the one place still spelling the older, doubled
+shape; the operator's decision is to stop maintaining a deliberately
+conservative bound once the actual peak is smaller and well understood,
+not to relax a margin anything currently needs. The oracle program is
+`tools/bootneed-oracle.c`, was `tools/fdneed-oracle.c`. The mechanism
+itself — macro, oracle, two sample points, `FdNeedOracleAgrees` on both
+specs — is unchanged by the rename; only the name and the coefficient
+moved, in `blob.h`, both oracle-consumer sites, both specs' `fdNeed`/
+`FdNeed` and their `FdArithmetic`/`FdNeedAgrees` self-checks, the baker,
+and `nwcheck.c`'s prose.
+
+**This closes the gap for the fd-need arithmetic, and now DELIBERATELY,
+not incidentally, for `LargestCityFits` too.** `tests/run.py`'s `tight`
+boundary value (the must-fail/must-hold pair for `FdBudgetCovers` and
+`LargestCityFits`) reads `vals['fdNeedWorstCase'] - 1`, the oracle's own
+answer at `(MaxUnits, MaxEdges)`, rather than a Python-side hand-typed
+copy of the coefficients. `LargestCityFits`'s own formula in `Plan.tla`
+(`Reserved + MaxUnits + 2*MaxEdges <= MaxFds`, still hand-typed
+separately, sharing no code with `FdNeed`) now carries a comment stating
+in as many words that it must track `NW_BOOT_NEED`'s coefficients at the
+maximum values, and that the must-hold probe pinning `tight + 1` is what
+would go red if it silently didn't — the dependence used to be
+undocumented ("one level removed, not by design"); it is now a stated
+fact a reader can check the boundary test against.
 
 **What is NOT covered, so a reader does not assume the mechanism
 generalises: `NW_MAX_BINDS`'s multiplier, `bindNeed`/`BindNeed`, and any
-future limit's arithmetic that is not `NW_FD_NEED` or downstream of
+future limit's arithmetic that is not `NW_BOOT_NEED` or downstream of
 `tight`.** Those remain exactly as unpinned against `blob.h` as
 everything in this section always was. Deriving each would mean the same
 macro-plus-oracle move, repeated per limit; nothing here does that

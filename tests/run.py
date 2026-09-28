@@ -10510,15 +10510,17 @@ def test_specs_are_checked():
     # to stop retyping -- it happened to agree with blob.h and Plan.tla's
     # own `2`s, and a change to any ONE of the three would not have moved
     # the other two. `fdNeedWorstCase` comes from gen-spec-limits.py
-    # compiling tools/fdneed-oracle.c against blob.h's own NW_FD_NEED
-    # macro at (MaxUnits, MaxEdges), so this boundary is now genuinely
-    # derived from the header rather than a fourth hand-typed copy.
+    # compiling tools/bootneed-oracle.c against blob.h's own
+    # NW_BOOT_NEED macro (was NW_FD_NEED, docs/OPERATOR-BRIEF.md
+    # Section 1.3) at (MaxUnits, MaxEdges), so this boundary is now
+    # genuinely derived from the header rather than a fourth hand-typed
+    # copy.
     tight = vals["fdNeedWorstCase"] - 1
     for nm, cfg_sub, tla_sub in (
             ("TypeOK", None,
              ("kind = [i \\in 1..n |-> 0]", "kind = [i \\in 1..n |-> 2]")),
             # NOT 16. Derived: the honest predicate misses by exactly
-            # one at `tight` (blob.h's own NW_FD_NEED, compiled and run
+            # one at `tight` (blob.h's own NW_BOOT_NEED, compiled and run
             # at (MaxUnits, MaxEdges) -- see where `tight` is computed
             # above), while every weakening `control` found -- `n <=
             # MaxFds`, `Reserved + MaxUnits <= MaxFds`, `MaxUnits <=
@@ -10532,8 +10534,8 @@ def test_specs_are_checked():
             ("FdBudgetCovers", ("MaxFds", tight), None),
             ("LargestCityFits", ("MaxFds", tight), None),
             ("FdNeedAgrees", None,
-             ("FdNeed == Reserved + 2 * n + 2 * e",
-              "FdNeed == Reserved + n + 2 * e")),
+             ("FdNeed == Reserved + n + 2 * e",
+              "FdNeed == Reserved + 2 * n + 2 * e")),
             # A DIFFERENT half of the same class: this one corrupts the
             # ORACLE'S OWN generated value (a cfg CONSTANT) rather than
             # the spec's formula, proving FdNeedOracleAgrees fires when

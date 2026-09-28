@@ -47,8 +47,14 @@ N == n
    variable with a plausible runtime mutation path") -- the return here
    is the same variable, restored rather than reinvented, ranging
    0..MaxEdges because a plan with zero edges is the common case,
-   unlike n which is at least 1. *)
-FdNeed == Reserved + 2 * n + 2 * e
+   unlike n which is at least 1.
+
+   1 * n, not 2 * n: matches blob.h's NW_BOOT_NEED (was NW_FD_NEED's
+   2 * n, the pre-interleave shape) per docs/OPERATOR-BRIEF.md
+   Section 1.3 -- the log-pipe interleave has dropped the per-house
+   peak to one write end since 2026-09-14; this formula now matches
+   that rather than a conservative superset of it. *)
+FdNeed == Reserved + n + 2 * e
 
 (* Same limit as NW_MAX_BINDS in blob.h, MAX_BINDS in bakery/nw-cc.py and
    bindNeed in plan.als. Change one, change all four.
@@ -215,12 +221,14 @@ FdBudgetCovers == FdNeed <= MaxFds
    FdArithmetic for -- the fd formula is one of the four places
    invariant 3 names, and its TLA+ copy was as unpinned as Alloy's was
    for the file's whole life. *)
-FdNeedAgrees == FdNeed = Reserved + n + n + e + e
+FdNeedAgrees == FdNeed = Reserved + n + e + e
 
 (* OracleH1E7/OracleH7E1 are GENERATED CONSTANTS (specs/Plan.cfg, from
-   tools/gen-spec-limits.py compiling tools/fdneed-oracle.c against
-   blob.h's own NW_FD_NEED macro at these two points) -- not a further
-   hand-typed copy of the multiplier. FdNeedAgrees above pins FdNeed
+   tools/gen-spec-limits.py compiling tools/bootneed-oracle.c against
+   blob.h's own NW_BOOT_NEED macro at these two points -- was
+   tools/fdneed-oracle.c against NW_FD_NEED, both renamed together per
+   docs/OPERATOR-BRIEF.md Section 1.3) -- not a further hand-typed copy
+   of the coefficients. FdNeedAgrees above pins FdNeed
    against a second copy written in THIS SAME FILE, which is exactly
    the class of check plan.md records as insufficient on its own: `* 2`
    -> `* 3` in blob.h left both specs' internal self-checks clean,
@@ -252,8 +260,9 @@ FdNeedOracleAgrees ==
    house".
 
    The probe now uses vals['fdNeedWorstCase'] - 1 -- compiled by
-   tools/gen-spec-limits.py from blob.h's own NW_FD_NEED macro at
-   (MaxUnits, MaxEdges), not `Reserved + 2*MaxUnits - 1` retyped a
+   tools/gen-spec-limits.py from blob.h's own NW_BOOT_NEED macro (was
+   NW_FD_NEED, same rename as everywhere else, docs/OPERATOR-BRIEF.md
+   Section 1.3) at (MaxUnits, MaxEdges), not `Reserved + 2*MaxUnits - 1` retyped a
    further time in Python. It was that retyped form from 2026-09-11
    until edges reopened it: docs/options/17-edges.md's own build found
    that a hand-typed Python copy of the multiplier is exactly the
@@ -281,7 +290,15 @@ FdNeedOracleAgrees ==
    hold whenever MaxFds is large. Two predicates that agree throughout
    the legal range cannot pin each other; only a constant that separates
    them can. *)
-LargestCityFits == Reserved + 2 * MaxUnits + 2 * MaxEdges <= MaxFds
+(* 1 * MaxUnits, not 2 * MaxUnits: tracks FdNeed's own coefficient
+   change above (docs/OPERATOR-BRIEF.md Section 1.3) at the maximum
+   legal values rather than the pre-interleave shape. Because `tight`
+   above is oracle-derived from the SAME macro this predicate's
+   coefficients must independently match, the must-hold probe pinning
+   `tight + 1` would go red on its own if this line drifted from
+   NW_BOOT_NEED without anyone editing FdNeed itself -- a coefficient
+   here is checked by a boundary test, not merely by reading. *)
+LargestCityFits == Reserved + MaxUnits + 2 * MaxEdges <= MaxFds
 
 (* NoLiveRewrite is deliberately NOT restated as a predicate here.
    Edges are back (docs/options/17-edges.md) and `e` is a real variable

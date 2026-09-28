@@ -1,10 +1,12 @@
-/* tools/fdneed-oracle.c -- ground truth for the fd-need arithmetic.
+/* tools/bootneed-oracle.c -- ground truth for the boot-need arithmetic.
+ * Was tools/fdneed-oracle.c, renamed alongside blob.h's NW_FD_NEED ->
+ * NW_BOOT_NEED rename (docs/OPERATOR-BRIEF.md Section 1.3).
  *
- * Prints NW_FD_NEED(nu, ne), compiled directly against blob.h's own
+ * Prints NW_BOOT_NEED(n, e), compiled directly against blob.h's own
  * macro. Nothing here retypes the formula: this file exists precisely
- * because every other consumer of the fd-need arithmetic -- the baker,
+ * because every other consumer of the boot-need arithmetic -- the baker,
  * plan.als's fdNeed, Plan.tla's FdNeed -- had its own hand-typed copy
- * of the multiplier, and plan.md records at length that nothing ever
+ * of the coefficients, and plan.md records at length that nothing ever
  * compared those copies against blob.h itself ("a * 3 in the header
  * still runs clean"). tools/gen-spec-limits.py compiles and runs this
  * program at a few concrete (units, edges) points and writes the
@@ -13,7 +15,7 @@
  * their own formula against a value that came from blob.h's macro,
  * not from retyping it a fourth and fifth time.
  *
- * Usage: fdneed-oracle NU NE
+ * Usage: bootneed-oracle N E
  *
  * Not in the TCB: a standalone reader of a macro, nothing more.
  */
@@ -25,11 +27,11 @@
 int main(int argc, char **argv)
 {
     if (argc != 3) {
-        fprintf(stderr, "usage: fdneed-oracle NU NE\n");
+        fprintf(stderr, "usage: bootneed-oracle N E\n");
         return 2;
     }
-    long nu = atol(argv[1]);
-    long ne = atol(argv[2]);
-    printf("%ld\n", (long)NW_FD_NEED(nu, ne));
+    long n = atol(argv[1]);
+    long e = atol(argv[2]);
+    printf("%ld\n", (long)NW_BOOT_NEED(n, e));
     return 0;
 }

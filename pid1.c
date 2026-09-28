@@ -640,12 +640,16 @@ int main(int argc, char **argv)
     const struct nw_unit *u = nw_units(blob);
     n_houses = h->n_units;
 
-    /* Pre-flight, before the first fork. need = reserved + one write
-     * end per house (the interleave dropped the 2n peak), PLUS twice
-     * every declared edge -- docs/options/17-edges.md's own worst
-     * case, nw-spawn holding BOTH ends of every edge's socketpair open
-     * simultaneously during its pre-loop wiring phase, the same peak
-     * blob.h's _Static_assert already bounds at compile time. Missing
+    /* Pre-flight, before the first fork. need = NW_BOOT_NEED(n_houses,
+     * n_edges) -- reserved + one write end per house (the interleave
+     * dropped the 2n peak), PLUS twice every declared edge --
+     * docs/options/17-edges.md's own worst case, nw-spawn holding BOTH
+     * ends of every edge's socketpair open simultaneously during its
+     * pre-loop wiring phase, the same peak blob.h's _Static_assert
+     * already bounds at compile time via the SAME macro -- this used to
+     * be a second, hand-typed copy of that formula, closed by
+     * docs/OPERATOR-BRIEF.md Section 1.3's "one formula, generated
+     * everywhere". Missing
      * until fd-auditor reproduced it: this soft limit is what nw-spawn
      * itself inherits across exec, so a plan with a tight descriptor
      * ceiling plus enough edges passed this preflight (need looked small
@@ -670,8 +674,8 @@ int main(int argc, char **argv)
      * from different rungs.
      *
      * "need" HERE IS THE WHOLE BOOT CHAIN'S PEAK, not any one house's --
-     * NW_FD_RESERVED plus one log_w per house plus twice every edge,
-     * because the rlimit this preflight sets is inherited across exec
+     * NW_BOOT_NEED's reserved-plus-one-log_w-per-house-plus-twice-every-
+     * edge, because the rlimit this preflight sets is inherited across exec
      * by nw-spawn (which actually creates the edge sockets) and then by
      * every house in turn, not held open by PID 1 itself. It is not
      * sized for any one house; nothing here reads or applies the plan's
@@ -717,8 +721,7 @@ int main(int argc, char **argv)
         if (getrlimit(RLIMIT_NOFILE, &rl) < 0)
             halt_now("getrlimit nofile");
         unsigned long long need =
-            (unsigned long long)NW_FD_RESERVED + (unsigned long long)n_houses
-            + 2ull * (unsigned long long)h->n_edges;
+            (unsigned long long)NW_BOOT_NEED(n_houses, h->n_edges);
         unsigned long long hard = (rl.rlim_max == RLIM_INFINITY)
             ? ~0ull : (unsigned long long)rl.rlim_max;
         if (rl.rlim_max != RLIM_INFINITY && need > (unsigned long long)rl.rlim_max) {
@@ -855,9 +858,37 @@ int main(int argc, char **argv)
     }
 
     {
-        char b[96];
-        snprintf(b, sizeof b, "houses=%u slot=%.63s",
-                 n_houses, slot ? slot : "-");
+        /* docs/OPERATOR-BRIEF.md Section 1d: one boot line naming
+         * BootNeed (the same NW_BOOT_NEED the pre-flight above already
+         * refused or accepted against) and the CURRENT RLIMIT_NOFILE --
+         * queried fresh here rather than reusing the pre-flight's own
+         * rl, because the EPERM fallback above may have lowered
+         * rlim_max since, and this line is meant to report what the
+         * machine is actually running with at boot success, not what it
+         * started with. Best-effort: a getrlimit failure here does not
+         * halt a city that has already opened. */
+        struct rlimit rl2;
+        unsigned long long need = (unsigned long long)NW_BOOT_NEED(n_houses, h->n_edges);
+        /* 160 fits the worst case (houses=64 bootneed=328 slot=<=63
+         * chars nofile_soft/hard each up to 20 digits at RLIM_INFINITY)
+         * with zero bytes of slack -- tcb-review measured it exactly.
+         * snprintf truncates safely either way, but headroom costs
+         * nothing here and every sibling buffer in this file carries
+         * some. */
+        char b[224];
+        if (getrlimit(RLIMIT_NOFILE, &rl2) == 0) {
+            unsigned long long cur = (rl2.rlim_cur == RLIM_INFINITY)
+                ? ~0ull : (unsigned long long)rl2.rlim_cur;
+            unsigned long long hardnow = (rl2.rlim_max == RLIM_INFINITY)
+                ? ~0ull : (unsigned long long)rl2.rlim_max;
+            snprintf(b, sizeof b,
+                     "houses=%u slot=%.63s bootneed=%llu nofile_soft=%llu "
+                     "nofile_hard=%llu",
+                     n_houses, slot ? slot : "-", need, cur, hardnow);
+        } else {
+            snprintf(b, sizeof b, "houses=%u slot=%.63s bootneed=%llu",
+                     n_houses, slot ? slot : "-", need);
+        }
         say("city open", b);
     }
 

@@ -49,25 +49,30 @@ WANTED = {
 }
 
 # Two points chosen to separate a wrong unit coefficient from a wrong
-# edge coefficient in NW_FD_NEED -- a single sample with only one of
+# edge coefficient in NW_BOOT_NEED -- a single sample with only one of
 # (units, edges) nonzero would catch either alone, but not a coefficient
 # swap (units and edges trading multipliers), which needs the two counts
 # to differ AND to swap sides between the two samples. Kept small and
 # fixed rather than derived from NW_MAX_UNITS/NW_MAX_EDGES so plan.als's
-# Alloy check ("for 8") can cover both without raising its scope.
+# Alloy check ("for 8") can cover both without raising its scope. The
+# formula's two coefficients are unequal (1 and 2, not 2 and 2), which
+# makes a swap even more visible than when this was written: swapping
+# them changes both sample values rather than leaving one of the two
+# forms indistinguishable from the other.
 ORACLE_SAMPLES = [(1, 7), (7, 1)]
 
 
-def _fd_need_oracle(blob_h_path, points):
-    """Compile tools/fdneed-oracle.c against blob.h's own NW_FD_NEED
+def _boot_need_oracle(blob_h_path, points):
+    """Compile tools/bootneed-oracle.c against blob.h's own NW_BOOT_NEED
     macro and run it at each (units, edges) point in `points`, returning
-    {(nu, ne): value}.
+    {(n, e): value}. Was _fd_need_oracle, against NW_FD_NEED, renamed
+    alongside the macro (docs/OPERATOR-BRIEF.md Section 1.3).
 
-    This is the piece invariant 3's drift class was missing for the fd
-    arithmetic specifically: tools/gen-spec-limits.py already derives
-    the VALUES (NW_MAX_UNITS, NW_MAX_EDGES, NW_FD_RESERVED...) so the
-    specs hold no second copy of THOSE, but the multiplier `2` in
-    "reserved + 2 per house + 2 per edge" was still hand-typed in
+    This is the piece invariant 3's drift class was missing for the
+    boot-need arithmetic specifically: tools/gen-spec-limits.py already
+    derives the VALUES (NW_MAX_UNITS, NW_MAX_EDGES, NW_FD_RESERVED...) so
+    the specs hold no second copy of THOSE, but the coefficients in
+    "reserved + 1 per house + 2 per edge" are still hand-typed in
     plan.als's fdNeed and Plan.tla's FdNeed, compared against nothing.
     Reading a #define is not enough to check an arithmetic EXPRESSION,
     so this compiles and runs the real macro instead of parsing or
@@ -75,25 +80,25 @@ def _fd_need_oracle(blob_h_path, points):
     the header rather than guessed."""
     hdr_dir = os.path.dirname(os.path.abspath(blob_h_path or
                                                os.path.join(ROOT, "blob.h")))
-    src = os.path.join(ROOT, "tools", "fdneed-oracle.c")
+    src = os.path.join(ROOT, "tools", "bootneed-oracle.c")
     with tempfile.TemporaryDirectory() as td:
-        exe = os.path.join(td, "fdneed-oracle")
+        exe = os.path.join(td, "bootneed-oracle")
         b = subprocess.run(
             ["gcc", "-O2", "-std=gnu11", f"-I{hdr_dir}", "-o", exe, src],
             capture_output=True, text=True)
         if b.returncode != 0:
             raise SystemExit(
-                f"gen-spec-limits: tools/fdneed-oracle.c failed to build "
+                f"gen-spec-limits: tools/bootneed-oracle.c failed to build "
                 f"against {hdr_dir}/blob.h\n{b.stderr}")
         out = {}
-        for nu, ne in points:
-            p = subprocess.run([exe, str(nu), str(ne)],
+        for n, e in points:
+            p = subprocess.run([exe, str(n), str(e)],
                                 capture_output=True, text=True)
             if p.returncode != 0:
                 raise SystemExit(
-                    f"gen-spec-limits: fdneed-oracle {nu} {ne} failed\n"
+                    f"gen-spec-limits: bootneed-oracle {n} {e} failed\n"
                     f"{p.stderr}")
-            out[(nu, ne)] = int(p.stdout.strip())
+            out[(n, e)] = int(p.stdout.strip())
         return out
 
 
@@ -150,8 +155,8 @@ def als(vals, oracle):
         f"fun {k}[]: Int {{ {v} }}" for k, v in sorted(vals.items()))
     # ORACLE FUNS, named by their (units, edges) sample point rather than
     # by role, so plan.als's own FdNeedOracleAgrees can name exactly the
-    # point it is checking. Compiled from blob.h's NW_FD_NEED macro (see
-    # _fd_need_oracle's docstring), not re-derived here.
+    # point it is checking. Compiled from blob.h's NW_BOOT_NEED macro
+    # (see _boot_need_oracle's docstring), not re-derived here.
     oracle_body = "\n".join(
         f"fun fdNeedOracle_{nu}_{ne}[]: Int {{ {v} }}"
         for (nu, ne), v in sorted(oracle.items()))
@@ -214,11 +219,11 @@ INVARIANTS
 
 def generate(out_dir=None, blob_h=None):
     vals = read_blob_h(blob_h)
-    oracle = _fd_need_oracle(blob_h, ORACLE_SAMPLES)
+    oracle = _boot_need_oracle(blob_h, ORACLE_SAMPLES)
     # The real worst case, for whoever wants to compare a boundary probe
     # against it (tests/run.py's `tight`) without hand-retyping the
-    # multiplier a further time to get there.
-    vals["fdNeedWorstCase"] = _fd_need_oracle(
+    # coefficients a further time to get there.
+    vals["fdNeedWorstCase"] = _boot_need_oracle(
         blob_h, [(vals["nwMaxUnits"], vals["nwMaxEdges"])]
     )[(vals["nwMaxUnits"], vals["nwMaxEdges"])]
     # The two sample values themselves, so a caller (tests/run.py's

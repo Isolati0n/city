@@ -65,11 +65,11 @@ sections after this one and are deliberately not numbered here.
    Annotated for `tools/checkbrief.py`, one per site, each naming that
    file's own spelling — the symbol is written four ways and a grep for
    any one of them finds a quarter of it:
-   <<filecontains:blob.h:#define NW_FD_NEED(nu, ne) (NW_FD_RESERVED + (nu) * 2 + (ne) * 2)>>
-   <<count:blob.h:NW_FD_NEED(NW_MAX_UNITS, NW_MAX_EDGES):2>>
-   <<filecontains:bakery/nw-cc.py:FD_RESERVED + len(houses) * 2>>
-   <<filecontains:plan.als:plus[2.mul[#House], 2.mul[#Edge]]>>
-   <<filecontains:Plan.tla:FdNeed == Reserved + 2 * n + 2 * e>>
+   <<filecontains:blob.h:#define NW_BOOT_NEED(n, e) \>>
+   <<count:blob.h:NW_BOOT_NEED(NW_MAX_UNITS, NW_MAX_EDGES):2>>
+   <<filecontains:bakery/nw-cc.py:FD_RESERVED + len(houses) + len(edges) * 2>>
+   <<filecontains:plan.als:plus[nwReserved[], plus[#House, 2.mul[#Edge]]]>>
+   <<filecontains:Plan.tla:FdNeed == Reserved + n + 2 * e>>
    and the two second copies that pin the others rather than being sites
    themselves, because losing one loses the only thing checking equality:
    <<filecontains:plan.als:assert FdArithmetic>>
@@ -147,16 +147,29 @@ sections after this one and are deliberately not numbered here.
    **Say what a number is pinned *against*, or the sentence is wrong
    again.** The bitwidth is the only one pinned against `blob.h`.
    Others are pinned against a second hand-written copy in their own
-   file — `plan.als`'s `2.mul[#House]` against `assert FdArithmetic`,
-   `Plan.tla`'s `2 * n` against `FdNeedAgrees` — which is a weaker pin
-   and a real one: each turns `make test` red on its own. And at least
-   one is pinned in neither direction: `Plan.tla`'s `2 * MaxUnits` in
-   `LargestCityFits`, which `claims` changed to `* 3` for a clean run.
-   The fifth attempt at this sentence over-claimed what was *unpinned*
-   after four attempts over-claimed what was *derived*; the fix is the
-   preposition, not another count. (`Plan.tla` also hand-copied the lid bits until
-   2026-09-11; nothing checked them and their only consumers are
-   unchecked predicates, so `LidNewNS == 999` ran clean. Generated now.)
+   file — `plan.als`'s `fdNeed[]` against `assert FdArithmetic`,
+   `Plan.tla`'s `FdNeed` against `FdNeedAgrees` — which is a weaker pin
+   and a real one: each turns `make test` red on its own. (This
+   paragraph used to quote each formula's literal text -- `2.mul[#House]`,
+   `2 * n` -- and that text went stale the moment `docs/OPERATOR-BRIEF.md`
+   Section 1.3 changed the house coefficient from 2 to 1; naming the
+   PREDICATE rather than its current expression is what survives the
+   next such change without editing this paragraph again.)
+   `Plan.tla`'s `LargestCityFits` was pinned in neither direction until
+   `claims` changed its coefficient to `* 3` in a scratch copy for a
+   clean run, which is what motivated deriving the must-fail/must-hold
+   boundary (`tight`) from the fd-need oracle rather than a fourth
+   hand-typed copy -- `.claude/rules/plan.md`'s own record of that fix
+   is the fuller telling. It is pinned now, in the sense that a
+   coefficient drifted from `NW_BOOT_NEED`'s own shape turns the
+   must-hold probe red; `tcb-review` verified this directly by
+   reverting just that one line in a scratch copy and watching the
+   probe fail. The fifth attempt at this sentence over-claimed what was
+   *unpinned* after four attempts over-claimed what was *derived*; the
+   fix is the preposition, not another count. (`Plan.tla` also
+   hand-copied the lid bits until 2026-09-11; nothing checked them and
+   their only consumers are unchecked predicates, so `LidNewNS == 999`
+   ran clean. Generated now.)
 4. **`nw-spawn` exits; its death is not a failure mode.** It forks one
    supervisor per unit, double-forked so PID 1 adopts the houses, reports the
    pids and exits 0. PID 1 requires a complete report *and* a clean exit —

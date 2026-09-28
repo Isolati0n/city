@@ -1046,3 +1046,15 @@ prose-count	proofs/README.md	`nwcheck.c` moves exactly one assertion in `caller_
 # purpose, which is why it reads as unpaired.
 unpaired-absence	tests/run.py	expect("sched-ext unsupported" not in out,
 unpaired-absence	tests/run.py	expect("sched-ext no policy artifact" not in out,
+# invariant 3's own fixed structural fact -- four places is the count of files invariant 3 names, not a growable instance count
+prose-count	.claude/rules/plan.md	in four places" says. (This used to quote the literal expressions —
+# historical: describes a past mistake in a dated exchange, not a live claim
+prose-count	.claude/rules/plan.md	shrunk to two places, and once by concluding `Plan.tla` had dropped it,
+# singular "the one place" identifying which site, not a count of things that could grow
+prose-count	.claude/rules/plan.md	compile-time bound was the one place still spelling the older, doubled
+# describes a specific, already-run control (tcb-review reverting one named line), not a growable count
+prose-count	CLAUDE.md	reverting just that one line in a scratch copy and watching the
+# singular "the one place" identifying which site, not a count of things that could grow
+prose-count	blob.h	* n, and the compile-time bound above was the one place still spelling
+# matches the operator brief's own phrasing (docs/OPERATOR-BRIEF.md Section 2 item 1d: "one boot line"), naming a fixed deliverable, not a growable count
+prose-count	pid1.c	/* docs/OPERATOR-BRIEF.md Section 1d: one boot line naming

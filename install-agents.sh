@@ -512,13 +512,26 @@ disagreeing *among themselves*; do not report the scope against
 the cell is empty rather than that the numbers disagree.)
 Alloy's `but 12 Int` bitwidth does track the header, and
 `test_specs_are_checked` asserts it covers `NW_MAX_FDS`. It is not "the
-other" one — that word was an exclusive claim and it was wrong. **The fd
-multiplier is hand-written in both specs and pinned by nothing**:
-`plan.als`'s `2.mul[#House]` and `Plan.tla`'s `2 * n` against `blob.h`'s
-`NW_MAX_UNITS * 2`. `claims` changed the header to `* 3` and both specs
-ran clean. Only the limit VALUES left the drift class; the arithmetic is
-still the four-place change invariant 3 describes, so **check it by
-hand — it is the live half of your job on this row.**
+other" one — that word was an exclusive claim and it was wrong.
+
+**The fd arithmetic itself is now pinned, and checking it by hand is no
+longer your job on this row.** It was hand-written in both specs and
+pinned by nothing until `blob.h` gained a named macro
+(`NW_BOOT_NEED(n, e)`, was `NW_FD_NEED(nu, ne)`) with a standalone oracle
+program compiling against it; `tools/gen-spec-limits.py` runs that
+oracle at two sample points and writes the results into the generated
+specs, and both specs' `FdNeedOracleAgrees` check compares their own
+formula against those compiled values. That is a genuine third kind of
+pin — against the header itself, not against a second hand-typed copy
+in the same file — and `.claude/rules/plan.md`'s "Built, for the
+fd-need formula specifically" section carries the build record. What
+this means for you: a coefficient changed in `blob.h`'s macro and left
+unmatched in either spec's `fdNeed[]`/`FdNeed` now turns `make test`
+red on its own, so it is not a drift class you need to hand-verify —
+report it only if you find the MECHANISM missing (no
+`FdNeedOracleAgrees` check, or `tools/gen-spec-limits.py` no longer
+calling the oracle), which would be the mechanism itself having
+drifted, not the arithmetic it checks.
 
 *This paragraph sat between two rows of the table above until
 2026-09-11, which orphaned the length row from its header, and its

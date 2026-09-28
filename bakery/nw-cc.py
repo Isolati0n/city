@@ -242,14 +242,17 @@ def check(houses, binds, edges=()):
     if len(edges) > MAX_EDGES:
         raise SystemExit("edge count")
     idx = {n: i for i, n in enumerate(names)}
-    # docs/options/17-edges.md: the edge term returning to the fd-need
-    # formula, invariant 3's drift class -- the same arithmetic is in
-    # blob.h's _Static_assert, nwcheck.c's own (unreachable at today's
-    # constants, see the comment there) re-check, plan.als's fdNeed and
-    # Plan.tla's FdNeed. nw-spawn holds both ends of every edge's
-    # socketpair open simultaneously during its pre-loop wiring phase,
-    # which is the peak this formula bounds.
-    need = FD_RESERVED + len(houses) * 2 + len(edges) * 2
+    # docs/OPERATOR-BRIEF.md Section 1.3, invariant 3's drift class --
+    # the same arithmetic is in blob.h's NW_BOOT_NEED macro and its
+    # _Static_assert, nwcheck.c's own (unreachable at today's constants,
+    # see the comment there) re-check, plan.als's fdNeed and Plan.tla's
+    # FdNeed. One per house (the log-pipe interleave already drops the
+    # per-house peak to one write end, matching NW_BOOT_NEED rather than
+    # the pre-interleave 2n this line used to spell), two per edge --
+    # nw-spawn holds both ends of every edge's socketpair open
+    # simultaneously during its pre-loop wiring phase, which is the peak
+    # the edge term bounds.
+    need = FD_RESERVED + len(houses) + len(edges) * 2
     if need > MAX_FDS:
         raise SystemExit("fd budget")
     for h in houses:

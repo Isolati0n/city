@@ -148,12 +148,16 @@ fact namesAreHouses { #House >= 1 }
    as being verified. Plan.tla carries the equivalent note; this file
    did not until `claims` asked why. */
 
-/* Derived budget: reserved + 2 per house + 2 per edge, all from blob.h,
-   matching NW_FD_NEED in blob.h and nwcheck.c's own re-check. The edge
-   term returned with docs/options/17-edges.md; it left with edges the
-   first time (HISTORY.md section 17) and the four/five-place drift
-   class applies to it exactly as it does to the house term beside it. */
-fun fdNeed[]: Int { plus[nwReserved[], plus[2.mul[#House], 2.mul[#Edge]]] }
+/* Derived budget: reserved + 1 per house + 2 per edge, all from blob.h,
+   matching NW_BOOT_NEED in blob.h and nwcheck.c's own re-check. Was
+   reserved + 2 per house + 2 per edge (NW_FD_NEED) until
+   docs/OPERATOR-BRIEF.md Section 1.3 replaced the pre-interleave *2
+   house coefficient with the *1 the log-pipe interleave has actually
+   produced since 2026-09-14. The edge term returned with
+   docs/options/17-edges.md; it left with edges the first time
+   (HISTORY.md section 17) and the four/five-place drift class applies
+   to it exactly as it does to the house term beside it. */
+fun fdNeed[]: Int { plus[nwReserved[], plus[#House, 2.mul[#Edge]]] }
 
 /* Same arithmetic as NW_MAX_BINDS in blob.h, MAX_BINDS in bakery/nw-cc.py
    and MaxBinds in Plan.tla. Change one, change all four.
@@ -196,16 +200,18 @@ pred sealed { lte[fdNeed[], nwMaxFds[]] and lte[bindNeed[], nwMaxBinds[]] }
    at boot. Both are BOUNDED to the scope on the command -- see the note
    at the foot of this file about what the scope is and is not. */
 assert FdArithmetic {
-  fdNeed[] = plus[nwReserved[], plus[plus[#House, #House], plus[#Edge, #Edge]]]
+  fdNeed[] = plus[nwReserved[], plus[#House, plus[#Edge, #Edge]]]
 }
 assert Sealed {
   sealed
 }
 
 /* fdNeedOracle_1_7[] and fdNeedOracle_7_1[] are GENERATED --
-   tools/gen-spec-limits.py compiles tools/fdneed-oracle.c against
-   blob.h's own NW_FD_NEED macro and runs it at these two points -- not
-   a further hand-typed copy of the multiplier. FdArithmetic above pins
+   tools/gen-spec-limits.py compiles tools/bootneed-oracle.c against
+   blob.h's own NW_BOOT_NEED macro (was NW_FD_NEED, in
+   tools/fdneed-oracle.c; both renamed together,
+   docs/OPERATOR-BRIEF.md Section 1.3) and runs it at these two points --
+   not a further hand-typed copy of the coefficients. FdArithmetic above pins
    fdNeed[]'s formula against a SECOND copy written in THIS SAME FILE,
    which catches an accidental typo but not a multiplier that drifted
    from blob.h consistently in both copies: plan.md records the
@@ -251,7 +257,8 @@ check FdNeedOracleAgrees for 8 but 12 Int
    emitted limit values, not arithmetic. **That is no longer true.**
    FdNeedOracleAgrees above compares fdNeed[] against
    fdNeedOracle_1_7[]/fdNeedOracle_7_1[], compiled from blob.h's own
-   NW_FD_NEED macro rather than retyped. Both the ORIGINAL mutation
+   fd-need macro rather than retyped (NW_FD_NEED at the time; the same
+   mechanism now runs against NW_BOOT_NEED). Both the ORIGINAL mutation
    (NW_MAX_UNITS's own `* 2` -> `* 3`, Plan.tla's FdNeed left
    unchanged) and the edge-coefficient equivalent were run against this
    mechanism: on Plan.tla's TLC side, where a scratch `* 3` for units

@@ -1,5 +1,18 @@
 # 17 — Edges: bringing back inter-house sockets
 
+**The fd-need macro this note describes below (`NW_FD_NEED`,
+`tools/fdneed-oracle.c`, a `*2` house coefficient) was renamed and its
+coefficient changed by `docs/OPERATOR-BRIEF.md` Section 1.3**: it is
+`NW_BOOT_NEED(n, e) = NW_FD_RESERVED + n + 2*e` now, in
+`tools/bootneed-oracle.c`, matching the log-pipe interleave's real
+per-house peak rather than the pre-interleave shape this note's own
+formulas below still quote. The macro/oracle/`FdNeedOracleAgrees`
+MECHANISM this note describes is otherwise unchanged; only the name and
+the house coefficient moved. The formulas and file names below are kept
+as the historical record of what this round built and verified, not
+corrected in place — `.claude/rules/plan.md`'s own "Built, for the
+fd-need formula specifically" section carries the current state.
+
 Status: **built, tested and reviewed this round** — `tcb-review`,
 `fd-auditor`, `control` and `claims` all ran against the code changes
 this note describes and found nothing outstanding as of their last
