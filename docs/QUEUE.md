@@ -12,7 +12,7 @@ session restart: read both files, nothing else, to pick back up.
 If this file disagrees with the repo, the repo wins, and whoever notices
 fixes this file.
 
-Base at last edit: `3bcb850` (origin/main).
+Base at last edit: `123ddf2` (origin/main).
 
 ## Decision authority (Section 5 of the brief)
 
@@ -114,8 +114,27 @@ Status of each, current as of this commit:
   (`CLAUDE.md`, `.claude/rules/plan.md`) plus one agent brief
   (`.claude/agents/drift.md` + its `install-agents.sh` heredoc copy) that
   still quoted the old formula after the direct-site edits landed.
-- **1e** (`bakery/`, `control` + one reviewer): baker refuses `lids=none`
-  in a city plan, with an explicit lab flag for fixtures. NOT STARTED.
+- **1e** — DONE, `123ddf2`. `bakery/nw-cc.py --city` refuses a house
+  declaring `lids=none` unless `--lab` is also passed; `--probe` is
+  unaffected (already requires an explicit `--lids`, inherently
+  synthetic). Threaded through every tool that bakes or rebakes a city
+  plan: `tools/stage-candidate.py` gained its own `--lab` flag (off by
+  default, on in the test harness's `_stage()` wrapper);
+  `tools/scale-probe.py` and `tools/fdorder-sweep.py` always pass it;
+  `tools/relaunch-house.py` passes it unconditionally (its throwaway
+  plan echoes an already-live unit's `lids=`, not a fresh deployment
+  decision); `tools/fold-house.py` and `tools/mkboot.sh` are
+  unchanged, since both rebake a real plan and should get no
+  exemption. `tests/run.py`'s ~81 `--city` bakes all pass `--lab`
+  (the suite is lab context); the one exception is the new control
+  pair in `test_baker_rejects` — the same city file refused without
+  `--lab` (naming it, leaving no blob at `--out`) and accepted with
+  it, plus a `lids=newns` bake needing no `--lab` at all.
+  `.claude/rules/plan.md` documents the rule and who gets the
+  exemption and why. `control`: no findings across five mutation
+  checks. `make checkbrief`: 5 verified, 0 contradicted, 4
+  uncheckable. `make test`: EXIT:0, PASSED WITH SKIPS (only the
+  recorded vfat-ESP skip).
 - **1f** (trusted core, `control`+`tcb-review`): control-socket hardening
   — `0700` directory, `umask(077)` socket creation, read-only `/nw/ctl`
   bind for console/launcher houses. NOT STARTED.
