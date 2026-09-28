@@ -12,7 +12,7 @@ session restart: read both files, nothing else, to pick back up.
 If this file disagrees with the repo, the repo wins, and whoever notices
 fixes this file.
 
-Base at last edit: `123ddf2` (origin/main).
+Base at last edit: `abe4059` (origin/main).
 
 ## Decision authority (Section 5 of the brief)
 
@@ -135,9 +135,37 @@ Status of each, current as of this commit:
   checks. `make checkbrief`: 5 verified, 0 contradicted, 4
   uncheckable. `make test`: EXIT:0, PASSED WITH SKIPS (only the
   recorded vfat-ESP skip).
-- **1f** (trusted core, `control`+`tcb-review`): control-socket hardening
-  — `0700` directory, `umask(077)` socket creation, read-only `/nw/ctl`
-  bind for console/launcher houses. NOT STARTED.
+- **1f** — DONE, `8a96877` (+ coverage record `abe4059`). `NW_CTL_DIR`
+  is `0700` (was `0755`), fchmod'd unconditionally every boot via an
+  `O_NOFOLLOW`-opened fd rather than `chmod(2)` by path (fd-auditor:
+  the path form follows a symlink); the control socket's own
+  `socket()`+`bind()` pair is wrapped in `umask(0077)`/restore so the
+  socket file is `0600` regardless of the inherited umask; a declared
+  `bind=` that resolves to `NW_CTL_DIR` — by `stat()` device+inode
+  identity, not string comparison — gets remounted
+  `MS_BIND|MS_REMOUNT|MS_RDONLY`. The identity check replaced an
+  initial `strcmp` version after `tcb-review` found it bypassable by
+  spelling (`bind=/nw/ctl/`, `//nw/ctl`, `/nw/./ctl` all resolve to the
+  same directory but none string-match the constant). New test
+  `test_ctl_dir_hardening` needs no lid (the restriction is mount-level,
+  not Landlock), asserts an ordinary bind stays writable while a bind
+  of `NW_CTL_DIR` is refused with `EROFS`, and that the directory is
+  `0700` after boot — deliberately widened to `0755` first, since the
+  directory persists on the machine root across the whole suite run and
+  a stale-correct value could otherwise mask a missing chmod.
+  `.claude/rules/runtime.md` and `docs/options/11` document the
+  mechanism and its relationship to that document's already-recorded
+  access-control gap (every house is uid 0, so this closes nothing
+  about what a brickless house can already reach — it only closes
+  access for a uid this design does not have yet). `control`'s own
+  review run damaged the shared stage mid-run (a variable-name mixup
+  against the Makefile, not a code defect) before completing any
+  mutation test; no findings from it to act on. `make checkbrief`: 5
+  verified, 0 contradicted, 4 uncheckable. `make test`: EXIT:0, PASSED
+  WITH SKIPS, run twice clean (one interleaved unrelated FAIL —
+  evidence-captures-death-output — did not reproduce in three isolated
+  reruns or a second full run, and coincided with the stage damage
+  rather than this diff).
 - **1g** (docs, `claims` + batched questions each): `docs/options/21`
   (output ownership; the `pid1.c` section is a brief for Grok, not an
   edit), `docs/options/23` (erofs file-backed bricks), `docs/options/20`
