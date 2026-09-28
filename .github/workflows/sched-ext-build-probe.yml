@@ -49,33 +49,47 @@ jobs:
           sudo apt-get install -y \
             clang llvm lld libelf-dev libbpf-dev zlib1g-dev libzstd-dev \
             pkg-config meson ninja-build cmake m4 build-essential \
-            libseccomp-dev libcap-dev linux-tools-common \
-            linux-tools-generic
-          # bpftool is a virtual package here (E: Package 'bpftool' has no
-          # installation candidate) -- linux-tools-generic already
-          # provides the wrapper binary. `which bpftool` alone is not
-          # enough, per harness.md's "detect the capability, not a tool
-          # that implies it": iteration 3 found the wrapper installed and
-          # on PATH but refusing to run --
-          #   WARNING: bpftool not found for kernel 6.17.0-1022
-          # -- because linux-tools-generic on this runner image resolves
-          # to tools for the image's baked-in kernel build, not the
-          # actual running azure-flavoured kernel `uname -r` reports.
-          # The warning itself names the fix: a kernel-exact or
-          # azure-flavour package. Try exact first, azure-flavour second,
-          # and PROVE it works by actually invoking it, not by checking
-          # PATH.
-          which bpftool || (echo "bpftool still missing after install" && exit 1)
-          KREL="$(uname -r)"
-          if ! bpftool version >/dev/null 2>&1; then
-            echo "bpftool wrapper present but non-functional for $KREL -- installing a matching package"
-            sudo apt-get install -y "linux-tools-${KREL}" \
-              || sudo apt-get install -y linux-tools-azure \
-              || echo "neither linux-tools-${KREL} nor linux-tools-azure had an installation candidate"
-          fi
-          bpftool version || (echo "bpftool still non-functional after installing a kernel-matched package" && exit 1)
+            libseccomp-dev libcap-dev
           clang --version
           meson --version
+
+      - name: Build a standalone bpftool from source
+        run: |
+          set -e
+          # Iteration 3 found linux-tools-generic's wrapper warns rather
+          # than working ("bpftool not found for kernel 6.17.0-1022")
+          # because it resolves tools for the runner image's baked-in
+          # kernel build, not the actual running 6.17.0-1022-azure one.
+          # Iteration 4 tried the exact fix the warning names --
+          # `linux-tools-6.17.0-1022-azure` -- and apt reported it
+          # "already the newest version", yet the wrapper was STILL
+          # non-functional afterwards: this cloud kernel flavour's
+          # linux-tools package does not actually ship a working
+          # bpftool binary (a known gap in Canonical's cloud-kernel
+          # packaging, not a step this workflow got wrong). Verified by
+          # re-running `bpftool version` after the install, not assumed.
+          #
+          # So: stop asking apt, build the standalone bpftool/bpftool
+          # repo instead (bundles its own libbpf via git submodule, so
+          # it does not depend on this runner's system libbpf-dev
+          # version at all) and put it on PATH ahead of the broken
+          # wrapper.
+          git clone --depth 1 https://github.com/libbpf/bpftool.git /tmp/bpftool-src
+          cd /tmp/bpftool-src
+          git submodule update --init --recursive
+          cd src
+          make -j"$(nproc)"
+          sudo install -m 0755 ./bpftool /usr/local/bin/bpftool
+          # Belt and braces on PATH ordering: overwrite the broken
+          # wrapper in place too, since whichever bpftool `make all`
+          # finds first must be the working one, not just the one this
+          # step's own shell resolves to.
+          if [ -e /usr/sbin/bpftool ]; then
+            sudo install -m 0755 ./bpftool /usr/sbin/bpftool
+          fi
+          hash -r
+          which bpftool
+          bpftool version || (echo "self-built bpftool still non-functional" && exit 1)
 
       - name: Clone sched-ext/scx-c-examples
         run: |
