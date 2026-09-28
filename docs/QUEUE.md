@@ -136,24 +136,63 @@ autopsy from `memory.events`/`pids.events`, delta-since-this-run,
 "unavailable" rather than a false zero. Evidence format version bump.
 All controls run in the QEMU guest. NOT STARTED.
 
-## Phase 4 — the one plan-format bump. Depends on Phase 3.
+## Phase 4 — the one plan-format bump. Depends on Phase 3. NO extra bump —
+the 2026-09-28 amendment's new fields ride inside this same one.
 
 `NW_MAGIC` bump, five-place discipline, ledger updated by tooling. Adds
 `lock`, stop-signal + grace period (unset = today's behavior),
 supervisor-death policy, per-house `nofile` (measure this init's current
 default hard limit and verify Proton/Wine esync's real requirement from
-primary sources before sizing the field). Deletes `io_rbps`, `io_wbps`,
+primary sources before sizing the field), and, per the amendment, three
+more fields each with its own applier/read-back/reject-path/test:
+**capabilities** (an allowed-powers set, applied in the child after
+mounts/cgroup placement/lids and before exec, read back from
+`/proc/<pid>/status`'s `CapBnd`/`CapEff`/`CapPrm`/`CapAmb` — design
+questions on how the plan spells the set, an unknown-to-the-kernel name,
+and drop order, answered before code; a compositor's and a Proton/Wine
+game's real needs listed from primary sources and marked unmeasured
+until run on real hardware, since QEMU has no GPU); **task cap** (a
+house's `pids.max`, needs Phase 3's cgroup placement); **OOM priority**
+(`oom_score_adj`, written before capabilities are dropped, with the
+kernel's own documented ordering effect cited and its actual ordering
+marked not deterministically testable). Deletes `io_rbps`, `io_wbps`,
 `sched_ext` (supersedes `docs/options/15`'s reject path). Every
 not-yet-applied field refused by name. Then, each with its own
 design-note-plus-`claims` step before code: stop-grace escalation;
-supervisor-death applier; run/stop profiles + minimal `nwctl`;
-permission-diff tool (baker-side); self-verifying confinement
-(full break-out set in boot tests, a cheap subset at every real start);
-Landlock port/scope fields (only what a Landlock test can falsify);
-device lid (reject path first); rootless houses (last; console and
-compositor stay real-root). `provides`/`needs` service resolution per
-`docs/options/20` — exactly one provider per service, baker prints the
-edges it adds. NOT STARTED.
+supervisor-death applier; run/stop profiles + minimal `nwctl` (now
+including `nwctl why <house>` — a plain-English reason from the existing
+STATUS reply, the last crash record and boot refusals, no new protocol —
+and `nwctl times`, showing the four monotonic timestamps per start
+[fork/mounts-done/lids-applied/exec] nw-sup would record, measurement
+only, never feeding a decision); permission-diff tool (baker-side;
+reports widenings separately, and gains an audit "exposure report" mode
+per the amendment — capabilities/lids/writable binds/devices/edges/
+network/uid per house, each graded by a documented deterministic
+formula a test pins, stated plainly as a report and not a proof);
+self-verifying confinement (full break-out set in boot tests, a cheap
+subset at every real start); Landlock port/scope fields (only what a
+Landlock test can falsify); device lid (reject path first); rootless
+houses (last; console and compositor stay real-root). `provides`/`needs`
+service resolution per `docs/options/20` — exactly one provider per
+service, baker prints the edges it adds. NOT STARTED.
+
+**Amendment items outside the bump itself, tracked here so they don't
+get lost in Phase 4's list:**
+- `docs/options/23` (erofs file-backed bricks) gains a **verified
+  bricks** section: fs-verity on the image files (not dm-verity, which
+  needs a block device bricks don't have), whether file-backed erofs
+  reads through it, how its digest relates to the sha256 file name,
+  measured on the target kernel, unmeasured parts stated plainly. NOT
+  STARTED — folds into 1g's existing `docs/options/23` work.
+- `docs/options/24` — **boot counting**, a NEW design note, code
+  explicitly out of scope until operator sign-off. What counts as a
+  successful boot (city open vs. compositor exec vs. an operator
+  `nwctl bless`, each one's weakness stated); who writes the mark and
+  what, citing systemd-boot's own primary docs on its automatic
+  boot-assessment counter; the exact exception to "nothing on the boot
+  partition is written at runtime" this requires, and why it doesn't
+  violate commitment 4; what a rollback does; how this is tested given
+  QEMU boots directly and not through systemd-boot. NOT STARTED.
 
 ## Section 4 — scx side thread. Bounded: 3 push iterations, CI+docs only.
 
