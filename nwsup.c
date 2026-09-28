@@ -757,6 +757,47 @@ static int stop_requested;
 static int ptrace_attached;
 static int house_frozen;
 
+/* fd-auditor's MEDIUM finding on #16, closed: FREEZE was reachable the
+ * instant fork() returned, before the child had applied any lid or
+ * reached execv() -- an operator FREEZE could in principle seize the
+ * forked copy of nw-sup itself mid-lid_brick(), holding a contended
+ * loop device open for as long as it stayed frozen. Closed with an
+ * exec fence: a CLOEXEC pipe created before every fork, write end held
+ * by the child, read end held by the parent. The write end survives
+ * fork and every lid application (none of them exec anything), and is
+ * closed automatically by the kernel the moment the child's own
+ * execv() succeeds -- CLOEXEC's whole purpose. The parent's read()
+ * returns 0 (EOF) at exactly that instant and not before; a failed
+ * exec's die() closes it too, via ordinary process exit, which is
+ * fine -- that generation is dying either way and FREEZE has nothing
+ * left to attach to. exec_fence_rd is -1 once confirmed (closed
+ * promptly rather than held open for the rest of the generation) or
+ * once no pipe exists yet to check; child_execed is the sticky
+ * confirmation, reset to 0 at every fresh fork alongside the two
+ * flags above. */
+static int exec_fence_rd = -1;
+static int child_execed;
+
+/* Non-blocking: a pipe with data never written on it either reads EOF
+ * (write end closed -- execv succeeded, or the child exited without
+ * one) or fails with EAGAIN (write end still open -- still mid-lid-setup).
+ * Safe to call repeatedly; once child_execed is 1 this is a no-op. */
+static void check_exec_fence(void)
+{
+    if (child_execed || exec_fence_rd < 0)
+        return;
+    char buf[1];
+    ssize_t n = read(exec_fence_rd, buf, sizeof buf);
+    if (n == 0) {
+        child_execed = 1;
+        close(exec_fence_rd);
+        exec_fence_rd = -1;
+    }
+    /* n < 0 (EAGAIN): still pre-exec, nothing to update. n > 0 should
+     * never happen -- nothing ever writes to this pipe -- and is
+     * deliberately left unhandled rather than guessed at. */
+}
+
 static void ctl_reply(int c, const char *s)
 {
     ssize_t n = write(c, s, strlen(s));
@@ -863,8 +904,11 @@ static void handle_ctl_live(int listen_fd, pid_t live)
         }
         ctl_reply(c, "OK\n");
     } else if (n == 7 && memcmp(buf, "FREEZE\n", 7) == 0) {
+        check_exec_fence();
         if (live <= 0)
             ctl_reply(c, "ERR not running\n");
+        else if (!child_execed)
+            ctl_reply(c, "ERR not execed\n");
         else if (do_freeze(live) < 0)
             ctl_reply(c, "ERR freeze failed\n");
         else
@@ -1397,11 +1441,77 @@ int main(int argc, char **argv)
          * which is one generation at a time, not literally forever. */
         ptrace_attached = 0;
         house_frozen = 0;
+        /* The exec fence: see check_exec_fence()'s own comment. A fresh
+         * pipe per generation, same reasoning as the two resets above --
+         * the previous generation's confirmation says nothing about
+         * this one. exec_fence_rd is already -1 if the prior generation
+         * confirmed (closed promptly by check_exec_fence()); closing it
+         * again here covers the one case where FREEZE was never once
+         * requested against the prior generation, so nothing ever read
+         * it to EOF and closed it. */
+        if (exec_fence_rd >= 0) close(exec_fence_rd);
+        child_execed = 0;
+        int ef[2];
+        if (pipe2(ef, O_CLOEXEC) < 0) die("exec fence pipe");
         pid_t p = fork();
         if (p < 0) die("fork house");
-        if (p > 0)
+        if (p > 0) {
             child = p;
+            close(ef[1]);
+            if (fcntl(ef[0], F_SETFL, O_NONBLOCK) < 0) die("exec fence nonblock");
+            exec_fence_rd = ef[0];
+        }
         if (p == 0) {
+            close(ef[0]);
+            /* ef[1] (O_CLOEXEC) is left open here, deliberately: it
+             * survives every lid below and is closed by the kernel the
+             * instant execv() below succeeds, which is the whole fence.
+             * Nothing in this child ever writes to it. */
+
+            /* A genuinely pre-existing bug, found by this round's own
+             * deterministic pre-exec-window test, not introduced by it:
+             * fork() copies signal DISPOSITION, so this child inherits
+             * nw-sup's own on_term handler for SIGTERM/SIGINT -- installed
+             * once in main(), long before any of this generation's code
+             * runs. A STOP (or shutdown TERM) arriving before execv()
+             * below does not kill this process at all; it runs on_term()
+             * -- which sets `stopping` and forwards to whatever stale
+             * pid `child` held at this fork's own start -- and the
+             * pre-exec copy simply continues running. execv() itself
+             * would reset this on success (exec resets any installed
+             * handler to default), so the gap is exactly the fork-to-exec
+             * window -- normally microseconds and never hit by chance,
+             * which is why nothing found it before a shim existed that
+             * could land inside it deterministically. Reset explicitly
+             * here rather than relying on execv() to clean up after
+             * itself, since STOP must still work during this same
+             * window the exec fence introduces a name for. */
+            signal(SIGTERM, SIG_DFL);
+            signal(SIGINT, SIG_DFL);
+
+            /* A second, independent leak `tcb-review` found while auditing
+             * the above: the signal MASK, not just disposition, also
+             * survives fork -- and exec resets neither one's blocked-ness.
+             * D11's own mask clear (top of main(), `empty` declared there)
+             * runs exactly ONCE, before this restart loop starts. It is
+             * not what keeps later generations clean. What actually does,
+             * silently, every generation after the first: wait_house()
+             * calls sigprocmask(SIG_BLOCK, &sc, NULL) to arm its SIGCHLD
+             * signalfd, and never unblocks it afterward -- so by the time
+             * THIS fork happens, nw-sup's own mask already has SIGCHLD
+             * blocked, and this child inherits that. Uncaught, it rides
+             * straight through execv() into the house's own image: any
+             * longrun house that forks and waits on its own children,
+             * expecting default SIGCHLD delivery, silently stops being
+             * able to after this unit's first restart -- for the rest of
+             * the supervisor's life, with nothing anywhere reporting it.
+             * `empty` is the same all-zero set D11 built above; reusing
+             * it here resets every blocked signal in one call rather than
+             * naming SIGCHLD specifically, so the same fix also covers
+             * anything else a future wait_house() change blocks and
+             * forgets to unblock. */
+            sigprocmask(SIG_SETMASK, &empty, NULL);
+
             if (lids & NW_LID_NEWNET) lid_netns();
             if (lids & NW_LID_NEWNS) lid_newns();
             /* BEFORE lid_brick(), not after: tcb-review's HIGH finding.

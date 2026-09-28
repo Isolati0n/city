@@ -711,6 +711,22 @@ def _pid_state(pid):
     return None
 
 
+def _sigblk(pid):
+    """The blocked-signal mask from /proc/pid/status's SigBlk line, as
+    an int (the field is hex, no '0x' prefix) -- or None if the pid is
+    gone. Bit (N-1) is signal N, so SIGCHLD (17) is bit 16, mask
+    0x10000; this is what a signal MASK leak across fork/exec looks
+    like from outside, distinct from signal disposition (which
+    /proc does not expose per-signal at all)."""
+    try:
+        for line in open(f"/proc/{pid}/status"):
+            if line.startswith("SigBlk:"):
+                return int(line.split()[1], 16)
+    except (FileNotFoundError, ProcessLookupError):
+        return None
+    return None
+
+
 def _find_by_comm(root_pid, name):
     """The first descendant of `root_pid` whose /proc comm is exactly
     `name`, or None. comm is the exec'd binary's own basename (up to
@@ -4817,6 +4833,288 @@ def test_ctl_freeze_not_running_while_stopped():
     proc.kill()
     proc.communicate(timeout=2)
     print("ok ctl-freeze-not-running-while-stopped")
+
+
+def test_ctl_freeze_refused_before_execv():
+    """fd-auditor's MEDIUM finding on #16, closed: FREEZE arriving while
+    the forked child has not yet reached execv() -- still mid-lid-setup,
+    a different and more privileged thing than the house itself -- is
+    refused by name ("ERR not execed\\n") and does not seize anything.
+
+    The window is forced deterministically via tests/delay_exec.so.c,
+    which delays the child's own execv() call, rather than relying on
+    a race that usually resolves one way. This test drives directly
+    into the window and confirms the refusal; the paired positive
+    (FREEZE after execv works exactly as before) is
+    test_ctl_freeze_after_execv_still_works below -- an unpaired
+    refusal here would be satisfied by FREEZE being broken outright,
+    not specifically by the exec fence."""
+    os.makedirs("/nw/ctl", exist_ok=True)
+    block_src = os.path.join(ROOT, "tests", "delay_exec.so.c")
+    block_so = f"{WORK}/delay_exec.so"
+    c = subprocess.run(
+        ["gcc", "-shared", "-fPIC", "-O2", "-o", block_so, block_src, "-ldl"],
+        capture_output=True, text=True)
+    expect(c.returncode == 0, f"delay_exec.so\n{c.stderr}")
+    env = os.environ.copy()
+    env["NW_KIND"] = "1"
+    env["NW_BUDGET"] = "3"
+    env["NW_LIDS"] = "0"
+    env["LD_PRELOAD"] = block_so
+    env["NW_TEST_EXEC_DELAY_MS"] = "600"
+    log = f"{WORK}/ctlfrzpreexec.log"
+    lg = open(log, "w")
+    proc = subprocess.Popen(
+        [f"{BIN}/nw-sup", _sleeper("ctlfrzpreexec"), "ctlfrzpreexec"],
+        stdout=lg, stderr=lg, env=env)
+    time.sleep(0.1)
+    kids = _descendants(proc.pid)
+    expect(len(kids) == 1, f"expected exactly one pre-exec child, got {kids}")
+    pre_exec_pid = kids[0]
+    expect(_comm(pre_exec_pid) != "sleep",
+           "the child already looks exec'd -- this run did not land in "
+           "the window, so the refusal below would prove nothing")
+
+    r = _ctl("ctlfrzpreexec", b"FREEZE\n")
+    expect(r == "ERR not execed\n",
+           f"FREEZE inside the pre-exec window was {r!r}, not the named refusal")
+    expect(_pid_state(pre_exec_pid) != "t",
+           "the pre-exec child is in ptrace-stop -- the refusal did not "
+           "actually stop do_freeze() from seizing it")
+
+    time.sleep(0.7)  # past NW_TEST_EXEC_DELAY_MS
+    house_pid = _find_by_comm(proc.pid, "sleep")
+    expect(house_pid is not None,
+           "the house never reached exec after the delay elapsed")
+    expect(_pid_state(house_pid) in ("S", "R"),
+           f"the house is not running normally after the delayed exec: "
+           f"{_pid_state(house_pid)!r}")
+    os.kill(house_pid, 9)
+    proc.kill()
+    proc.communicate(timeout=2)
+    lg.close()
+    out = open(log).read()
+    expect("delaying execv" in out, f"the shim never fired\n{out}")
+    print("ok ctl-freeze-refused-before-execv")
+
+
+def test_ctl_freeze_after_execv_still_works():
+    """The paired positive for test_ctl_freeze_refused_before_execv:
+    under the identical delay shim, FREEZE sent AFTER the delay has
+    elapsed (execv long since completed) works exactly as it did before
+    the exec fence existed. Same shim as the refusal test, so this is
+    not merely "FREEZE works when nothing delays exec" -- it is "FREEZE
+    works once the fence has genuinely cleared", the direction the
+    refusal test's control does not reach."""
+    os.makedirs("/nw/ctl", exist_ok=True)
+    block_src = os.path.join(ROOT, "tests", "delay_exec.so.c")
+    block_so = f"{WORK}/delay_exec2.so"
+    c = subprocess.run(
+        ["gcc", "-shared", "-fPIC", "-O2", "-o", block_so, block_src, "-ldl"],
+        capture_output=True, text=True)
+    expect(c.returncode == 0, f"delay_exec.so\n{c.stderr}")
+    env = os.environ.copy()
+    env["NW_KIND"] = "1"
+    env["NW_BUDGET"] = "3"
+    env["NW_LIDS"] = "0"
+    env["LD_PRELOAD"] = block_so
+    env["NW_TEST_EXEC_DELAY_MS"] = "200"
+    proc = subprocess.Popen(
+        [f"{BIN}/nw-sup", _sleeper("ctlfrzpostexec"), "ctlfrzpostexec"],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
+    time.sleep(0.5)  # past NW_TEST_EXEC_DELAY_MS
+    house_pid = _find_by_comm(proc.pid, "sleep")
+    expect(house_pid is not None, "sleeper never reached exec")
+
+    r = _ctl("ctlfrzpostexec", b"FREEZE\n")
+    expect(r == "OK\n", f"FREEZE after execv was {r!r}, not OK")
+    time.sleep(0.2)
+    expect(_pid_state(house_pid) == "t", "FREEZE after execv did not stop it")
+    r2 = _ctl("ctlfrzpostexec", b"CONT\n")
+    expect(r2 == "OK\n", f"CONT not OK: {r2!r}")
+    time.sleep(0.2)
+    expect(_pid_state(house_pid) in ("S", "R"),
+           f"CONT did not resume it: {_pid_state(house_pid)!r}")
+    os.kill(house_pid, 9)
+    proc.kill()
+    proc.communicate(timeout=2)
+    print("ok ctl-freeze-after-execv-still-works")
+
+
+def test_ctl_start_stop_unaffected_by_exec_fence():
+    """START and STOP do not consult the exec fence at all -- STOP must
+    still kill a pre-exec child (it already could, via plain SIGTERM,
+    before any of this existed) and a subsequent START must still
+    relaunch normally. Uses the same delay shim so the STOP genuinely
+    lands inside the pre-exec window rather than by chance."""
+    os.makedirs("/nw/ctl", exist_ok=True)
+    block_src = os.path.join(ROOT, "tests", "delay_exec.so.c")
+    block_so = f"{WORK}/delay_exec3.so"
+    c = subprocess.run(
+        ["gcc", "-shared", "-fPIC", "-O2", "-o", block_so, block_src, "-ldl"],
+        capture_output=True, text=True)
+    expect(c.returncode == 0, f"delay_exec.so\n{c.stderr}")
+    env = os.environ.copy()
+    env["NW_KIND"] = "1"
+    env["NW_BUDGET"] = "3"
+    env["NW_LIDS"] = "0"
+    env["LD_PRELOAD"] = block_so
+    env["NW_TEST_EXEC_DELAY_MS"] = "600"
+    proc = subprocess.Popen(
+        [f"{BIN}/nw-sup", _sleeper("ctlfrzstopfence"), "ctlfrzstopfence"],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
+    time.sleep(0.1)
+    kids = _descendants(proc.pid)
+    expect(len(kids) == 1, f"expected exactly one pre-exec child, got {kids}")
+    pre_exec_pid = kids[0]
+    expect(_comm(pre_exec_pid) != "sleep", "did not land in the pre-exec window")
+
+    r = _ctl("ctlfrzstopfence", b"STOP\n")
+    expect(r == "OK\n", f"STOP inside the pre-exec window was {r!r}, not OK")
+    time.sleep(0.2)
+    expect(_comm(pre_exec_pid) is None,
+           "STOP did not kill the pre-exec child")
+
+    r2 = _ctl("ctlfrzstopfence", b"START\n")
+    expect(r2 == "OK\n", f"START after that STOP was {r2!r}, not OK")
+    time.sleep(0.8)  # past NW_TEST_EXEC_DELAY_MS again, for the new generation
+    relaunched = _find_by_comm(proc.pid, "sleep")
+    expect(relaunched is not None, "START never relaunched a working house")
+    os.kill(relaunched, 9)
+    proc.kill()
+    proc.communicate(timeout=2)
+    print("ok ctl-start-stop-unaffected-by-exec-fence")
+
+
+def test_ctl_freeze_refused_before_execv_second_generation():
+    """`control`'s coverage-gap finding on #16's exec fence: neither
+    test_ctl_freeze_refused_before_execv (generation one only, where
+    child_execed's implicit initial value of 0 is correct whether or
+    not the per-generation reset runs -- the mutation is invisible by
+    construction) nor test_ctl_start_stop_unaffected_by_exec_fence
+    (forces generation two but never sends FREEZE there) nor the
+    pre-existing test_ctl_freeze_reattaches_after_restart (sends FREEZE
+    against generation two but with no delay shim, so real exec has
+    already completed and a stale child_execed=1 from generation one
+    is indistinguishable from a correctly-confirmed one) exercises the
+    combination that actually needs the reset: FREEZE landing inside a
+    SECOND generation's own pre-exec window. Removing `child_execed = 0`
+    from the per-fork reset passed the entire suite, including all
+    three tests above, which is exactly this shape's own "green does
+    not mean covered."
+
+    nw-sup's own environment (LD_PRELOAD, NW_TEST_EXEC_DELAY_MS) is set
+    once at process launch and inherited by every generation it forks,
+    so the delay shim applies to generation two exactly as it did to
+    generation one -- STOP+START (the idiom other tests here already
+    use for a genuinely new pid) forces a second generation that also
+    delays its own execv()."""
+    os.makedirs("/nw/ctl", exist_ok=True)
+    block_src = os.path.join(ROOT, "tests", "delay_exec.so.c")
+    block_so = f"{WORK}/delay_exec4.so"
+    c = subprocess.run(
+        ["gcc", "-shared", "-fPIC", "-O2", "-o", block_so, block_src, "-ldl"],
+        capture_output=True, text=True)
+    expect(c.returncode == 0, f"delay_exec.so\n{c.stderr}")
+    env = os.environ.copy()
+    env["NW_KIND"] = "1"
+    env["NW_BUDGET"] = "3"
+    env["NW_LIDS"] = "0"
+    env["LD_PRELOAD"] = block_so
+    env["NW_TEST_EXEC_DELAY_MS"] = "600"
+    proc = subprocess.Popen(
+        [f"{BIN}/nw-sup", _sleeper("ctlfrzgen2"), "ctlfrzgen2"],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
+    time.sleep(0.7)  # past the first generation's own delayed exec
+    gen1_pid = _find_by_comm(proc.pid, "sleep")
+    expect(gen1_pid is not None, "first generation never reached exec")
+
+    r = _ctl("ctlfrzgen2", b"FREEZE\n")
+    expect(r == "OK\n", f"FREEZE against the confirmed first generation was {r!r}")
+    r2 = _ctl("ctlfrzgen2", b"CONT\n")
+    expect(r2 == "OK\n", f"CONT was {r2!r}")
+
+    r3 = _ctl("ctlfrzgen2", b"STOP\n")
+    expect(r3 == "OK\n", f"STOP was {r3!r}, not OK")
+    time.sleep(0.2)
+    expect(_comm(gen1_pid) is None, "STOP did not kill the first generation")
+
+    r4 = _ctl("ctlfrzgen2", b"START\n")
+    expect(r4 == "OK\n", f"START was {r4!r}, not OK")
+    time.sleep(0.1)
+    kids = _descendants(proc.pid)
+    expect(len(kids) == 1, f"expected exactly one second-generation pre-exec child, got {kids}")
+    gen2_pre_exec_pid = kids[0]
+    expect(_comm(gen2_pre_exec_pid) != "sleep",
+           "the second generation already looks exec'd -- this run did not "
+           "land in its window, so the refusal below would prove nothing")
+
+    r5 = _ctl("ctlfrzgen2", b"FREEZE\n")
+    expect(r5 == "ERR not execed\n",
+           f"FREEZE inside the SECOND generation's pre-exec window was "
+           f"{r5!r}, not the named refusal -- a stale child_execed=1 "
+           f"carried over from the confirmed first generation")
+    expect(_pid_state(gen2_pre_exec_pid) != "t",
+           "the second generation's pre-exec child is in ptrace-stop -- "
+           "the refusal did not actually stop do_freeze() from seizing it")
+
+    time.sleep(0.7)
+    gen2_pid = _find_by_comm(proc.pid, "sleep")
+    expect(gen2_pid is not None, "the second generation never reached real exec")
+    os.kill(gen2_pid, 9)
+    proc.kill()
+    proc.communicate(timeout=2)
+    print("ok ctl-freeze-refused-before-execv-second-generation")
+
+
+def test_ctl_exec_resets_sigchld_mask():
+    """tcb-review's finding while auditing the exec fence above: fork()
+    copies signal MASK too, not just disposition, and D11's own mask
+    clear (top of main()) runs exactly once, before the restart loop
+    starts -- it is NOT what keeps later generations clean. wait_house()
+    blocks SIGCHLD to arm its own signalfd and never unblocks it, so by
+    the second fork nw-sup's own process already carries SIGCHLD
+    blocked, and an unguarded child inherits that straight through
+    execv() into the house's own image. Confirmed via /proc/<pid>/status's
+    SigBlk on the actual exec'd process of a SECOND generation (forced
+    via STOP+START, the idiom other tests here already use for a
+    genuinely new pid) -- generation one is clean regardless, since
+    D11's one-time reset covers it, so this test only means something
+    at generation two or later."""
+    os.makedirs("/nw/ctl", exist_ok=True)
+    env = os.environ.copy()
+    env["NW_KIND"] = "1"
+    env["NW_BUDGET"] = "3"
+    env["NW_LIDS"] = "0"
+    proc = subprocess.Popen(
+        [f"{BIN}/nw-sup", _sleeper("ctlsigblk"), "ctlsigblk"],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
+    time.sleep(0.3)
+    gen1_pid = _find_by_comm(proc.pid, "sleep")
+    expect(gen1_pid is not None, "first generation never reached exec")
+
+    r = _ctl("ctlsigblk", b"STOP\n")
+    expect(r == "OK\n", f"STOP was {r!r}, not OK")
+    time.sleep(0.2)
+    expect(_comm(gen1_pid) is None, "STOP did not kill the first generation")
+
+    r2 = _ctl("ctlsigblk", b"START\n")
+    expect(r2 == "OK\n", f"START was {r2!r}, not OK")
+    time.sleep(0.3)
+    gen2_pid = _find_by_comm(proc.pid, "sleep")
+    expect(gen2_pid is not None, "second generation never reached exec")
+    expect(gen2_pid != gen1_pid, "START did not produce a genuinely new pid")
+
+    blk = _sigblk(gen2_pid)
+    expect(blk is not None, "second generation's SigBlk was unreadable")
+    expect(blk & 0x10000 == 0,
+           f"second generation's house inherited SIGCHLD blocked: "
+           f"SigBlk={blk:016x}")
+
+    os.kill(gen2_pid, 9)
+    proc.kill()
+    proc.communicate(timeout=2)
+    print("ok ctl-exec-resets-sigchld-mask")
 
 
 def test_ctl_start_relaunch_and_spent():
@@ -11625,6 +11923,11 @@ def main():
         test_ctl_freeze_races_natural_exit,
         test_ctl_freeze_not_running_while_stopped,
         test_ctl_freeze_cont_then_stop_actually_kills,
+        test_ctl_freeze_refused_before_execv,
+        test_ctl_freeze_after_execv_still_works,
+        test_ctl_start_stop_unaffected_by_exec_fence,
+        test_ctl_freeze_refused_before_execv_second_generation,
+        test_ctl_exec_resets_sigchld_mask,
         test_ctl_start_relaunch_and_spent,
         test_ctl_malformed_refused, test_ctl_socket_and_death_together,
         test_ctl_pidfd_fallback_with_socket,

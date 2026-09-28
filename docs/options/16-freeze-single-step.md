@@ -1,11 +1,16 @@
 # 16 — Operator-controlled freeze / single-step
 
-Status: **built and reviewed this round.** Freeze and continue
-(`FREEZE`/`CONT`) are real, syscall-level verbs on the existing per-unit
-control socket, wired into `nw-sup` alongside `START`/`STOP`. Single-step
-(`STEP`) is named and scoped but **deferred as a fast-follow**, per
-instruction — this round proves freeze-and-inspect works at all before
-adding instruction-level control on top of it.
+Status: **built and reviewed across two rounds; the fd-auditor MEDIUM
+is now closed.** Freeze and continue (`FREEZE`/`CONT`) are real,
+syscall-level verbs on the existing per-unit control socket, wired
+into `nw-sup` alongside `START`/`STOP`. Single-step (`STEP`) is named
+and scoped but **deferred as a fast-follow**, per instruction — this
+round proves freeze-and-inspect works at all before adding
+instruction-level control on top of it. A follow-up round closed the
+one open finding from the first: `FREEZE` can no longer race a house's
+own lid setup before its `execv()` — see "Review findings" below for
+the exec-fence fix and the independently-discovered signal-disposition
+bug it also closed.
 
 **`wait_house()` needed more than the one fix this note originally
 scoped.** Reviewers found the first version treated every stop alike
@@ -487,26 +492,151 @@ every existing `pidfd`-fallback and `signalfd`-fallback test (which
 force one tier or the other via the same `LD_PRELOAD` shims as before)
 still passes unchanged, alongside the newly-passing default-tier case.
 
-**`fd-auditor` — MEDIUM, not fixed this round, recorded as a known
-limitation rather than silently left.** `child = p` is set the instant
-`fork()` returns, before the child has applied any lid or reached
-`execv()`, and `handle_ctl_live()`/`do_freeze()` are reachable the
-moment the ctl socket exists — there is no gate on whether the target
-pid has finished lid setup. An operator issuing `FREEZE` immediately
-after observing a restart could in principle seize the forked copy of
-`nw-sup` mid-`lid_brick()` (which may hold a loop device attached via
-the already-contested `LOOP_CTL_GET_FREE` retry `runtime.md`
-documents) rather than the house itself, and hold that scarce resource
-open for as long as it stays frozen — operator-controlled and
-potentially unbounded, unlike the transient contention `runtime.md`
-already documents resolving via the restart budget. **Not fixed this
-round**: closing it properly needs a way for `nw-sup` to signal "lids
-applied, about to exec" back to the ctl-socket-servicing loop before a
-`FREEZE` is allowed to attach, which is new synchronization machinery
-beyond this round's stated scope (freeze-and-inspect proven correct at
-all, single-step as the deliberate fast-follow). Recorded here, in the
-same file the next person building on this will read, rather than
-being a gap `claims` has to rediscover.
+**`fd-auditor` — MEDIUM, CLOSED in a follow-up round.** `child = p` is
+set the instant `fork()` returns, before the child has applied any lid
+or reached `execv()`, and `handle_ctl_live()`/`do_freeze()` were
+reachable the moment the ctl socket existed — there was no gate on
+whether the target pid had finished lid setup. An operator issuing
+`FREEZE` immediately after observing a restart could in principle have
+seized the forked copy of `nw-sup` mid-`lid_brick()` (which may hold a
+loop device attached via the already-contested `LOOP_CTL_GET_FREE`
+retry `runtime.md` documents) rather than the house itself, and held
+that scarce resource open for as long as it stayed frozen —
+operator-controlled and potentially unbounded, unlike the transient
+contention `runtime.md` already documents resolving via the restart
+budget.
+
+**The fix: a CLOEXEC exec-fence, one pipe per supervisor generation.**
+Right before `fork()`, `nw-sup` creates `pipe2(ef, O_CLOEXEC)`. The
+parent closes `ef[1]` immediately and keeps `ef[0]` (made
+`O_NONBLOCK`) as the static `exec_fence_rd`; the child closes `ef[0]`
+and keeps `ef[1]` open through every lid application. CLOEXEC's
+defining behaviour closes the child's `ef[1]` the instant its
+`execv()` succeeds — no explicit signal, no new synchronization
+primitive, nothing beyond what the kernel already does to every
+CLOEXEC descriptor across exec. The parent's `check_exec_fence()`
+reads `exec_fence_rd`; `read()` returning `0` (EOF) means the child's
+`ef[1]` is gone, which can only happen post-exec, so `child_execed` is
+set and the fd is closed and reset to `-1` promptly (mirroring the
+existing `ptrace_attached`/`house_frozen` per-generation reset this
+same file documents above). `FREEZE` now calls `check_exec_fence()`
+first and answers `"ERR not execed\n"` — a named, distinguishable
+refusal rather than proceeding into `do_freeze()` at an undefined
+point in the child's own startup — when `child_execed` is still 0.
+This adds exactly one descriptor to `nw-sup`'s own table per
+supervisor generation, reviewed by `fd-auditor` alongside the fix
+itself.
+
+**A second, independently-discovered bug closed in the same change,
+not introduced by it.** Forcing the fork-to-execv window
+deterministically (an `LD_PRELOAD` shim, `tests/delay_exec.so.c`,
+delaying `execv(2)` by a configurable interval) and then asserting
+that `STOP` still kills a pre-exec child — a premise the fix's own
+control needed to hold — found that it did not: `fork()` copies
+signal *disposition*, so every forked child inherited `nw-sup`'s own
+installed `SIGTERM`/`SIGINT` handler (`on_term`) until its own
+`execv()` reset handled signals back to `SIG_DFL`. A `SIGTERM` sent to
+a pre-exec child therefore invoked the *parent's* handler code — a
+no-op from the killed target's own perspective — instead of
+terminating it. Confirmed pre-existing via `git show HEAD~2:nwsup.c`
+(predates this round entirely), not something the exec-fence work
+introduced; only this round's more rigorous testing exposed it.
+**Fixed** by resetting `SIGTERM`/`SIGINT` to `SIG_DFL` at the very
+start of the child fork branch, before any lid application.
+
+**A third bug, in the signal *mask* rather than disposition, found by
+`tcb-review` auditing the second — and this file's own first telling
+of it was wrong.** It said the mask was "the pre-existing D11 fix
+already clears", which is true of generation one and false of every
+generation after it: D11's clear (`sigprocmask(SIG_SETMASK, &empty,
+...)`, top of `main()`) runs exactly once, before the restart loop
+starts. What actually determines later generations' mask is
+`wait_house()`, which blocks `SIGCHLD` (`sigprocmask(SIG_BLOCK, &sc,
+...)`) to arm its own signalfd every time it is called, and never
+unblocks it — so by the second fork, `nw-sup`'s own process already
+has `SIGCHLD` blocked, and the new child inherits that. Uncaught, it
+rides through `execv()` into the house's own image: measured via
+`/proc/<pid>/status`'s `SigBlk`, the exec'd process itself (not merely
+nw-sup's transient pre-exec copy) carried `SIGCHLD` blocked from its
+second restart onward. Any longrun house that forks its own children
+and expects default `SIGCHLD` delivery silently stops reaping them
+after this unit's first restart, for the rest of the supervisor's
+life, with nothing anywhere reporting it. **Fixed** by resetting the
+full mask to empty in the same child branch, alongside the
+`SIG_DFL` resets.
+
+Controls, red then green: `test_ctl_freeze_refused_before_execv` sends
+`FREEZE` inside the shim-forced pre-exec window and requires exactly
+`"ERR not execed\n"`, positively confirming via `/proc/<pid>/comm` on
+the pre-exec child (not yet `sleep`, the shim's underlying binary)
+that the window was genuinely hit rather than merely timed;
+`test_ctl_freeze_after_execv_still_works` confirms the unchanged
+post-exec path; `test_ctl_start_stop_unaffected_by_exec_fence` pins
+the SIGTERM/SIGINT-disposition fix, confirming `STOP` still kills a
+pre-exec child. Mutation: removing the `!child_execed` gate turns the
+first red (`FAIL: FREEZE inside the pre-exec window was 'OK\n', not
+the named refusal`); removing the signal reset turns the third red
+(`FAIL: STOP did not kill the pre-exec child`) — both reproduced
+directly, not assumed. `test_ctl_exec_resets_sigchld_mask` pins the
+third fix the same way: it forces a house into the pre-exec window,
+reads `/proc/<pid>/status`'s `SigBlk` directly, and requires it `0`
+rather than carrying `SIGCHLD`'s bit; removing the mask reset turns it
+red, reproducing exactly the `tcb-review` finding above.
+
+**`control` — a fourth coverage gap, found and closed.** None of the
+three tests above exercises the per-generation `child_execed = 0`
+reset itself: the two FREEZE tests only ever run against a fresh
+`nw-sup`'s first fork, where the flag's implicit initial value (`0`)
+is correct whether or not the reset line runs, and the STOP/START test
+forces a second generation but never sends `FREEZE` into it.
+Confirmed by `control` as a real gap, not a hypothetical one: removing
+`child_execed = 0` from the reset passed the *entire* suite, all three
+tests included, exactly this project's own "green does not mean
+covered" shape.
+`test_ctl_freeze_refused_before_execv_second_generation` closes it —
+STOP+START forces a genuinely new generation (nw-sup's own
+`LD_PRELOAD`/delay-shim environment is set once at process launch and
+inherited by every fork it makes, so the shim delays the second
+generation's `execv()` exactly as it did the first's), and `FREEZE`
+sent into *that* generation's pre-exec window must still see the
+named refusal rather than a stale, carried-over confirmation from the
+first. Mutation: removing the reset turns it red — `FAIL: FREEZE
+inside the SECOND generation's pre-exec window was 'OK\n', not the
+named refusal -- a stale child_execed=1 carried over from the
+confirmed first generation` — reproduced directly.
+
+**`fd-auditor` — clean.** Live fd census across 35+ restart
+generations (`/proc/<nw-sup-pid>/fd`, sampled every 150ms while
+forcing rapid restarts) showed the table flat at exactly the standard
+kit plus the one persistent fence read end, no growth, no leak in
+either direction; a `grep` for `dup`/`dup2` in `nwsup.c` and `lids.c`
+returns nothing, so nothing between `fork()` and `execv()` can defeat
+the pipe's `CLOEXEC`-ness; the mechanism uses only kernel-assigned fd
+numbers, no literal. One `HYPOTHESIS`, not exercised: a failing
+`fcntl(F_SETFL, O_NONBLOCK)` in the parent (immediately after a
+successful `pipe2()`, about as close to unfailable as a syscall gets)
+would `die()` the supervisor and orphan the pre-exec child — not an fd
+leak, and PID 1's ordinary orphan reaping still collects it, so left
+as a documented theoretical edge rather than a fix.
+
+**`tcb-review` — one further finding, left as a documented, benign
+limitation rather than fixed.** `check_exec_fence()`'s EOF test cannot
+distinguish "this generation's `execv()` succeeded" from "this
+generation died before ever reaching it" — both close the write end
+via ordinary process exit, and the function's own comment already
+says so ("execv succeeded, or the child exited without one"). The
+practical consequence is narrow and does not reopen anything this
+mechanism closes: `do_freeze()`'s `PTRACE_SEIZE` fails with `ESRCH`
+against an already-dead pid, so a `FREEZE` racing a die-before-exec
+death can only ever read back `"ERR freeze failed"` instead of the
+more accurate `"ERR not execed"` — never a false `"OK\n"`, measured by
+`tcb-review` hammering the race for ~35,000 attempts and observing
+exactly two such replies, neither a seize. Not fixed, because the
+correct fix (confirming liveness independently of the pipe) would mean
+a second `waitpid()` call site racing the supervisor's own reap loop
+in `wait_house()` — a materially larger and riskier change than the
+diagnostic-accuracy gap it would close. Left named here rather than
+silently accepted.
 
 **`control` — two coverage gaps, both closed.** First,
 `test_ctl_freeze_races_natural_exit`'s own assertions (any `OK` or any
