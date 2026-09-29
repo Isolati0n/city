@@ -1111,3 +1111,9 @@ unpaired-absence	tests/run.py	expect(_comm(gen2_pid) is None,
 # paired: `expect(gen2_pid is not None, "second generation never reached exec")` runs immediately before this, same shape as the gen1 ack above
 unpaired-absence	tests/run.py	expect("restart ctlclear" not in out, f"a STOP counted as a death\n{out}")
 # paired the same way test_ctl_stop_does_not_count's identical assertion already is: gen1_pid/gen2_pid are each confirmed alive before their respective STOP and confirmed dead after, so a death that produced this line would have already been caught by an earlier positive assertion in this same test if the STOP mechanism had not run
+prose-count	docs/QUEUE.md	The three old files deleted in this same commit, after — not before
+# named three lines above: tests/count_wait.so.c, tests/block_pidfd.so.c, tests/block_both.so.c
+prose-count	docs/QUEUE.md	Controls, run before deletion: all five migrated tests pass
+# named in the same sentence two lines above: the five real call sites/test names
+prose-count	docs/QUEUE.md	made worse. Worth a follow-up paired check on that one test; not
+# named earlier in the same paragraph: test_ctl_exec_resets_sigchld_mask

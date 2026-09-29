@@ -12,7 +12,7 @@ session restart: read both files, nothing else, to pick back up.
 If this file disagrees with the repo, the repo wins, and whoever notices
 fixes this file.
 
-Base at last edit: `015e402` (origin/main).
+Base at last edit: `a8175bf` (origin/main).
 
 ## Decision authority (Section 5 of the brief)
 
@@ -146,10 +146,13 @@ Status of each, current as of this commit:
   fail, so under the old unconditional-signalfd code its own
   precondition (SIGCHLD blocked in nw-sup's process) always held
   regardless of the per-fork reset it exists to pin; now that signalfd
-  is fallback-only, the same test needed `tests/block_pidfd.so.c` (an
-  existing shim) added to keep forcing that precondition — verified by
-  mutating the reset out and watching the unmodified test stay green,
-  then confirming the fix turns it red again.
+  is fallback-only, the same test needed an LD_PRELOAD shim forcing
+  `pidfd_open` to ENOSYS added to keep forcing that precondition —
+  verified by mutating the reset out and watching the unmodified test
+  stay green, then confirming the fix turns it red again. (That shim
+  was `tests/block_pidfd.so.c` at the time; since consolidated into
+  `tests/fault_inject.so.c` — see the LD_PRELOAD-consolidation entry
+  below.)
   `.claude/rules/runtime.md` documents the restored shape and this fix.
   Reviews: `tcb-review`, `fd-auditor`, `control` — no findings from any
   of the three; `control` independently reproduced all three legs of
@@ -401,6 +404,66 @@ was missing for this harness). `make checkbrief`: 5 verified, 0
 contradicted throughout. `make test`: `PASSED, WITH SKIPS`, run three
 times clean across the review cycle. `make prereport`: clean, every
 finding acked with a stated reason.
+
+## Tooling — LD_PRELOAD shim consolidation + stage-path isolation
+
+Two small, scoped test/tooling fixes, neither touching trusted-core
+behavior. **DONE, this commit.**
+
+1. **Stage-path isolation** — `tests/run.py` defaults `NW_STAGE` to
+   `/tmp/nw-init-run` for everyone, which caused a real collision
+   between concurrent review-agent runs. This is a dispatch-discipline
+   fix, not a `tests/run.py` code change: every reviewer dispatched
+   concurrently in this session (and the two `control`/`claims` runs
+   for this very consolidation) was given an explicit, unique
+   `NW_STAGE`/`STAGE` path. No change to the default itself — nothing
+   surfaced a concrete need for auto-uniquifying it, so none was added.
+2. **LD_PRELOAD shim consolidation** — `tests/count_wait.so.c`,
+   `tests/block_pidfd.so.c` and `tests/block_both.so.c` (each a
+   near-identical hand-rolled `dlsym(RTLD_NEXT, ...)` interception for
+   a different syscall) are replaced by one reusable shim,
+   `tests/fault_inject.so.c`, configured by two environment variables
+   read at runtime (`NW_FAULT_ENOSYS`, a comma-separated
+   `{pidfd_open,signalfd}` list; `NW_FAULT_LOG_WAITPID=1`). All five
+   real call sites migrated (`test_pidfd_open_failure_falls_back`,
+   `test_ctl_exec_resets_sigchld_mask`, `test_ctl_pidfd_fallback_with_socket`,
+   `test_ctl_tier3_fallback_with_socket`, `test_wait_is_poll_not_spin`).
+   The three old files deleted in this same commit, after — not before
+   — the replacement was proven equivalent.
+
+   Controls, run before deletion: all five migrated tests pass
+   unchanged with the new shim. Mutating `fault_enosys_wants()` to
+   always return 0 (disabling all ENOSYS-forcing) turns four of the
+   five red on their own paired-absence checks ("shim never fired" /
+   "never announced a waitpid() call"); deleting the shim file entirely
+   turns the same four red at compile (`fault_inject.so.c: No such file
+   or directory`) and the fifth (`wait-is-poll-not-spin`, which
+   tolerates a missing shim via `os.path.exists`) red on its own
+   positive-proof check instead. `test_ctl_exec_resets_sigchld_mask`
+   stays green under the ENOSYS-neutering mutation — a real, pre-existing
+   gap (it asserts real `SigBlk` state rather than a shim-fired log
+   line, so if `pidfd_open` genuinely succeeds the precondition the test
+   needs never occurs), independently confirmed by `control` to be
+   identical on the OLD `tests/block_pidfd.so.c` under the equivalent
+   neutering mutation — not something this consolidation introduced or
+   made worse. Worth a follow-up paired check on that one test; not
+   this round's scope.
+
+   Reviews: `control` (confirmed the above, no other divergence between
+   old and new shim behavior across all five call sites) and `claims`
+   (one MEDIUM — the shim's header comment claimed "no libc wrapper" for
+   `pidfd_open`, false on glibc >= 2.36; fixed to state the real reason,
+   that `nwsup.c` calls the raw syscall directly rather than the libc
+   symbol; one LOW — an unnamed instance-count in
+   `.claude/rules/runtime.md`'s "three one-syscall files," fixed to name
+   all three; one LOW/informational — this file's own reference to
+   `tests/block_pidfd.so.c` as "an existing shim" went stale the moment
+   this diff deleted it, fixed here). Both reviews run concurrently on
+   isolated stage paths per item 1 above.
+
+   `make test`: EXIT:0, PASSED WITH SKIPS (only the recorded vfat-ESP
+   skip). `make checkbrief`: 5 verified, 0 contradicted, 4 uncheckable.
+   `make prereport`: clean, no shapes matched.
 
 ## Phase 3 — per-house cgroups. Depends on Phase 2.
 

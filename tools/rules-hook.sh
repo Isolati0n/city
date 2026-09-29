@@ -180,18 +180,17 @@ UNOWNED = [
     ("tests/poll_shape.c",
      "shape control for nw-sup's poll set: two fds, not TCB. "
      "harness.md owns tests/run.py and the fixture houses, not this."),
-    ("tests/count_wait.so.c",
-     "LD_PRELOAD counter used by test_wait_is_poll_not_spin. "
-     "Not TCB; not a house. The assertion lives in tests/run.py."),
-    ("tests/block_pidfd.so.c",
-     "LD_PRELOAD shim forcing pidfd_open ENOSYS, used by "
-     "test_pidfd_open_failure_falls_back. Not TCB; not a house. The "
-     "assertion lives in tests/run.py."),
-    ("tests/block_both.so.c",
-     "LD_PRELOAD shim forcing pidfd_open AND signalfd ENOSYS, used by "
-     "test_ctl_tier3_fallback_with_socket to exercise wait_house's "
-     "third fallback tier. Not TCB; not a house. The assertion lives "
-     "in tests/run.py."),
+    ("tests/fault_inject.so.c",
+     "single consolidated LD_PRELOAD shim (env-configured: "
+     "NW_FAULT_ENOSYS forces pidfd_open and/or signalfd to fail, "
+     "NW_FAULT_LOG_WAITPID announces every waitpid() call) replacing "
+     "the three former one-syscall shims (count_wait.so.c, "
+     "block_pidfd.so.c, block_both.so.c) used by "
+     "test_wait_is_poll_not_spin, test_pidfd_open_failure_falls_back, "
+     "test_ctl_exec_resets_sigchld_mask, "
+     "test_ctl_pidfd_fallback_with_socket and "
+     "test_ctl_tier3_fallback_with_socket. Not TCB; not a house. The "
+     "assertions live in tests/run.py."),
     ("tests/sha256_vectors.c",
      "standalone known-answer test for sha256.c against NIST's own "
      "SHA-256 vectors, used by test_sha256_known_vectors. Not TCB; not "

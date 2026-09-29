@@ -113,8 +113,13 @@ environment — so a change to any link is a change to everything below it.
   exists to pin stops mattering to it — measured directly: mutating the
   reset out and rerunning the unmodified test left it green. Fixed by
   making the test force the `pidfd_open` failure with
-  `tests/block_pidfd.so.c` (the same shim `test_ctl_pidfd_fallback_with_socket`
-  already uses), which put the mutation back to red.
+  `tests/fault_inject.so.c` (the same shim `test_ctl_pidfd_fallback_with_socket`
+  already uses, both via `NW_FAULT_ENOSYS=pidfd_open`; the shim was
+  consolidated from three now-deleted one-syscall files -- `tests/count_wait.so.c`,
+  `tests/block_pidfd.so.c` and `tests/block_both.so.c` -- into this one,
+  env-configured, after this fix landed), which put the mutation back to
+  red.
+<!-- nw-init:absent-ok tests/count_wait.so.c tests/block_pidfd.so.c tests/block_both.so.c -->
 - **One seccomp table.** `nwsup.c` calls `nw_apply_house_seccomp()` in
   `lids.c`; it once carried a verbatim second copy. There is one allow-list,
   `strict_allow[]`, and a house does not choose it. *This described

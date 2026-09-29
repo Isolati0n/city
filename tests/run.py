@@ -4478,16 +4478,16 @@ def test_pidfd_open_failure_falls_back():
 
     This forces the exact pidfd_open failure tcb-review measured, with
     the same technique (an LD_PRELOAD shim intercepting syscall(2) to
-    fail SYS_pidfd_open with ENOSYS, tests/block_pidfd.so.c), and
-    requires the SAME restart/spent accounting test_pidfd_reaps_and_counts
-    already pins for the pidfd-success path -- proving the fallback
-    reaches identical, correct behavior, not just that it compiles.
-    tests/count_wait.so.c is loaded ALONGSIDE block_pidfd.so.c (both
-    are plain LD_PRELOAD shims over different symbols, so they combine
-    without conflict) specifically because a second review found the
-    fallback's own waitpid(p, ...) call was not covered by any
-    waitpid(-1) detection: test_wait_is_poll_not_spin only exercises
-    the pidfd-success path. Mutating both the success-path AND the
+    fail SYS_pidfd_open with ENOSYS, tests/fault_inject.so.c via
+    NW_FAULT_ENOSYS=pidfd_open), and requires the SAME restart/spent
+    accounting test_pidfd_reaps_and_counts already pins for the
+    pidfd-success path -- proving the fallback reaches identical,
+    correct behavior, not just that it compiles. The same shim's waitpid
+    logging (NW_FAULT_LOG_WAITPID=1) is enabled alongside the ENOSYS
+    forcing specifically because a second review found the fallback's
+    own waitpid(p, ...) call was not covered by any waitpid(-1)
+    detection: test_wait_is_poll_not_spin only exercises the
+    pidfd-success path. Mutating both the success-path AND the
     fallback's waitpid to waitpid(-1) left this test green before that
     fix, since it only checked accounting, never the call's own
     argument.
@@ -4500,24 +4500,20 @@ def test_pidfd_open_failure_falls_back():
     docstring said it failed at "the first restart-line assertion",
     which was wrong -- checked by actually running the control, not
     assumed from the code's shape."""
-    block_src = os.path.join(ROOT, "tests", "block_pidfd.so.c")
-    block_so = f"{WORK}/block_pidfd.so"
+    shim_src = os.path.join(ROOT, "tests", "fault_inject.so.c")
+    shim_so = f"{WORK}/fault_inject_fb.so"
     c = subprocess.run(
-        ["gcc", "-shared", "-fPIC", "-O2", "-o", block_so, block_src, "-ldl"],
+        ["gcc", "-shared", "-fPIC", "-O2", "-o", shim_so, shim_src, "-ldl"],
         capture_output=True, text=True)
-    expect(c.returncode == 0, f"block_pidfd.so\n{c.stderr}")
-    count_src = os.path.join(ROOT, "tests", "count_wait.so.c")
-    count_so = f"{WORK}/count_wait_fb.so"
-    c2 = subprocess.run(
-        ["gcc", "-shared", "-fPIC", "-O2", "-o", count_so, count_src, "-ldl"],
-        capture_output=True, text=True)
-    expect(c2.returncode == 0, f"count_wait.so\n{c2.stderr}")
+    expect(c.returncode == 0, f"fault_inject.so\n{c.stderr}")
 
     env = os.environ.copy()
     env["NW_KIND"] = "1"
     env["NW_BUDGET"] = "2"
     env["NW_LIDS"] = "0"
-    env["LD_PRELOAD"] = f"{block_so}:{count_so}"
+    env["LD_PRELOAD"] = shim_so
+    env["NW_FAULT_ENOSYS"] = "pidfd_open"
+    env["NW_FAULT_LOG_WAITPID"] = "1"
     p = subprocess.run(
         [f"{BIN}/nw-sup", "/bin/false", "false"],
         capture_output=True, text=True, env=env, timeout=10)
@@ -4536,10 +4532,10 @@ def test_pidfd_open_failure_falls_back():
     expect(n == 2, f"expected 2 restarts under the fallback, got {n}\n{out}")
     n_calls = len(re.findall(r"count_wait CALL waitpid pid=", out))
     expect(n_calls >= 1,
-           f"count_wait.so.c never announced a waitpid() call under the "
-           f"fallback -- either it did not load alongside block_pidfd.so, "
-           f"or the fallback path was never reached, so the WAITPID_ANY "
-           f"check below would be meaningless\n{out}")
+           f"fault_inject.so.c never announced a waitpid() call under the "
+           f"fallback -- either it did not load, or the fallback path "
+           f"was never reached, so the WAITPID_ANY check below would be "
+           f"meaningless\n{out}")
     expect("WAITPID_ANY" not in out,
            f"the fallback called waitpid(-1) instead of waitpid(p)\n{out}")
     print(f"ok pidfd-open-failure-falls-back waitpid_calls={n_calls}")
@@ -4713,20 +4709,21 @@ def test_ctl_exec_resets_sigchld_mask():
     actually mutating out the per-fork reset this test exists to pin
     and watching the assertion below stay green regardless. Same
     technique test_ctl_pidfd_fallback_with_socket already uses:
-    tests/block_pidfd.so.c, an LD_PRELOAD shim forcing
-    SYS_pidfd_open to ENOSYS."""
+    tests/fault_inject.so.c, an LD_PRELOAD shim forcing
+    SYS_pidfd_open to ENOSYS (NW_FAULT_ENOSYS=pidfd_open)."""
     os.makedirs("/nw/ctl", exist_ok=True)
-    block_src = os.path.join(ROOT, "tests", "block_pidfd.so.c")
-    block_so = f"{WORK}/block_pidfd_sigchld.so"
+    block_src = os.path.join(ROOT, "tests", "fault_inject.so.c")
+    block_so = f"{WORK}/fault_inject_sigchld.so"
     c = subprocess.run(
         ["gcc", "-shared", "-fPIC", "-O2", "-o", block_so, block_src, "-ldl"],
         capture_output=True, text=True)
-    expect(c.returncode == 0, f"block_pidfd.so\n{c.stderr}")
+    expect(c.returncode == 0, f"fault_inject.so\n{c.stderr}")
     env = os.environ.copy()
     env["NW_KIND"] = "1"
     env["NW_BUDGET"] = "3"
     env["NW_LIDS"] = "0"
     env["LD_PRELOAD"] = block_so
+    env["NW_FAULT_ENOSYS"] = "pidfd_open"
     proc = subprocess.Popen(
         [f"{BIN}/nw-sup", _sleeper("ctlsigblk"), "ctlsigblk"],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
@@ -4870,17 +4867,18 @@ def test_ctl_socket_and_death_together():
 def test_ctl_pidfd_fallback_with_socket():
     """pidfd_open ENOSYS with a live socket must not die."""
     os.makedirs("/nw/ctl", exist_ok=True)
-    block_src = os.path.join(ROOT, "tests", "block_pidfd.so.c")
-    block_so = f"{WORK}/block_pidfd_ctl.so"
+    shim_src = os.path.join(ROOT, "tests", "fault_inject.so.c")
+    shim_so = f"{WORK}/fault_inject_ctlfb.so"
     c = subprocess.run(
-        ["gcc", "-shared", "-fPIC", "-O2", "-o", block_so, block_src, "-ldl"],
+        ["gcc", "-shared", "-fPIC", "-O2", "-o", shim_so, shim_src, "-ldl"],
         capture_output=True, text=True)
-    expect(c.returncode == 0, f"block_pidfd.so\n{c.stderr}")
+    expect(c.returncode == 0, f"fault_inject.so\n{c.stderr}")
     env = os.environ.copy()
     env["NW_KIND"] = "1"
     env["NW_BUDGET"] = "3"
     env["NW_LIDS"] = "0"
-    env["LD_PRELOAD"] = block_so
+    env["LD_PRELOAD"] = shim_so
+    env["NW_FAULT_ENOSYS"] = "pidfd_open"
     log = f"{WORK}/ctlfb.log"
     lg = open(log, "w")
     proc = subprocess.Popen(
@@ -4931,24 +4929,26 @@ def test_ctl_tier3_fallback_with_socket():
     test_ctl_pidfd_fallback_with_socket only forces pidfd_open, which
     lands on the second tier (signalfd) every time -- confirmed by
     `control` via strace, and stated in that test's own docstring. This
-    shim (tests/block_both.so.c) additionally overrides signalfd(2)
-    itself, so nothing in wait_house() can reach any wakeup but the
-    tier-3 loop. Independently, `tcb-review`'s adversarial pass built
-    the same two-syscall shim from scratch and confirmed by hand that
-    the tier activates and STOP still works under it; this test is the
-    suite's own permanent version of that check."""
+    shim (tests/fault_inject.so.c, NW_FAULT_ENOSYS=pidfd_open,signalfd)
+    additionally overrides signalfd(2) itself, so nothing in
+    wait_house() can reach any wakeup but the tier-3 loop.
+    Independently, `tcb-review`'s adversarial pass built the same
+    two-syscall shim from scratch and confirmed by hand that the tier
+    activates and STOP still works under it; this test is the suite's
+    own permanent version of that check."""
     os.makedirs("/nw/ctl", exist_ok=True)
-    block_src = os.path.join(ROOT, "tests", "block_both.so.c")
-    block_so = f"{WORK}/block_both.so"
+    shim_src = os.path.join(ROOT, "tests", "fault_inject.so.c")
+    shim_so = f"{WORK}/fault_inject_tier3.so"
     c = subprocess.run(
-        ["gcc", "-shared", "-fPIC", "-O2", "-o", block_so, block_src, "-ldl"],
+        ["gcc", "-shared", "-fPIC", "-O2", "-o", shim_so, shim_src, "-ldl"],
         capture_output=True, text=True)
-    expect(c.returncode == 0, f"block_both.so\n{c.stderr}")
+    expect(c.returncode == 0, f"fault_inject.so\n{c.stderr}")
     env = os.environ.copy()
     env["NW_KIND"] = "1"
     env["NW_BUDGET"] = "3"
     env["NW_LIDS"] = "0"
-    env["LD_PRELOAD"] = block_so
+    env["LD_PRELOAD"] = shim_so
+    env["NW_FAULT_ENOSYS"] = "pidfd_open,signalfd"
     log = f"{WORK}/ctltier3.log"
     lg = open(log, "w")
     proc = subprocess.Popen(
@@ -4998,8 +4998,9 @@ def test_wait_is_poll_not_spin():
     /usr/include/x86_64-linux-gnu/asm/unistd_64.h, not just trusted;
     this is an x86_64-specific number and unchecked on any other arch).
     CPU stays near zero. waitpid(-1): an LD_PRELOAD shim
-    (tests/count_wait.so.c) announces every waitpid() call as it
-    happens and flags any waitpid(-1) specifically.
+    (tests/fault_inject.so.c, NW_FAULT_LOG_WAITPID=1) announces every
+    waitpid() call as it happens and flags any waitpid(-1)
+    specifically.
 
     THE SHIM CHECK MUST BE PAIRED, or it is satisfied by the shim never
     loading at all. `ld.so` does not abort on a bad LD_PRELOAD -- it
@@ -5024,14 +5025,15 @@ def test_wait_is_poll_not_spin():
     helper = f"{WORK}/onesleep"
     open(helper, "w").write("#!/bin/sh\nexec /bin/sleep 1\n")
     os.chmod(helper, 0o755)
-    so_src = os.path.join(ROOT, "tests", "count_wait.so.c")
-    so = f"{WORK}/count_wait.so"
+    so_src = os.path.join(ROOT, "tests", "fault_inject.so.c")
+    so = f"{WORK}/fault_inject_wait.so"
     if os.path.exists(so_src):
         c = subprocess.run(
             ["gcc", "-shared", "-fPIC", "-O2", "-o", so, so_src, "-ldl"],
             capture_output=True, text=True)
-        expect(c.returncode == 0, f"count_wait.so\n{c.stderr}")
+        expect(c.returncode == 0, f"fault_inject.so\n{c.stderr}")
         env["LD_PRELOAD"] = so
+        env["NW_FAULT_LOG_WAITPID"] = "1"
     proc = subprocess.Popen(
         [f"{BIN}/nw-sup", helper, "onesleep"],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
