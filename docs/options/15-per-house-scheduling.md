@@ -456,8 +456,8 @@ kernel, which the workflow's first draft assumed and which produced no
 error only because that step was itself guarded.
 
 **`scx_simple` was actually invoked, and libbpf actually attempted to
-resolve it against the running kernel — the first time in three
-attempts across two rounds that a load was attempted at all — and it
+resolve it against the running kernel — the first time across three
+attempts, in three rounds, that a load was attempted at all — and it
 was refused, quoted verbatim:**
 
 ```

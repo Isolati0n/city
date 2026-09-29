@@ -270,8 +270,30 @@ Status of each, current as of this commit:
     trap, the raw-syscall mechanism, the fs-verity gap) was
     independently reproduced by the reviewer on this same container,
     matching down to exact device numbers and dmesg lines.
-  - `docs/options/20`: pending (research done, note drafted, `claims`
-    review in flight as of this commit).
+  - `docs/options/20`: **DONE**, this commit. Reconciles the brief's
+    four-part schema (applier/observer/reject path/test) against
+    CLAUDE.md's existing five-clause mechanism rule: applier and test
+    already map onto it; reject path and observer are unnamed there but
+    already practiced (reject path widely, via `NW_E_*` codes and real
+    refusals like `apply_sched_ext()`'s; observer unevenly, e.g. the
+    brick hash's own re-validation). Recommends the schema generator as
+    a stricter, machine-checkable form, not a rewrite of CLAUDE.md's
+    prose. A grants table inventories every current plan field against
+    all four; the one open gap it makes visible in table form (every
+    `nw_res` field but `layer_bytes` has a reject path and no applier)
+    is Phase 3's already-scheduled work, not a new finding. Machine
+    hash (decision 4): the baker's bake-time sha256 print already
+    satisfies it; the boot-time nw-spawn/evidence half is genuinely new
+    code; flagged the one real open reading — "NO sidecar hash file"
+    is read as scoped to the new boot-time hash, not the existing,
+    load-bearing bakery/staging `.sha256` sidecar those tools already
+    depend on. `provides`/`needs`: designed as pure baker-side sugar
+    compiling to ordinary edges (no new blob field, no `NW_E_*` code,
+    no runtime change), explicitly distinguished from the still-deferred
+    `gate` field it is not. `claims` found five defects (a Phase-3/
+    Phase-4 mislabel, a stated-vs-actual grep-scope mismatch, one
+    proposed-not-practiced rule cited as practiced, one overstated
+    Observer claim, one overreached ownership inference); all fixed.
   NOT STARTED.
 
 No ordering dependency among 1a/1d/1e/1f/1g/Section-4 — any can run
@@ -376,8 +398,9 @@ field regardless of this result. **DONE, 2 of 3 push iterations used**
 (`07ebd9f`, `695e62a`). Confirmed `scx_c_schedulers` exists in Fedora's
 own repo (42/43/44 stable) before writing any workflow, per the
 instruction. A privileged Fedora 42 container on the runner installed
-it and actually invoked `scx_simple` — the first time in three attempts
-across two rounds that a load was attempted at all — and libbpf refused
+it and actually invoked `scx_simple` — the first time across three
+attempts, in three rounds, that a load was attempted at all — and
+libbpf refused
 it: `scx_bpf_consume` not found in this kernel's BTF, a version-pairing
 mismatch one layer further down the stack than attempt 2's link-time
 skew (packaged binary vs. this exact kernel's kfunc set, rather than
