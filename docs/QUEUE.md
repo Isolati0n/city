@@ -465,6 +465,64 @@ behavior. **DONE, this commit.**
    skip). `make checkbrief`: 5 verified, 0 contradicted, 4 uncheckable.
    `make prereport`: clean, no shapes matched.
 
+## New design notes 27–30 — operator-approved
+
+Dispatched alongside the tooling fixes above. Two-commit shape per note
+(design note, then a `claims` fixes commit) as usual.
+
+- **27 — control-app** (phone control panel + plan editor). **GATED —
+  design only, no code.** Needs Phase 4's `nwctl` and the grants table
+  (`docs/options/20`) before it can be built; neither exists yet.
+  Transport is decided, not merely recommended: a tunnel (e.g.
+  Tailscale) is the sole transport, no LAN-only fallback as a primary
+  path. The tunnel daemon and the app's own listener share one house
+  (`lids=newns,landlock,newnet`, no seccomp — the console house's own
+  combination, for the same syscall reason: both need `socket`/`ioctl`,
+  neither of which `lids.c`'s allow-list carries), because nothing in
+  this plan format lets two houses share a network namespace.
+  `docs/options/27-control-app.md`.
+- **28 — hardware watchdog.** **No gate — proceeds independently.**
+  `docs/options/28-hardware-watchdog.md`. Explicit about not being
+  freeze detection (a different question at a different level: "is the
+  scheduler running at all," not "is this house making progress").
+  Falsifying test cannot run on this container (measured: no watchdog
+  driver compiled into this kernel at all, `CONFIG_SOFT_WATCHDOG` unset,
+  no module directory for the running kernel) — handed to the operator
+  as a fixture per `.claude/rules/harness.md`'s existing pattern for a
+  claim needing a real boot.
+- **29 — rescue interface.** **GATED — design only, no code.** The
+  operator's own stated foundation ("the console house's existing
+  rescue-slot mechanism") does not exist in the tree as described —
+  checked and reported in the note itself: `slots/rescue` is a sketch
+  in an early, unresolved doc (`docs/options/06`) with nothing wired to
+  it, PID 1's separate `--rescue` mode is unreachable from any real
+  boot, and the console house has no slot relationship at all. The
+  genuinely open question this note flags for the operator is which of
+  these (or a fourth, newly-built rescue slot) this tool is meant to
+  sit inside. Answered independently of note 27's tunnel decision, per
+  instruction: local/serial reachability is the recommended default
+  here, since a rescue boot may have no normal networking up at all;
+  the tunnel is a bonus if it happens to still be reachable, never a
+  dependency. `docs/options/29-rescue-interface.md`.
+- **30 — backup tool.** **No gate — proceeds independently.** Builds on
+  the shared content-addressed store (landed). `docs/options/30-backup-tool.md`.
+  Distinguishes the store (genuinely content-addressed, "diff hash
+  lists" applies exactly) from layers (name-keyed, mutable — needs a
+  cheap change-detection signal instead) rather than forcing one
+  mechanism onto both.
+
+
+Reviewed by `claims`: one HIGH (note 27's status line spliced two
+unrelated sentences — one real, from `docs/options/22`, one from
+`docs/QUEUE.md`'s own item 8 on a different question — into a single
+fabricated composite quotation attributed to one source; fixed by
+attributing each clause to its real source and re-confirming the
+underlying claim, `nwctl` genuinely absent, by a fresh grep) and one LOW
+(note 29's Makefile-grep characterization undersold the command's real
+4-line output; fixed to quote it in full and explain each line). No
+other findings across all four notes; the reviewer's own coverage
+summary lists every checkable claim it verified.
+
 ## Phase 3 — per-house cgroups. Depends on Phase 2.
 
 `clone3`+`CLONE_INTO_CGROUP` placement, `nw-sup` itself outside the
