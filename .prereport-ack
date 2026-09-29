@@ -1307,3 +1307,11 @@ unpaired-absence	tests/run.py	expect(f"got={sigterm}" not in out,
 # errno=24` / `restart tnf` lines these absences check for.
 unpaired-absence	tests/run.py	expect("restart tnf" not in out and "spent tnf" not in out,
 unpaired-absence	tests/run.py	expect(bad not in out,
+
+# same "Section 10 item N" citation pattern already acked above,
+# QUEUE.md's own record of the same design-note decision.
+prose-count	docs/QUEUE.md	fault-injection measurement in `debf96f`/§10 item 3, not on a
+# "the two territory rule files" is followed immediately by their names
+# (runtime.md and plan.md) a few words earlier in the same sentence,
+# CLAUDE.md's own "named list immediately following" allowance.
+prose-count	docs/QUEUE.md	retired `io_rbps`/`io_wbps` worked example in the two territory rule

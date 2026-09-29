@@ -790,8 +790,52 @@ pass builds a real applier for (`lock`, `stop_signal`, `nofile`,
 format slot only, refused at nw-sup startup by the existing `sched_ext`
 precedent until their own later rounds land an applier (`grace_period`,
 `supervisor_death_policy`). Batched open questions sent to the operator
-per Section 5. **NO CODE YET** — waiting on operator answers before the
-`NW_MAGIC` bump itself.
+per Section 5. **This was true at the time this paragraph was
+written; the code has since landed — see the paragraph below.**
+
+**Operator answered the five batched questions (with two additions),
+and the code landed: `debf96f` records the decisions (including the
+oom_score_adj-vs-capabilities fault-injection verification the operator
+asked for by name — the recalled "Grok measurement" does not hold for a
+negative value on this kernel, confirmed rather than assumed), `6fbb7c7`
+is the `NW_MAGIC` bump (`NWPLAN11` -> `NWPLAN12`) plus every applier
+this round builds.** Five review agents ran against the diff before the
+commit (tcb-review, fd-auditor, claims, control, drift), per the master
+brief's TCB dispatch table, and found one real HIGH-severity bug fixed
+before landing: fd-auditor caught the original `nofile` applier
+unconditionally setting `RLIMIT_NOFILE` before `lid_brick()`/
+`lid_landlock()` ran, so a tight but legal `nofile=` could starve those
+lids' own descriptor needs — reproduced live as
+`FAIL open loop-control errno=24`, misdiagnosed as a loop-device
+defect, burning the restart budget. Fixed by splitting the applier into
+an early raise (while `CAP_SYS_RESOURCE` is still held) and a deferred
+lower (after every lid that needs headroom, immediately before
+`execv`), pinned by `test_tight_nofile_does_not_starve_the_brick_pivot`
+and shown failing against the pre-fix applier. A second, latent finding
+(a shift-by-64 UB when `cap_last_cap == 63`) was also fixed. `control`
+found `test_oom_score_adj_readback` does not actually pin the
+write-before-capabilities ordering in this environment (a positive
+value needs no capability either side of the drop); the test's
+docstring now says so rather than implying coverage that isn't there —
+the ordering *decision* itself still rests on the one-time
+fault-injection measurement in `debf96f`/§10 item 3, not on a
+regression test. `claims` and `drift` found and fixed several stale
+prose claims across `docs/options/31`, `.claude/rules/runtime.md` and
+`.claude/rules/plan.md` (a capability-drop ordering description still
+saying "after seccomp" after the real fix moved it before; an
+"ambient" capability claim the code never implements; a
+described-but-never-built `NW_E_NOFILECAP` cross-field refusal,
+superseded by ordering instead; stale `NW_E_*` numbers after the
+`sched_ext` retirement's renumbering shift; a field count and a
+retired `io_rbps`/`io_wbps` worked example in the two territory rule
+files, neither touched by this bump until the review found them).
+`make test` passes end-to-end (113 `ok` lines, `coverage-tcb.sh` at the
+99% floor); `make prereport` and `make checkbrief` are clean.
+
+`grace_period` and `supervisor_death_policy` still have no applier —
+refused by name at `nw-sup` startup, matching the `sched_ext`
+precedent — and are the next fields due their own design-note-plus-
+`claims` round, per the ordered list above.
 
 **Amendment items outside the bump itself, tracked here so they don't
 get lost in Phase 4's list:**
