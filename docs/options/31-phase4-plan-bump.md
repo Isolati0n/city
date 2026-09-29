@@ -1,8 +1,12 @@
 # 31 — Phase 4: the plan-format bump
 
-Status: **design note. No code in this round.** Written against the tree
-at commit `e283893` (Phase 3 landed). Every file:line citation below was
-checked against that tree, not against memory of an earlier phase.
+Status: **design note, decided.** All five batched questions in §10 were
+answered by the operator on 2026-09-29 (approve all, with two additions
+folded in at §10 items 2 and 3); code now proceeds against the decisions
+recorded there. Written against the tree at commit `e283893` (Phase 3
+landed); every file:line citation below was checked against that tree,
+not against memory of an earlier phase — re-check citations if the code
+round finds the tree has moved since.
 
 Scope, quoted from `docs/OPERATOR-BRIEF.md` Section 3 and its 2026-09-28
 amendment: one `NW_MAGIC` bump. Adds `lock`, stop signal + grace period
@@ -619,14 +623,17 @@ under-limit case proves nothing about the limit actually being *a*
 limit); the paired test opens exactly 16 then attempts a 17th and
 asserts `EMFILE`.
 
-## 10. Batched questions, each with a recommended default
+## 10. Batched questions — decided 2026-09-29, operator approved all five
 
 Per Section 5 of the master brief: one message, each question with a
-recommendation, so the operator can answer "approve all."
+recommendation, so the operator could answer "approve all." All five
+recommendations below were approved, two with an addition the operator
+asked for; both are folded in at their point of origin rather than left
+as a diff against the question.
 
 1. **A declared-but-not-yet-applied field (`grace_period`,
    `supervisor_death_policy`) — refuse at bake time or at boot time?**
-   Recommend **boot time** (`nwsup.c` `die()`, by name), matching the
+   **Decided: boot time** (`nwsup.c` `die()`, by name), matching the
    existing `apply_sched_ext()` precedent exactly (§3, §5) rather than
    inventing a different shape for these two fields. A bake-time
    refusal means a plan written today for a future `nw-sup` binary
@@ -641,41 +648,93 @@ recommendation, so the operator can answer "approve all."
    `CLAUDE.md`'s mechanism rule asks for.
 2. **`capabilities=` unset means "drop everything," not "keep today's
    full root."** This breaks the bump's own "UNSET = today's behavior"
-   pattern that every other new field follows. Recommend accepting the
-   break explicitly and stating it as the one field where UNSET is a
-   new, more restrictive default — the alternative (UNSET = full root)
-   would mean every existing plan silently keeps full root forever
-   unless someone remembers to opt in, which inverts what this field is
-   for. Flagging because a reader who expects the pattern to hold
-   everywhere in this bump will otherwise be surprised by exactly the
-   one field where it doesn't.
+   pattern that every other new field follows. **Decided: accept the
+   break**, stated as the one field where UNSET is a new, more
+   restrictive default — the alternative (UNSET = full root) would mean
+   every existing plan silently keeps full root forever unless someone
+   remembers to opt in, which inverts what this field is for.
+   **Addition the operator asked for, stated explicitly so a future
+   reader doesn't wonder**: within `NWPLAN12`, an empty declared
+   capability set is a **deliberate, encoded choice a plan author
+   makes** — not an old plan's meaning silently carried forward under
+   new code. There is no real "old plan, new binary" ambiguity to
+   worry about here in the first place: every plan must be re-baked
+   under the new magic to boot at all (invariant 3's five-place
+   discipline, §1), so there is no such thing as an `NWPLAN11` plan
+   being read by an `NWPLAN12` checker and having its silence
+   reinterpreted — the magic mismatch refuses before any field is
+   read. The byte only ever means "UNSET = drop everything" because a
+   plan author writing an `NWPLAN12` plan chose to omit `capabilities=`,
+   under a grammar where that choice's meaning was fixed before the
+   plan was written, not discovered afterward.
 3. **Ordering among the three new before-exec child-side steps**
    (`nofile`'s setrlimit, `oom_score_adj`'s `/proc` write,
    `capabilities`'s drop) relative to each other, all three already
    ordered *after* mounts/cgroup/lids and *before* exec per the
-   amendment. Recommend: `oom_score_adj` first (needs no privilege,
-   never fails), `nofile` second (needs `CAP_SYS_RESOURCE` if raising
-   past the inherited hard limit — must run before that capability is
-   possibly dropped), `capabilities` last (irreversible, so everything
-   that might need a capability the plan is about to drop must already
-   be done).
+   amendment. **Decided: keep the original recommended order —
+   `oom_score_adj` first, `nofile` second, `capabilities` last —
+   confirmed by fault injection rather than assumed, per the operator's
+   explicit instruction.** The operator recalled an earlier measurement
+   (attributed to Grok, on this same kernel) that root could write both
+   `-500` and `+200` to `oom_score_adj` even after fully dropping
+   `CAP_SYS_RESOURCE`, which would have meant `oom_score_adj` genuinely
+   does not need to run before the capability drop. **That does not
+   hold under direct measurement here, so the original ordering stands
+   for the right reason instead of an assumed one.**
+
+   Measured with a throwaway C program (`capget`/`prctl(PR_CAPBSET_
+   DROP)`/`capset`, no libcap — the same raw-syscall shape the real
+   applier will use), fully clearing `CAP_SYS_RESOURCE` from the
+   effective, permitted *and* inheritable sets (not just the bounding
+   set, which alone does not touch a running process's own effective
+   capabilities) and then attempting the write:
+
+   ```
+   after clear: eff[0]=0xfeffffff (bit24 cleared)
+   --- after full effective+permitted+inheritable drop ---
+     write(-500) FAILED errno=13 (Permission denied)
+     write(200) SUCCEEDED
+     write(-999) FAILED errno=13 (Permission denied)
+     write(1000) SUCCEEDED
+   ```
+
+   The shape matches `fs/proc/base.c`'s actual gate cited in §8
+   (`oom_adj < oom_score_adj_min && !capable(CAP_SYS_RESOURCE)`):
+   `oom_score_adj_min` starts at 0 for a fresh process, so a write at or
+   above the current floor (`0`, `200`, `1000`) needs no capability and
+   always succeeds, while a write *below* the floor (`-500`, `-999`)
+   needs `CAP_SYS_RESOURCE` and fails without it — reproduced directly,
+   not inferred from the source alone. **So a house whose plan declares
+   a NEGATIVE `oom_score_adj` (protecting it from the OOM killer, the
+   more operationally interesting direction) genuinely cannot get that
+   value applied after its capabilities are dropped, if `CAP_SYS_
+   RESOURCE` is among the dropped set.** A positive value needs no
+   privilege either way, so the recalled measurement was correct for
+   that one case and incomplete for the other — which is exactly why
+   verifying both directions mattered. Keeping `oom_score_adj` first is
+   therefore load-bearing, not merely cautious: `nofile` second (needs
+   `CAP_SYS_RESOURCE` if raising past the inherited hard limit — same
+   capability, same reasoning), `capabilities` last (irreversible, so
+   everything that might need a capability the plan is about to drop
+   must already be done).
 4. **`task_cap`/`oom_score_adj` placement: fold into `struct nw_res`, or
-   keep as bare `struct nw_unit` scalars like `lock`?** Recommend
-   folding into `nw_res` (§2) for the reason given there — they're
+   keep as bare `struct nw_unit` scalars like `lock`?** **Decided: fold
+   into `nw_res`** (§2) for the reason given there — they're
    resource-shaped fields and a second location for that shape is the
    two-lists problem. This does mean touching `pack_res`'s offset table
    and its dedicated `test_baker_writes_the_declared_layout` swap-test
    (`plan.md`'s "Check the struct sizes" bullet) even though neither
    field is cgroup-controller-shared with the existing four.
-5. **Named signal set for `stop_signal`**: recommend `{TERM, INT, HUP,
-   QUIT}` as the closed set, matching common daemon shutdown-signal
+5. **Named signal set for `stop_signal`**: **decided: `{TERM, INT, HUP,
+   QUIT}`** as the closed set, matching common daemon shutdown-signal
    conventions rather than exposing the full signal namespace (a house
    declaring `stop-signal=KILL` would be asking this init to do
    something indistinguishable from not stopping it gracefully at all,
    which defeats the field's purpose; a house declaring
    `stop-signal=SEGV` is asking for something this init has no business
-   sending). Open to a different set if the operator has a specific
-   house in mind that needs one not listed.
+   sending).
+
+**All five decided; proceeding to code.**
 
 ## Tests, summarized (each field's own section above has the detail)
 
