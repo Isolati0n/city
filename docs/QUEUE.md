@@ -12,7 +12,7 @@ session restart: read both files, nothing else, to pick back up.
 If this file disagrees with the repo, the repo wins, and whoever notices
 fixes this file.
 
-Base at last edit: `df1a001` (origin/main).
+Base at last edit: `3ff6c47` (origin/main).
 
 ## Decision authority (Section 5 of the brief)
 
@@ -91,9 +91,41 @@ Status of each, current as of this commit:
   `make checkbrief`: 5 verified, 0 contradicted, 4 uncheckable.
   `make test`: EXIT:0, PASSED WITH SKIPS (only the recorded vfat-ESP
   skip).
-- **1b** (design note, `docs/options/22`, `claims` + batched questions):
-  lock/unlock, the ten numbered questions from the brief. NOT STARTED.
-  Blocks Phase 2 (Phase 2 requires this note approved).
+- **1b** — DONE, `3ff6c47`. Blocks Phase 2 no longer — landed and
+  approved (operator: proceed on the note's own recommended answers,
+  no separate round-trip). `docs/options/22-lock-unlock.md` answers
+  all ten numbered questions from the brief with file:line citations
+  against the current code: (1) mount lifetime needs no change —
+  `lid_brick()` already mounts fresh per fork and tears down via
+  namespace exit plus `LO_FLAGS_AUTOCLEAR`; unlocked's idle state
+  (item 6) is the only new mechanism. (2) the log ring has no run-
+  boundary marker today; proposes one written into the existing log
+  stream before every fork, with `write_evidence()` trimming to the
+  last occurrence. (3) edges refused on unlocked houses, at bake and
+  boot (an idle house's wire end sits open and unread). (4) two
+  contradictions to refuse (unlocked+nonzero-budget, unlocked+edge); a
+  third was looked for and not found. (5) `lock` is one byte, reusing
+  the slot `sched_ext` frees in the same bump — size-neutral, `0` =
+  locked so an unmodified city file keeps today's behavior. (6) the
+  idle state reuses the existing `STOP`'d branch verbatim, gated on
+  `lock` instead of always starting `0`; a new `STATUS` verb is
+  proposed. (7) `tools/relaunch-house.py` should force `locked` in its
+  own throwaway plan; profiles are undecided because nothing by that
+  name exists in the tree yet. (8) the launch path (`nwctl`/driftwm/
+  compositor) has no subject yet — none of them are built — flagged
+  rather than answered speculatively. (9) a red-then-green test list
+  per mechanism, including a 4-metric 50-cycle leak check and a full-
+  suite locked-house regression run. (10) keep the existing
+  environment-string pattern for the shell's inputs (answer only, no
+  implementation). `claims` review found four citation-only slips (an
+  off-by-one line number used twice, a broken internal cross-
+  reference, a doc citation short by one line), all fixed; no claim
+  about a future mechanism was found stated as already existing.
+  Operator confirms: none of the ten answers rests on an unresolved
+  design question — every one is either a concrete recommendation or
+  correctly says the question has no subject yet (7's profiles half,
+  8 in full), which is not the same as being undecided about something
+  that exists to decide.
 - **1c** — DONE, `941ecc8` (+ coverage record `df1a001`). Blocks Phase 2
   no longer — landed. Removed from `nw-sup`: FREEZE/CONT's ptrace code
   (SEIZE/INTERRUPT/CONT, `do_freeze`/`do_cont`,
