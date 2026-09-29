@@ -776,7 +776,22 @@ subset at every real start); Landlock port/scope fields (only what a
 Landlock test can falsify); device lid (reject path first); rootless
 houses (last; console and compositor stay real-root). `provides`/`needs`
 service resolution per `docs/options/20` — exactly one provider per
-service, baker prints the edges it adds. NOT STARTED.
+service, baker prints the edges it adds.
+
+**Design note landed: `docs/options/31-phase4-plan-bump.md`.** Two-commit
+shape as usual (`5608ec7` draft, `0bfd65d` `claims`-review fixes — the
+review found the note restating a ptrace/capability overclaim that
+`docs/options/20` §6's own drafting history had already caught once, and
+quoting `docs/options/15`'s sched_ext justification from a framing that
+document's own newest section has since superseded; neither changed the
+note's decisions). Covers the bump mechanics and every field this initial
+pass builds a real applier for (`lock`, `stop_signal`, `nofile`,
+`capabilities`, `task_cap`, `oom_score_adj`) plus the two added as a
+format slot only, refused at nw-sup startup by the existing `sched_ext`
+precedent until their own later rounds land an applier (`grace_period`,
+`supervisor_death_policy`). Batched open questions sent to the operator
+per Section 5. **NO CODE YET** — waiting on operator answers before the
+`NW_MAGIC` bump itself.
 
 **Amendment items outside the bump itself, tracked here so they don't
 get lost in Phase 4's list:**
