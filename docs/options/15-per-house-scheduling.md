@@ -413,6 +413,107 @@ The workflow file is deleted, per the same "not kept" convention as
 the previous probe; the five run ids above are what this section's
 claims rest on, the same way the previous section names its three.
 
+## Attempt 3: a packaged binary reaches the kernel, and the kernel refuses it
+
+Measured 2026-09-29, per `docs/OPERATOR-BRIEF.md` Section 4: a third,
+differently-shaped attempt at the same accept path, bounded to three
+push iterations, measurement only (Phase 4 deletes the `sched_ext`
+field regardless of the result). Where attempt 2 tried building a
+scheduler from source and got stuck at a userspace link step, this
+attempt used a distro's own **packaged** binary specifically to route
+around that class of failure — confirmed to exist before spending any
+push on it, per the brief's own instruction: `scx_c_schedulers` is a
+real Fedora package (`packages.fedoraproject.org`, carried in Fedora
+42/43/44 stable) that ships `scx_central`, `scx_flatcg`, `scx_nest`,
+`scx_pair`, `scx_qmap`, `scx_simple` and `scx_userland` as prebuilt
+binaries.
+
+**Environment**: the same free `ubuntu-24.04` GitHub-hosted runner as
+both prior attempts, this time running a `--privileged --pid=host`
+Fedora 42 container (`fedora:42`) rather than building on the runner's
+own Ubuntu userspace directly. `uname -a` inside the container reports
+`6.17.0-1022-azure` — the runner's real host kernel, confirming the
+container shares it rather than running under a private one, which is
+what makes a struct_ops load attempt inside the container a genuine
+test of the runner's actual kernel.
+
+**Two runs, because the first workflow iteration had its own bug.**
+Run 1 (workflow run `36511747418`) installed the package, located
+`scx_simple`, ran it, and got a real result — then the workflow's own
+`kill`/`wait` sequence on the already-exited background process errored
+before the final "state after" step could run, so the job reported
+`failure` despite having already captured the substantive answer. Run 2
+(workflow run `36511898441`, after fixing the wait logic and marking
+that one step `continue-on-error`) reproduced the identical result and
+additionally captured the "after" checkpoint, completing green. The
+quotes below are from run 2, the corrected one; run 1's console output
+matches it byte-for-byte on every line that both runs share.
+
+**`/sys/kernel/sched_ext/state` before running anything**: `disabled`.
+The directory holds `enable_seq`, `hotplug_seq`, `nr_rejected`, `state`
+and `switch_all` — no `root/` subdirectory exists under it on this
+kernel, which the workflow's first draft assumed and which produced no
+error only because that step was itself guarded.
+
+**`scx_simple` was actually invoked, and libbpf actually attempted to
+resolve it against the running kernel — the first time in three
+attempts across two rounds that a load was attempted at all — and it
+was refused, quoted verbatim:**
+
+```
+libbpf: extern (func ksym) 'scx_bpf_consume': not found in kernel or module BTFs
+libbpf: failed to load object 'scx_simple'
+libbpf: failed to load BPF skeleton 'scx_simple': -22
+../scheds/c/scx_simple.c:77 [scx panic]: Invalid argument
+Failed to load skel
+```
+
+The process exited on its own, immediately, before either run's own
+`kill -0` check found it still alive — confirmed by that check itself
+reporting "already exited" rather than by inference.
+`/sys/kernel/sched_ext/state` read `disabled` both while `scx_simple`
+was (intendedly) running and after it exited: the state never
+transitioned, because the failure happened during libbpf's own
+BTF-resolution pass, before the kernel's struct_ops registration is
+ever reached.
+
+**What this decisively answers**: struct_ops loading is **permitted**
+in this container — nothing in the CI environment's privilege,
+namespace or seccomp posture blocked the attempt before the kernel's
+own compatibility check ran. That question was open after both prior
+attempts (attempt 1 found no binary to test with; attempt 2 never
+linked one). This is the first attempt to actually reach that check.
+
+**What refused it is a kfunc mismatch, not a permission or build-tool
+one — a different layer of the same underlying class attempt 2 hit.**
+`scx_bpf_consume` is a kernel-side BPF kfunc the packaged binary's
+compiled BTF references and this kernel's BTF does not expose under
+that name. This is a version-pairing problem exactly like attempt 2's
+link-time libbpf/bpftool skew, one layer further down the stack:
+attempt 2's mismatch was between a self-built userspace tool and its
+own generated skeleton; this one is between a prebuilt binary's
+expectations and the exact kernel API surface it was compiled against.
+**Which upstream `scx`/kernel version introduced or renamed this kfunc
+was not researched from primary sources and is left unresolved here** —
+stating a specific version boundary without checking it against
+`kernel.org` or the `scx` project's own changelog would be exactly the
+uncited-number defect this project's own history already records for
+the erofs kernel-floor claim (`docs/options/23`), and this note does
+not repeat it.
+
+**What remains exactly as unmeasured as before, for a different
+reason**: whether a scheduler can actually engage
+`/sys/kernel/sched_ext/state` (transition it to `enabled`) on this
+runner is still untested — attempt 2 never linked a binary to try it
+with, and this attempt linked one but it failed a compatibility check
+before reaching that transition. Three attempts, three different
+stopping points, the same unanswered question.
+
+Both workflow run ids (`36511747418`, `36511898441`) and both commits
+(`07ebd9f`, `695e62a`) are what this section's claims rest on. The
+workflow file is deleted, per the same "not kept" convention as both
+previous probes.
+
 ## Review findings, and what changed because of them
 
 **`tcb-review` — HIGH, reproduced, fixed.** `apply_sched_ext()` originally

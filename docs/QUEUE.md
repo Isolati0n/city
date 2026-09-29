@@ -245,8 +245,33 @@ Status of each, current as of this commit:
     found 6 citation/line-number defects (all off-by-a-few-lines or a
     wrong section attribution, one small misquote) and no substantive
     error; all fixed.
-  - `docs/options/23` and `docs/options/20`: still pending (research
-    done, notes drafted, claims review in flight as of this commit).
+  - `docs/options/23`: **DONE**, this commit. The prior hold
+    (`docs/plans/01-brick-images.md`'s own "HELD until after phase 3")
+    is satisfied — phase 3 landed. Measured directly on this container:
+    `mount -t erofs <file>` silently loop-attaches (util-linux doing the
+    same `LOOP_CTL_GET_FREE`/`LOOP_CONFIGURE` dance `nwsup.c` does by
+    hand); the genuine loop-free mechanism is raw
+    `fsopen`/`fsconfig(FSCONFIG_SET_STRING, "source", ...)`/`fsmount`/
+    `move_mount`, confirmed working and loop-free
+    (`CONFIG_EROFS_FS_BACKED_BY_FILE=y`). No primary-source citation
+    exists anywhere in the tree for the prior "kernel >= 6.12" figure —
+    said plainly rather than repeated, with the config symbol and this
+    note's own measurement offered instead. Verified bricks (fs-verity,
+    the amendment's item E): unmeasurable on this container at every
+    layer (`CONFIG_FS_VERITY` unset, no `fsverity` CLI, no verity flag
+    in this `mkfs.erofs`) — stated as a hard gap, not assumed working;
+    the digest/`NW_BRICK_HASH` relationship is structurally different
+    (Merkle-tree descriptor vs. a flat whole-file sha256) and neither
+    reduces to the other. No pid1.c/dawn.c/Grok involvement — this is
+    Claude's own mount-path territory in `nwsup.c`, not built this
+    round. `claims` found one section misattribution (a real quote,
+    wrong CLAUDE.md section) and two minor citation overstatements;
+    all fixed. Every environment claim (config flags, the loop-fallback
+    trap, the raw-syscall mechanism, the fs-verity gap) was
+    independently reproduced by the reviewer on this same container,
+    matching down to exact device numbers and dmesg lines.
+  - `docs/options/20`: pending (research done, note drafted, `claims`
+    review in flight as of this commit).
   NOT STARTED.
 
 No ordering dependency among 1a/1d/1e/1f/1g/Section-4 — any can run
@@ -347,7 +372,22 @@ or Arch container on the free `ubuntu-24.04` runner, using that distro's
 own packaged `scx` binary against the runner's kernel rather than
 building from source. Confirm the package exists before attempting
 anything else. Measurement only — Phase 4 deletes the `sched_ext` plan
-field regardless of this result. NOT STARTED.
+field regardless of this result. **DONE, 2 of 3 push iterations used**
+(`07ebd9f`, `695e62a`). Confirmed `scx_c_schedulers` exists in Fedora's
+own repo (42/43/44 stable) before writing any workflow, per the
+instruction. A privileged Fedora 42 container on the runner installed
+it and actually invoked `scx_simple` — the first time in three attempts
+across two rounds that a load was attempted at all — and libbpf refused
+it: `scx_bpf_consume` not found in this kernel's BTF, a version-pairing
+mismatch one layer further down the stack than attempt 2's link-time
+skew (packaged binary vs. this exact kernel's kfunc set, rather than
+self-built tool vs. its own skeleton). `/sys/kernel/sched_ext/state`
+stayed `disabled` before/while/after, quoted verbatim in
+`docs/options/15`. Decisively answers that struct_ops loading is
+*permitted* in this CI environment; still does not show a scheduler
+reaching `enabled`, for a different reason than before. Workflow
+deleted per the "not kept" convention. Full result:
+`docs/options/15`'s "Attempt 3" section.
 
 ## Open questions carried forward
 
