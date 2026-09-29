@@ -1315,3 +1315,7 @@ prose-count	docs/QUEUE.md	fault-injection measurement in `debf96f`/§10 item 3, 
 # (runtime.md and plan.md) a few words earlier in the same sentence,
 # CLAUDE.md's own "named list immediately following" allowance.
 prose-count	docs/QUEUE.md	retired `io_rbps`/`io_wbps` worked example in the two territory rule
+
+# same "Section 10 item N" citation pattern already acked several times
+# above, citing docs/options/31's own decided-fault-injection item.
+prose-count	docs/options/32-stop-grace-escalation.md	assumption (`docs/options/31` Section 10 item 3's fault-injection
