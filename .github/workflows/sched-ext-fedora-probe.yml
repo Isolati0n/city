@@ -42,22 +42,26 @@ jobs:
           scx_simple --help 2>&1 | head -30 || true
 
       - name: Run scx_simple and capture state while loaded
+        continue-on-error: true
         run: |
           set -x
-          ( scx_simple > /tmp/scx_simple.log 2>&1 & echo $! > /tmp/scx.pid )
+          scx_simple > /tmp/scx_simple.log 2>&1 &
+          SCX_PID=$!
           sleep 3
           echo "--- state while (intended) running ---"
           cat /sys/kernel/sched_ext/state 2>&1 || echo "MISSING: state file"
           ls -la /sys/kernel/sched_ext/ 2>&1 || true
-          for f in /sys/kernel/sched_ext/root/*; do
-            echo "== $f =="; cat "$f" 2>&1 || true
-          done
           echo "--- scx_simple log so far ---"
           cat /tmp/scx_simple.log || true
-          echo "--- stopping scx_simple ---"
-          kill -INT "$(cat /tmp/scx.pid)" 2>&1 || true
-          sleep 1
-          wait "$(cat /tmp/scx.pid)" 2>&1; echo "exit status: $?"
+          if kill -0 "$SCX_PID" 2>/dev/null; then
+            echo "--- still running, sending SIGINT ---"
+            kill -INT "$SCX_PID" 2>&1 || true
+            sleep 1
+          else
+            echo "--- scx_simple already exited ---"
+          fi
+          wait "$SCX_PID" 2>/dev/null
+          echo "exit status: $?"
           echo "--- full scx_simple log ---"
           cat /tmp/scx_simple.log || true
 
