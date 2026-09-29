@@ -12,7 +12,7 @@ session restart: read both files, nothing else, to pick back up.
 If this file disagrees with the repo, the repo wins, and whoever notices
 fixes this file.
 
-Base at last edit: `3ff6c47` (origin/main).
+Base at last edit: `07ebd9f` (origin/main).
 
 ## Decision authority (Section 5 of the brief)
 
@@ -231,6 +231,22 @@ Status of each, current as of this commit:
   (output ownership; the `pid1.c` section is a brief for Grok, not an
   edit), `docs/options/23` (erofs file-backed bricks), `docs/options/20`
   (grants table + schema generator + the machine hash from Section 1.4).
+  - `docs/options/21`: **DONE**, this commit. Reads "nw-sup owns each
+    house's output" as interpretation/disposition, not capture — capture
+    structurally cannot move to nw-sup (its fd 1/2 are the log pipe's
+    write end only, `nwspawn.c:224-225`; the logger predates nw-sup's own
+    existence, `pid1.c:770-826`), which docs/options/12 already
+    established. The run-boundary problem is already solved inside
+    nw-sup by docs/options/22 §2's marker line, with no pid1.c change.
+    Finding for Grok: **no pid1.c/dawn.c change requested** by this note
+    — stated as the brief, rather than silently omitted, plus one
+    optional, explicitly-not-recommended question (on-disk per-run
+    tail trimming) left open for anyone who wants it. `claims` review
+    found 6 citation/line-number defects (all off-by-a-few-lines or a
+    wrong section attribution, one small misquote) and no substantive
+    error; all fixed.
+  - `docs/options/23` and `docs/options/20`: still pending (research
+    done, notes drafted, claims review in flight as of this commit).
   NOT STARTED.
 
 No ordering dependency among 1a/1d/1e/1f/1g/Section-4 — any can run
