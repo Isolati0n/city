@@ -91,11 +91,14 @@ def read_evidence(path):
     i = data.find(sep)
     if i < 0:
         raise SystemExit(f"relaunch-house: {path} has no '--' separator; "
-                          f"not an NWEVT1 package")
+                          f"not an NWEVT2 package")
     header = data[:i].decode("utf-8", "replace")
     tail = data[i + len(sep):]
     lines = header.split("\n")
-    if not lines or lines[0] != "NWEVT1":
+    # NWEVT1 -> NWEVT2 with Phase 3 (docs/OPERATOR-BRIEF.md Section 3):
+    # two new header lines, oom_kill= and pids_max=. A version bump, not
+    # a silent change -- see docs/options/12-crash-evidence.md.
+    if not lines or lines[0] != "NWEVT2":
         raise SystemExit(f"relaunch-house: {path} bad magic line "
                           f"{lines[0] if lines else ''!r}")
     fields = {}

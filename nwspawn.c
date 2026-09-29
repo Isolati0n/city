@@ -396,6 +396,31 @@ int main(int argc, char **argv)
             snprintf(lbb, sizeof lbb, "%llu",
                      (unsigned long long)u[i].res.layer_bytes);
             setenv("NW_LAYER_BYTES", lbb, 1);
+            /* Phase 3: the six resource-block fields nw-sup applies via
+             * a cgroup and three direct syscalls. Same "0 = unset"
+             * decimal convention every other field here uses; nw-sup
+             * re-validates all six anyway, for the same reason it
+             * re-validates NW_BRICK/NW_LAYER/NW_LAYER_BYTES -- it reads
+             * its unit from the environment, not the sealed blob.
+             * `nice` is signed (int8_t, -20..19) and is the one field
+             * here that needs %d rather than an unsigned conversion. */
+            char cmbuf[24], mhbuf[24], mmbuf[24], cwbuf[8], nicebuf[8],
+                 spbuf[8];
+            snprintf(cmbuf, sizeof cmbuf, "%llu",
+                     (unsigned long long)u[i].res.cpu_mask);
+            snprintf(mhbuf, sizeof mhbuf, "%llu",
+                     (unsigned long long)u[i].res.mem_high);
+            snprintf(mmbuf, sizeof mmbuf, "%llu",
+                     (unsigned long long)u[i].res.mem_max);
+            snprintf(cwbuf, sizeof cwbuf, "%u", (unsigned)u[i].res.cpu_weight);
+            snprintf(nicebuf, sizeof nicebuf, "%d", (int)u[i].res.nice);
+            snprintf(spbuf, sizeof spbuf, "%u", (unsigned)u[i].res.sched_policy);
+            setenv("NW_CPU_MASK", cmbuf, 1);
+            setenv("NW_MEM_HIGH", mhbuf, 1);
+            setenv("NW_MEM_MAX", mmbuf, 1);
+            setenv("NW_CPU_WEIGHT", cwbuf, 1);
+            setenv("NW_NICE", nicebuf, 1);
+            setenv("NW_SCHED_POLICY", spbuf, 1);
             int nb = 0;
             for (uint32_t b = 0; b < h->n_binds; b++) {
                 if (bd[b].unit != (uint16_t)i) continue;

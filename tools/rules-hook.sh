@@ -120,7 +120,7 @@ MAP = [
       "bootneed-oracle.c",
       "caller_nw_check.c", "leaf_name_dup.c", "leaf_name_ok.c",
       "leaf_path_ok.c", "stage-layers.py", "unit-info.c"}, "plan"),
-    ({"fdorder-sweep.py", "cloexec-proof.c",
+    ({"fdorder-sweep.py", "cgroup_premount.c", "cloexec-proof.c",
       "console-boot-test.py", "run.py", "unit_probe.c", "scale-probe.py",
       "decide_seq.c"}, "harness"),
 ]

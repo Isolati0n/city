@@ -596,6 +596,38 @@ through the test suite. Two things generalise from it:
   is which instrument finds it. ("The file every other assertion in
   the test reads" stood in three files; `claims` counted.)
 
+## A cgroup2 mount is durable fixture state too, and it outlives the process
+
+Phase 3 added a second instance of the same class the section above is
+about, and it survives even harder than a layer does: not a directory
+on the machine root, but a MOUNT in the container's own ambient
+namespace. `_ensure_ambient_cgroup2()` (`tests/run.py`) mounts a real
+cgroup2 at `/sys/fs/cgroup` once, so every direct `nw-sup` invocation
+(eighteen tests, no `unshare` of their own) gets a genuine cgroup2
+directory fd instead of `EBADF`. That mount is not scoped to this
+Python process or to one `boot()` call — it changes the CONTAINER's
+own mount table and stays there until something explicitly `umount`s
+it, for the rest of the container's life, across every later `python3
+tests/run.py` invocation.
+
+**So a green run in a container that has run this suite before is not
+evidence this mechanism still does anything.** `control` proved it:
+reverting both this function's mount call and `boot()`'s
+`cgroup_premount` step in a scratch copy still passed `--only happy`,
+because an earlier run in the same container had already left a real
+cgroup2 mount stacked on the tmpfs placeholder. Re-run in a namespace
+where that stale mount was explicitly `umount`ed first, the identical
+revert failed exactly as it should (`clone house errno=9` on every
+unit). Only a container whose `/sys/fs/cgroup` has never had this
+applied — a fresh one, or one with an explicit `umount /sys/fs/cgroup`
+first — actually re-exercises it.
+
+Nothing here forces that reset automatically, the same as the
+directory case above: this is written down rather than fixed, because
+the fix would be sweeping a container's own mount table on every run,
+which is a larger and riskier change than the mechanism it would be
+protecting.
+
 ## A note for reviewers working read-only
 
 `tests/run.py` refuses an over-long `NW_STAGE` at startup. The bound comes

@@ -289,16 +289,29 @@ TCB, so `nwcheck.c`'s validation rules and invariant 3's drift concerns
 don't apply to it at all):
 
 ```
-NWEVT1
+NWEVT2
 unit=<name>
 reason=exit|signal
 value=<0-255>
 death=<deaths>
 budget=<budget>
+oom_kill=<count>|unavailable
+pids_max=<count>|unavailable
 tail_bytes=<0..NW_EVIDENCE_TAIL_MAX>
 --
 <tail_bytes raw bytes, verbatim, unparsed>
 ```
+
+`oom_kill`/`pids_max` joined with Phase 3 (docs/OPERATOR-BRIEF.md
+Section 3, per-house cgroups) — a delta since THIS generation's own
+cgroup was created (a fresh cgroup per generation, never reused; see
+`house_cgroup_open_generation()`'s own comment in `nwsup.c`), read from
+`memory.events`/`pids.events`. `unavailable`, never a false `0`, when
+the field or the controller it depends on does not exist on this
+machine — required by Section 3 so a reader cannot mistake "nothing to
+report" for "definitely zero." The magic bumped `NWEVT1` → `NWEVT2`
+for the same reason invariant 3's format changes always bump a magic:
+a version change, not a silent one.
 
 Header fields are all bounded-width (`unit` is at most `NW_NAME_LEN-1`
 bytes, `reason` is one of two fixed strings, `value`/`death`/`budget` are

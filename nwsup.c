@@ -10,6 +10,7 @@
 #include <linux/filter.h>
 #include <linux/landlock.h>
 #include <linux/loop.h>
+#include <linux/sched.h>
 #include <linux/seccomp.h>
 #include <sched.h>
 #include <stddef.h>
@@ -23,6 +24,7 @@
 #include <sys/mman.h>
 #include <sys/mount.h>
 #include <sys/prctl.h>
+#include <sys/resource.h>
 #include <sys/signalfd.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
@@ -34,6 +36,9 @@
 
 #ifndef SYS_pidfd_open
 #define SYS_pidfd_open 434
+#endif
+#ifndef SYS_clone3
+#define SYS_clone3 435
 #endif
 
 static void die(const char *s)
@@ -707,6 +712,350 @@ static void apply_sched_ext(unsigned sched_ext)
     die("sched-ext no policy artifact");
 }
 
+/* Phase 3 (docs/OPERATOR-BRIEF.md Section 3): mem_high/mem_max/
+ * cpu_weight, applied via the house's own cgroup rather than a
+ * syscall. "In place" per Section 1.6 -- one cgroup per house, no
+ * intermediate grouping level, resource groups being cut.
+ *
+ * cg_write_u64() and cg_read_back_u64() are the mechanism-rule's own
+ * "kernel read-back" for these three fields: a write that appears to
+ * succeed is not evidence the kernel accepted the VALUE (a value
+ * outside the controller's own range is refused at write() time, but
+ * a write of the right shape to the wrong file, or to a file the
+ * kernel silently clamps, would not be caught by checking the write's
+ * return alone). Reading the value back and comparing is what
+ * `tools/HANDOFF-resources.md`'s table calls the probe for each of
+ * these three fields. */
+static int cg_write_u64(const char *path, unsigned long long val)
+{
+    int fd = open(path, O_WRONLY | O_CLOEXEC);
+    if (fd < 0) return -1;
+    char buf[24];
+    int n = snprintf(buf, sizeof buf, "%llu", val);
+    if (n < 0 || n >= (int)sizeof buf) { close(fd); errno = EINVAL; return -1; }
+    ssize_t w = write(fd, buf, (size_t)n);
+    int saved = errno;
+    close(fd);
+    if (w != n) { errno = saved; return -1; }
+    return 0;
+}
+
+static int cg_read_back_u64(const char *path, unsigned long long want)
+{
+    int fd = open(path, O_RDONLY | O_CLOEXEC);
+    if (fd < 0) return -1;
+    char buf[32];
+    ssize_t r = read(fd, buf, sizeof buf - 1);
+    close(fd);
+    if (r <= 0) return -1;
+    buf[r] = 0;
+    errno = 0;
+    char *endp = NULL;
+    unsigned long long got = strtoull(buf, &endp, 10);
+    if (errno == ERANGE || endp == buf) return -1;
+    return (got == want) ? 0 : -1;
+}
+
+/* Enable one or more controllers in a cgroup's own subtree_control, so
+ * a CHILD directory of it may use them. Tolerant of "already enabled"
+ * (writing a controller name that is already in subtree_control is an
+ * ordinary, idempotent success at the kernel level) -- the shape every
+ * concurrent-mkdir tolerance in this file already relies on, here
+ * because every nw-sup for every house does this at the SAME two
+ * ancestor directories (`/sys/fs/cgroup` and `NW_CGROUP_DIR`) at boot,
+ * concurrently. */
+static int cg_enable_subtree(const char *dir, const char *controllers)
+{
+    char path[192];
+    if (snprintf(path, sizeof path, "%s/cgroup.subtree_control", dir)
+        >= (int)sizeof path) { errno = ENAMETOOLONG; return -1; }
+    int fd = open(path, O_WRONLY | O_CLOEXEC);
+    if (fd < 0) return -1;
+    size_t len = strlen(controllers);
+    ssize_t w = write(fd, controllers, len);
+    int saved = errno;
+    close(fd);
+    if (w < 0 && saved != 0) { errno = saved; return -1; }
+    return 0;
+}
+
+/* Ensures the shared parent (NW_CGROUP_DIR) exists and has the
+ * controllers a DECLARED field needs enabled in its own
+ * subtree_control, so a later per-generation leaf directory may use
+ * them. Called once per supervisor life, before the restart loop.
+ *
+ * "Not advisory" (`tools/HANDOFF-resources.md`'s proposed rule,
+ * adopted here) applies to a DECLARED field specifically: a house
+ * asking for mem_max=128M and not getting it is the plan lying, the
+ * same argument invariant 6 already makes about a lid, and dies here
+ * by name. A house that declares NONE of the three is not lied to by
+ * a missing controller -- this container's own cgroup v2 offers only
+ * `hugetlb` (`docs/ENVIRONMENT.md`), and making every house here die
+ * at boot over a limit nothing asked for would be false advertising
+ * running the other way: a missing MECHANISM for an UNDECLARED field
+ * is not a promise broken. So delegation is attempted for every
+ * controller a declared field needs, and only THOSE failures die. */
+static void cgroup_parent_setup(uint64_t mem_high, uint64_t mem_max,
+                                 unsigned cpu_weight)
+{
+    if (mkdir(NW_CGROUP_DIR, 0700) < 0 && errno != EEXIST)
+        die("cgroup parent dir");
+
+    int need_memory = (mem_high != 0) || (mem_max != 0);
+    int need_cpu = (cpu_weight != 0);
+    /* pids is never a hard requirement in this phase -- nothing here
+     * declares a pids.max limit (docs/OPERATOR-BRIEF.md's own task-cap
+     * item names this "needs Phase 3", i.e. comes after it) -- so its
+     * delegation is attempted, purely to widen what the autopsy below
+     * can read, and never dies either way. */
+    if (need_memory &&
+        (cg_enable_subtree("/sys/fs/cgroup", "+memory") < 0 ||
+         cg_enable_subtree(NW_CGROUP_DIR, "+memory") < 0))
+        die("cgroup memory controller unavailable");
+    if (need_cpu &&
+        (cg_enable_subtree("/sys/fs/cgroup", "+cpu") < 0 ||
+         cg_enable_subtree(NW_CGROUP_DIR, "+cpu") < 0))
+        die("cgroup cpu controller unavailable");
+    (void)cg_enable_subtree("/sys/fs/cgroup", "+pids");
+    (void)cg_enable_subtree(NW_CGROUP_DIR, "+pids");
+}
+
+/* Creates ONE GENERATION's own leaf cgroup -- never reused across a
+ * restart of the house, and this is load-bearing rather than tidiness.
+ * cgroup.kill leaves a mark on the cgroup OBJECT it was written to,
+ * invisible in cgroup.events and cgroup.freeze: a later
+ * clone3(CLONE_INTO_CGROUP) placement into that same, already-killed
+ * directory is SIGKILLed within microseconds of the syscall returning,
+ * every time, whether or not the directory was populated when
+ * cgroup.kill was written, and however long after the write the
+ * placement happens. Reproduced in a standalone program with no
+ * nw-sup code at all -- mkdir, clone3, exit, write "1" to the empty
+ * cgroup's cgroup.kill, clone3 again into the same directory: SIGKILL,
+ * 0/20 survivals across a tight loop. The only thing that clears it is
+ * a genuinely different cgroup object: rmdir the old directory and
+ * mkdir a new one, even at the identical path -- reopening a fresh fd
+ * on the same still-existing directory does not clear it, so the mark
+ * lives on the kernel's `struct cgroup`, not on the pathname or the
+ * fd. This is why cg_kill_sweep() below is always followed by an
+ * rmdir of the same directory rather than a reuse for the next
+ * generation.
+ *
+ * name may not contain '.' (name_ok() in nwcheck.c), so "<name>.<gen>"
+ * can never collide with a literal unit name. gen is this
+ * supervisor's own monotonic counter and nw-sup itself has no restart
+ * path (invariant 4's "one budget authority per unit" -- nothing ever
+ * runs a second nw-sup for the same house while this one is alive), so
+ * within one boot at most one process ever creates "<name>.<gen>" for
+ * any given (name, gen) pair; a leftover from a prior boot cannot
+ * survive it, because cgroup2 is an in-kernel filesystem with nothing
+ * persisted to disk. mkdir() therefore dies loudly on ANY failure here,
+ * including EEXIST -- unlike the shared parent above, reusing a
+ * directory this function did not itself just create is exactly the
+ * bug this function exists to avoid. */
+/* Cleans up THIS generation's own directory before dying, for every
+ * failure that can happen after mkdir() succeeds and before clone3()
+ * ever places a process into it. That window is the one place a
+ * leftover directory can be rmdir'd with no ambiguity at all:
+ * cgroup.kill is only ever written after cg_kill_sweep(), which only
+ * ever runs after wait_house() reaps a death, which cannot happen
+ * before this generation's own clone3() has even been attempted -- so
+ * nothing could have populated or killed this directory yet, and a
+ * plain rmdir() is exactly as safe as never having created it.
+ *
+ * Without this, a die() here (or in the caller, on clone3() failing)
+ * leaves an empty, uncleaned "<name>.<gen>" directory behind forever
+ * (cgroup2 has nothing persisted to disk, but nothing removes it
+ * in-kernel either) -- and if this same unit's nw-sup is ever started
+ * again with `gen` back at 0 (a fresh process's own counter always
+ * starts there), house_cgroup_open_generation() hits EEXIST on the
+ * very first attempt and dies again, by design (reusing a directory
+ * this process did not itself just create is the bug this whole
+ * mechanism exists to avoid) -- permanently, until the machine
+ * reboots. Reproduced directly: force clone3() to fail with ENOSYS via
+ * LD_PRELOAD on a plan declaring NO resource fields at all, confirm
+ * the leftover directory with `stat`, then boot the identical plan
+ * again with clone3() unblocked -- second boot dies
+ * `cgroup generation dir errno=17` (EEXIST) on a unit that asked for
+ * nothing Phase 3 added. `tcb-review`. */
+static void die_cgroup(const char *dir, const char *what)
+{
+    rmdir(dir); /* best-effort */
+    die(what);
+}
+
+static int house_cgroup_open_generation(const char *name, unsigned gen,
+                                         uint64_t mem_high, uint64_t mem_max,
+                                         unsigned cpu_weight,
+                                         char *out_path, size_t out_path_sz)
+{
+    char dir[160];
+    if (snprintf(dir, sizeof dir, "%s/%s.%u", NW_CGROUP_DIR, name, gen)
+        >= (int)sizeof dir) die("cgroup path");
+    if (mkdir(dir, 0700) < 0) die("cgroup generation dir");
+
+    if (mem_high) {
+        char p[192];
+        snprintf(p, sizeof p, "%s/memory.high", dir);
+        if (cg_write_u64(p, (unsigned long long)mem_high) < 0)
+            die_cgroup(dir, "mem-high write");
+        if (cg_read_back_u64(p, (unsigned long long)mem_high) < 0)
+            die_cgroup(dir, "mem-high readback");
+    }
+    if (mem_max) {
+        char p[192];
+        snprintf(p, sizeof p, "%s/memory.max", dir);
+        if (cg_write_u64(p, (unsigned long long)mem_max) < 0)
+            die_cgroup(dir, "mem-max write");
+        if (cg_read_back_u64(p, (unsigned long long)mem_max) < 0)
+            die_cgroup(dir, "mem-max readback");
+    }
+    if (cpu_weight) {
+        char p[192];
+        snprintf(p, sizeof p, "%s/cpu.weight", dir);
+        if (cg_write_u64(p, (unsigned long long)cpu_weight) < 0)
+            die_cgroup(dir, "cpu-weight write");
+        if (cg_read_back_u64(p, (unsigned long long)cpu_weight) < 0)
+            die_cgroup(dir, "cpu-weight readback");
+    }
+
+    if (snprintf(out_path, out_path_sz, "%s", dir) >= (int)out_path_sz)
+        die_cgroup(dir, "cgroup path");
+    int fd = open(dir, O_DIRECTORY | O_CLOEXEC);
+    if (fd < 0) die_cgroup(dir, "open cgroup dir");
+    return fd;
+}
+
+/* clone3(CLONE_INTO_CGROUP), replacing fork() for the house's process.
+ * No glibc wrapper is assumed to exist -- the raw syscall, the same
+ * shape `wait_house()`'s own pidfd_open() call already uses for a
+ * syscall this project cannot assume glibc wraps everywhere it runs.
+ *
+ * flags carries ONLY CLONE_INTO_CGROUP: no CLONE_VM, so this is
+ * fork()'s own copy-on-write semantics, not thread creation -- stack/
+ * stack_size stay 0, which is only meaningful (and required) when
+ * CLONE_VM is set. exit_signal=SIGCHLD is what makes a stopped child
+ * generate the SIGCHLD wait_house()'s poll loop and pidfd both depend
+ * on; clone3 does not assume it the way legacy clone(2)'s low flag
+ * bits did. nw-sup itself is not moved by this call -- CLONE_INTO_CGROUP
+ * places the CHILD into the given cgroup; the caller stays wherever it
+ * already was, which is Section 3's "nw-sup stays OUTSIDE the cgroup." */
+static pid_t clone_into_cgroup(int cgroup_fd)
+{
+    struct clone_args ca;
+    memset(&ca, 0, sizeof ca);
+    ca.flags = CLONE_INTO_CGROUP;
+    ca.exit_signal = SIGCHLD;
+    ca.cgroup = (__aligned_u64)(unsigned long)cgroup_fd;
+    long r = syscall(SYS_clone3, &ca, sizeof ca);
+    return (pid_t)r;
+}
+
+/* Whole-cgroup kill: SIGKILLs every process in `cgroup_path`, not only
+ * the one pid nw-sup itself forked. Called unconditionally after every
+ * death, before deciding what happens next -- not an escalation timer
+ * (this project refuses guessed constants; see runtime.md's Liveness
+ * section), a defensive sweep, so a house that forked a child of its
+ * own before dying cannot leave that child running, orphaned, inside a
+ * cgroup nw-sup is about to tear down. Always followed by an rmdir of
+ * this same directory (see house_cgroup_open_generation()'s comment
+ * for why a killed cgroup is never reused) -- the next generation, if
+ * there is one, gets its own freshly created directory instead.
+ *
+ * cgroup.kill (Linux 5.14+) is the direct mechanism; its own absence is
+ * the fallback trigger, not a version check, because a missing file is
+ * exactly what an old kernel looks like and version parsing is one
+ * more place to get a comparison backwards. Freeze-then-kill degrades
+ * to the same end state by a slower path: freeze stops every process
+ * in the cgroup from running further (so nothing forks a NEW child
+ * while this sweeps), SIGKILL each pid cgroup.procs lists, then
+ * unfreeze so the now-dead processes are reaped rather than left
+ * frozen. Untested on any kernel actually lacking cgroup.kill -- this
+ * container's own kernel (`uname -r`, not the unrelated build config
+ * under /boot -- see docs/ENVIRONMENT.md) has it, so the fallback
+ * branch is read, not run, the same honest gap `docs/options/15`
+ * records for its own untestable branch. */
+static void cg_kill_sweep(const char *cgroup_path)
+{
+    char p[192];
+    snprintf(p, sizeof p, "%s/cgroup.kill", cgroup_path);
+    int fd = open(p, O_WRONLY | O_CLOEXEC);
+    if (fd >= 0) {
+        ssize_t w = write(fd, "1", 1);
+        (void)w;
+        close(fd);
+        return;
+    }
+    if (errno != ENOENT) return; /* best-effort: a real error here is not fatal */
+
+    snprintf(p, sizeof p, "%s/cgroup.freeze", cgroup_path);
+    int ffd = open(p, O_WRONLY | O_CLOEXEC);
+    if (ffd < 0) return;
+    ssize_t fw = write(ffd, "1", 1);
+    (void)fw;
+    close(ffd);
+
+    snprintf(p, sizeof p, "%s/cgroup.procs", cgroup_path);
+    int pfd = open(p, O_RDONLY | O_CLOEXEC);
+    if (pfd >= 0) {
+        char buf[4096];
+        ssize_t r = read(pfd, buf, sizeof buf - 1);
+        close(pfd);
+        if (r > 0) {
+            buf[r] = 0;
+            char *save = NULL;
+            for (char *tok = strtok_r(buf, "\n", &save); tok;
+                 tok = strtok_r(NULL, "\n", &save)) {
+                pid_t victim = (pid_t)atoi(tok);
+                if (victim > 0) kill(victim, SIGKILL);
+            }
+        }
+    }
+
+    snprintf(p, sizeof p, "%s/cgroup.freeze", cgroup_path);
+    int ufd = open(p, O_WRONLY | O_CLOEXEC);
+    if (ufd >= 0) {
+        ssize_t uw = write(ufd, "0", 1);
+        (void)uw;
+        close(ufd);
+    }
+}
+
+/* memory.events / pids.events: "key value\n" lines, one counter per
+ * key. Reads the single named key's CURRENT cumulative value. -1 means
+ * the file or the controller is unavailable, distinct from a genuine
+ * 0 -- "unavailable" reports as unavailable in evidence, never as a
+ * false zero, per Section 3's own requirement. */
+static int cg_read_counter(const char *cgroup_path, const char *file,
+                            const char *key, unsigned long long *out)
+{
+    char p[192];
+    snprintf(p, sizeof p, "%s/%s", cgroup_path, file);
+    int fd = open(p, O_RDONLY | O_CLOEXEC);
+    if (fd < 0) return -1;
+    char buf[512];
+    ssize_t r = read(fd, buf, sizeof buf - 1);
+    close(fd);
+    if (r <= 0) return -1;
+    buf[r] = 0;
+    size_t klen = strlen(key);
+    for (char *line = buf; line && *line; ) {
+        char *nl = strchr(line, '\n');
+        if (nl) *nl = 0;
+        if (strncmp(line, key, klen) == 0 && line[klen] == ' ') {
+            errno = 0;
+            char *endp = NULL;
+            unsigned long long v = strtoull(line + klen + 1, &endp, 10);
+            if (errno != ERANGE && endp != line + klen + 1) {
+                *out = v;
+                return 0;
+            }
+            return -1;
+        }
+        line = nl ? nl + 1 : NULL;
+    }
+    return -1;
+}
+
 static pid_t child;
 static volatile sig_atomic_t stopping;
 
@@ -735,9 +1084,15 @@ static void on_term(int sig)
  * That waitpid does not block. It is not waitpid(-1): the pid is
  * the one we opened the pidfd on.
  *
- * Lids still run in the child after fork, before exec. fork is
- * unchanged; clone3(CLONE_PIDFD) would change how the child is
- * born and is not used.
+ * Lids still run in the child after birth, before exec -- unchanged by
+ * Phase 3's own clone3(CLONE_INTO_CGROUP) (`clone_into_cgroup()`,
+ * replacing the plain fork() this comment used to describe here):
+ * CLONE_INTO_CGROUP only changes which cgroup the child is born into,
+ * not fork()'s own copy-on-write semantics or anything below this
+ * point. CLONE_PIDFD (a single syscall producing both the pid and a
+ * pidfd together) is a different flag, still not used -- pidfd_open()
+ * two paragraphs above is still how this file gets one, kept
+ * independent of which clone flag places the child.
  *
  * pidfd_open NEEDS LINUX >= 5.3 AND CAN FAIL ON A KERNEL THAT HAS
  * IT: ENOSYS on an older or filtered kernel, EMFILE/ENFILE on
@@ -1032,8 +1387,17 @@ static int wait_house(pid_t p, int extra_fd)
  * affects the restart/spent decision or its console line, which say()
  * still prints immediately after this returns regardless of what
  * happened here. */
+/* Phase 3: two more fields, each with its own availability flag rather
+ * than defaulting an unreadable counter to 0 -- Section 3's own
+ * requirement ("anything unavailable reports unavailable, never 0").
+ * oom_kill_delta/pids_max_delta are already deltas by the time they
+ * reach here (computed at the one call site, against a baseline this
+ * function does not itself track); this function only formats them. */
 static void write_evidence(const char *name, int deaths, unsigned budget,
-                            int st)
+                            int st, unsigned long long oom_kill_delta,
+                            int oom_kill_avail,
+                            unsigned long long pids_max_delta,
+                            int pids_max_avail)
 {
     unsigned char tail[NW_EVIDENCE_TAIL_MAX];
     size_t tail_n = 0;
@@ -1116,13 +1480,30 @@ static void write_evidence(const char *name, int deaths, unsigned budget,
      * "no tail available" and produce the identical, valid, empty-tail
      * record -- no special case for either. */
 
+    /* "unavailable", never a false 0 -- Section 3's own requirement,
+     * and the reason these are formatted as strings rather than
+     * numbers: a number has no way to also mean "not measured". */
+    char oom_kill_s[24], pids_max_s[24];
+    if (oom_kill_avail)
+        snprintf(oom_kill_s, sizeof oom_kill_s, "%llu", oom_kill_delta);
+    else
+        snprintf(oom_kill_s, sizeof oom_kill_s, "unavailable");
+    if (pids_max_avail)
+        snprintf(pids_max_s, sizeof pids_max_s, "%llu", pids_max_delta);
+    else
+        snprintf(pids_max_s, sizeof pids_max_s, "unavailable");
+
     unsigned char record[256 + NW_EVIDENCE_TAIL_MAX];
+    /* NWEVT1 -> NWEVT2: two fields added (oom_kill, pids_max), Phase 3.
+     * A version bump, not a silent format change -- a reader keyed to
+     * "NWEVT1\n" at the top would otherwise be handed two unexpected
+     * lines before tail_bytes= with nothing announcing it. */
     int hdr_len = snprintf((char *)record, 256,
-        "NWEVT1\nunit=%s\nreason=%s\nvalue=%d\ndeath=%d\nbudget=%u\n"
-        "tail_bytes=%zu\n--\n",
+        "NWEVT2\nunit=%s\nreason=%s\nvalue=%d\ndeath=%d\nbudget=%u\n"
+        "oom_kill=%s\npids_max=%s\ntail_bytes=%zu\n--\n",
         name, WIFEXITED(st) ? "exit" : "signal",
         WIFEXITED(st) ? WEXITSTATUS(st) : WTERMSIG(st),
-        deaths, budget, tail_n);
+        deaths, budget, oom_kill_s, pids_max_s, tail_n);
     if (hdr_len < 0 || hdr_len >= 256) return;
     memcpy(record + hdr_len, tail, tail_n);
     size_t total = (size_t)hdr_len + tail_n;
@@ -1224,6 +1605,60 @@ int main(int argc, char **argv)
         if (errno == ERANGE || !endp || *endp) die("layer bytes range");
         layer_bytes = (uint64_t)v;
     }
+
+    /* Phase 3 (docs/OPERATOR-BRIEF.md Section 3): the six resource-block
+     * fields this process applies -- mem_high/mem_max/cpu_weight via the
+     * house's own cgroup, cpu_mask/nice/sched_policy via a direct syscall
+     * on this process before exec. io_rbps/io_wbps/layer_bytes are not
+     * here -- io limits are cut for this phase (Section 1.6), and
+     * layer_bytes already has its own validation above.
+     *
+     * RE-VALIDATED HERE for the same reason NW_BRICK/NW_LAYER/
+     * NW_LAYER_BYTES are: nw-sup reads its unit from the environment,
+     * not the sealed blob, so nothing nwcheck.c did stands behind these
+     * values. The bounds and cross-field rules mirror nwcheck.c's own
+     * (NW_E_RESWEIGHT, NW_E_RESSCHED, NW_E_RESNICE, NW_E_MEMORDER,
+     * NW_E_NICEPOL) exactly, because a forged environment is exactly
+     * the class those checks exist to close. */
+    uint64_t cpu_mask = 0, mem_high = 0, mem_max = 0;
+    unsigned cpu_weight = 0, sched_policy = NW_SCHED_UNSET;
+    int nice_val = 0;
+    if ((e = getenv("NW_CPU_MASK")) && e[0]) {
+        for (const char *p = e; *p; p++)
+            if (*p < '0' || *p > '9') die("cpu mask not a number");
+        errno = 0;
+        char *endp = NULL;
+        unsigned long long v = strtoull(e, &endp, 10);
+        if (errno == ERANGE || !endp || *endp) die("cpu mask range");
+        cpu_mask = (uint64_t)v;
+    }
+    if ((e = getenv("NW_MEM_HIGH")) && e[0]) {
+        for (const char *p = e; *p; p++)
+            if (*p < '0' || *p > '9') die("mem high not a number");
+        errno = 0;
+        char *endp = NULL;
+        unsigned long long v = strtoull(e, &endp, 10);
+        if (errno == ERANGE || !endp || *endp) die("mem high range");
+        mem_high = (uint64_t)v;
+    }
+    if ((e = getenv("NW_MEM_MAX")) && e[0]) {
+        for (const char *p = e; *p; p++)
+            if (*p < '0' || *p > '9') die("mem max not a number");
+        errno = 0;
+        char *endp = NULL;
+        unsigned long long v = strtoull(e, &endp, 10);
+        if (errno == ERANGE || !endp || *endp) die("mem max range");
+        mem_max = (uint64_t)v;
+    }
+    if ((e = getenv("NW_CPU_WEIGHT"))) cpu_weight = (unsigned)atoi(e);
+    if (cpu_weight > NW_CPU_WEIGHT_MAX) die("cpu weight range");
+    if ((e = getenv("NW_NICE"))) nice_val = atoi(e);
+    if (nice_val < NW_NICE_MIN || nice_val > NW_NICE_MAX) die("nice range");
+    if ((e = getenv("NW_SCHED_POLICY"))) sched_policy = (unsigned)atoi(e);
+    if (sched_policy > NW_SCHED_MAX) die("sched policy value");
+    if (mem_high && mem_max && mem_high >= mem_max) die("mem high/max order");
+    if (nice_val && sched_policy != NW_SCHED_OTHER)
+        die("nice without sched=other");
 
     /* Landlock grants beneath the house's root, which is only a restriction
      * if that root is a brick. nw-check returns NW_E_LLBRICK; re-checked here
@@ -1350,6 +1785,15 @@ int main(int argc, char **argv)
     umask(ctl_old_umask);
     if (listen(lfd, 4) < 0) die("ctl listen");
 
+    /* Phase 3: the shared parent and its controller delegation are set
+     * up once, here. Each individual generation gets its own leaf
+     * cgroup below, immediately before that generation's clone3() --
+     * never reused across a restart; see house_cgroup_open_generation()
+     * for why. cg_gen is this supervisor's own monotonic counter,
+     * naming each generation's directory. */
+    cgroup_parent_setup(mem_high, mem_max, cpu_weight);
+    unsigned cg_gen = 0;
+
     int stopped = 0;
 
     for (;;) {
@@ -1370,6 +1814,11 @@ int main(int argc, char **argv)
             if (d != NW_DECIDE_EXIT_SUP)
                 die("decide: unexpected decision while idle and stopping");
             unlink(sockpath);
+            /* No cgroup to remove here: has_child=0 at this point means
+             * whatever generation last ran already had its own
+             * directory swept and rmdir'd immediately after it died
+             * (see the death handling below), and no later generation
+             * has been created yet. */
             _exit(0);
         }
 
@@ -1409,6 +1858,10 @@ int main(int argc, char **argv)
                     continue;
                 }
                 if (d == NW_DECIDE_EXIT_SUP) {
+                    /* Same reasoning as the `stopping` branch above:
+                     * `stopped` is only reached after a generation's
+                     * own directory was already swept and rmdir'd, and
+                     * none has been created since. */
                     unlink(sockpath);
                     _exit(0);
                 }
@@ -1422,8 +1875,24 @@ int main(int argc, char **argv)
             continue;
         }
 
-        pid_t p = fork();
-        if (p < 0) die("fork house");
+        char cgroup_path[160];
+        int cgroup_fd = house_cgroup_open_generation(name, cg_gen++, mem_high,
+                                                       mem_max, cpu_weight,
+                                                       cgroup_path,
+                                                       sizeof cgroup_path);
+        pid_t p = clone_into_cgroup(cgroup_fd);
+        close(cgroup_fd); /* clone3 has already placed the child (or not
+                            * placed it at all, on failure); nothing later
+                            * in this iteration needs the fd again. */
+        /* clone3() failing means this generation's cgroup was never
+         * populated -- die_cgroup() rather than die(), for the same
+         * reason house_cgroup_open_generation()'s own internal
+         * failures use it: nothing could have written cgroup.kill to
+         * a directory clone3() never successfully placed anything
+         * into, so removing it before dying is unambiguously safe and
+         * leaves nothing for a later attempt at this same generation
+         * number to collide with. */
+        if (p < 0) die_cgroup(cgroup_path, "clone house");
         if (p > 0) {
             child = p;
         }
@@ -1474,6 +1943,39 @@ int main(int argc, char **argv)
 
             if (lids & NW_LID_NEWNET) lid_netns();
             if (lids & NW_LID_NEWNS) lid_newns();
+
+            /* cpu_mask/nice/sched_policy: syscalls on this process, not
+             * cgroup files -- `tools/HANDOFF-resources.md`'s own table.
+             * Applied here, before any lid, for the same reason
+             * sched_ext is applied early: these affect the CALLING
+             * process's own attributes, which execv() preserves, so
+             * the house inherits them without ever calling these
+             * syscalls itself -- no seccomp allow-list entry is needed
+             * for any of the three. "Not advisory": a declared value
+             * the kernel refuses dies here, by name, rather than
+             * running the house unbounded. */
+            if (cpu_mask) {
+                cpu_set_t set;
+                CPU_ZERO(&set);
+                for (int b = 0; b < 64 && b < CPU_SETSIZE; b++)
+                    if (cpu_mask & (1ULL << b)) CPU_SET(b, &set);
+                if (sched_setaffinity(0, sizeof set, &set) < 0)
+                    die("cpu mask");
+            }
+            if (sched_policy != NW_SCHED_UNSET) {
+                int real_policy = (sched_policy == NW_SCHED_OTHER) ? SCHED_NORMAL
+                                 : (sched_policy == NW_SCHED_BATCH) ? SCHED_BATCH
+                                 : SCHED_IDLE;
+                struct sched_param sp;
+                memset(&sp, 0, sizeof sp);
+                if (sched_setscheduler(0, real_policy, &sp) < 0)
+                    die("sched policy");
+            }
+            if (nice_val) {
+                if (setpriority(PRIO_PROCESS, 0, nice_val) < 0)
+                    die("nice");
+            }
+
             /* BEFORE lid_brick(), not after: tcb-review's HIGH finding.
              * sched_ext_supported() asks a question about the MACHINE's
              * kernel (/sys/kernel/sched_ext, /sys/kernel/btf/vmlinux),
@@ -1524,6 +2026,39 @@ int main(int argc, char **argv)
         st = wait_house(p, lfd);
         child = 0;
 
+        /* Death autopsy, read BEFORE the sweep below: cgroup.kill sends
+         * plain SIGKILL and does not touch memory.events, so reading
+         * order does not matter for correctness, but reading "what
+         * happened" before "clean up" is the more honest sequence to
+         * read back later. This generation's cgroup was created fresh
+         * by house_cgroup_open_generation() and never reused (see its
+         * comment), so memory.events/pids.events start at 0 for every
+         * generation -- the raw cumulative count read here already IS
+         * this generation's own delta, with no baseline to subtract.
+         * That is what satisfies the required control from Section 3:
+         * a house OOM-killed once and then crashing plainly reads
+         * oom_kill=0 on that second, different generation's own
+         * cgroup, not a stale count carried over from the first. */
+        unsigned long long oom_kill_delta = 0, pids_max_delta = 0;
+        int oom_kill_avail = (cg_read_counter(cgroup_path, "memory.events",
+                                               "oom_kill", &oom_kill_delta) == 0);
+        int pids_max_avail = (cg_read_counter(cgroup_path, "pids.events",
+                                               "max", &pids_max_delta) == 0);
+
+        /* The defensive sweep: whatever this generation forked and did
+         * not reap itself before dying does not survive past this
+         * point. Unconditional, not an escalation-after-a-timeout
+         * (this project refuses guessed constants; see runtime.md's
+         * Liveness section) -- see cg_kill_sweep()'s own comment for
+         * why that distinction matters here. Followed immediately by
+         * rmdir: this generation's directory is never reused (see
+         * house_cgroup_open_generation()), so cleanup happens now
+         * rather than being deferred to whichever exit path below is
+         * taken -- there is no cgroup_path left to remove by the time
+         * any of them runs. */
+        cg_kill_sweep(cgroup_path);
+        rmdir(cgroup_path);
+
         /* The one decision point every child exit reaches, whatever
          * ended it: shutdown (this generation's own TERM or PID 1's),
          * an explicit STOP satisfied by this exit, a oneshot's clean
@@ -1542,7 +2077,8 @@ int main(int argc, char **argv)
              * clean exit(0) -- unreachable today since nw_lock is
              * always 1, exercised instead by tests/decide_seq.c and
              * proofs/caller_decide.c. Neither writes evidence or logs
-             * a line, matching both of the originals. */
+             * a line, matching both of the originals. This generation's
+             * cgroup was already swept and rmdir'd above. */
             unlink(sockpath);
             _exit(WIFEXITED(st) ? WEXITSTATUS(st) : 0);
 
@@ -1587,13 +2123,18 @@ int main(int argc, char **argv)
             else
                 snprintf(line, sizeof line, "%s %s death=%d/%u signal=%d",
                          verb, name, deaths, nw_budget, WTERMSIG(st));
-            write_evidence(name, deaths, nw_budget, st);
+            write_evidence(name, deaths, nw_budget, st,
+                           oom_kill_delta, oom_kill_avail,
+                           pids_max_delta, pids_max_avail);
             say(line);
             if (d == NW_DECIDE_SPENT) {
+                /* This generation's cgroup was already swept and
+                 * rmdir'd above; nothing left to remove here. */
                 unlink(sockpath);
                 _exit(WIFEXITED(st) ? WEXITSTATUS(st) : 71);
             }
-            continue; /* NW_DECIDE_RESTART: loop back to the top and fork */
+            continue; /* NW_DECIDE_RESTART: loop back to the top, where a
+                        * fresh generation gets its own new cgroup */
         }
 
         default:

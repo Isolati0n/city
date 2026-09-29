@@ -503,6 +503,91 @@ def stage_layers(blob, reset=True):
     expect(r.returncode == 0, f"stage-layers failed\n{r.out}{r.err}")
 
 
+def _ensure_ambient_cgroup2():
+    """One-time, whole-suite-process setup: make sure THIS process's own
+    (ambient, pre-unshare) /sys/fs/cgroup is a genuine cgroup2 mount, not
+    this container's tmpfs placeholder.
+
+    boot()'s own cgroup_premount step (see its comment) covers every
+    `unshare --mount-proc` boot, because a fresh mount namespace starts
+    as a copy of whatever this one already has -- but eighteen tests
+    invoke nw-sup DIRECTLY, with no unshare and no mount namespace of
+    their own at all (env-var-driven, not plan-driven: `nwsup.c`'s own
+    control-socket and pidfd-fallback tests, `test_brick_hash_
+    revalidated_at_the_supervisor` and its neighbours). Every one of
+    those inherits THIS process's own ambient mount table, so without
+    this they hit the exact same `clone house errno=9` (EBADF) that
+    motivated cgroup_premount in the first place -- found by running
+    the suite after Phase 3 landed, the same way that one was.
+
+    Idempotent and best-effort: mounting a second cgroup2 instance over
+    an existing one is just another view of the same global hierarchy
+    (confirmed empirically, see nwsup.c's own house_cgroup_open_
+    generation() comment), so calling this more than once, or on a
+    machine whose ambient /sys/fs/cgroup is already real cgroup2,
+    costs nothing. Also wipes any stale NW_CGROUP_DIR leaf this
+    process's own mount table already holds -- see cgroup_premount.c's
+    comment for why a killed cgroup must never be reused, and why this
+    run's own leftovers (if this is a second `python3 tests/run.py` in
+    the same container) cannot be told apart from a genuinely poisoned
+    one from the outside.
+
+    THE MOUNT ITSELF OUTLIVES THIS PROCESS, and that is what makes a
+    later re-verification of this function unreliable in place, not
+    merely repeated. `mount -t cgroup2 ...` here changes the CONTAINER's
+    own ambient mount namespace, not a private one this process owns,
+    so it is still there for every later `python3 tests/run.py`
+    invocation in the same container, forever, until something
+    explicitly `umount`s it. `control` proved this by reverting both
+    this function's mount call and boot()'s cgroup_premount step in a
+    scratch copy and getting a clean `--only happy` pass -- not because
+    the revert was safe, but because an EARLIER run in the SAME
+    container had already left a real cgroup2 mount stacked on the
+    tmpfs. Re-run against a namespace where that stale mount was
+    explicitly `umount`ed first, the identical revert failed exactly as
+    expected (`clone house errno=9` on every unit). So a green run in a
+    long-lived, reused container is not, by itself, evidence that this
+    function or `cgroup_premount.c` still does anything -- only a run in
+    a container whose `/sys/fs/cgroup` has never had this applied (a
+    fresh container, or an explicit `umount /sys/fs/cgroup` first)
+    re-exercises it. Nothing here forces that reset automatically, the
+    same way `NW_BRICK_DIR`/`NW_LAYER_DIR` accumulating on the machine
+    root is accepted rather than swept per run (see harness.md's
+    "Durable fixture state" section) -- this is that same class of
+    caveat, applied to a mount instead of a directory."""
+    r = run(["mount", "-t", "cgroup2", "cgroup2", "/sys/fs/cgroup"])
+    if r.returncode != 0:
+        return  # best-effort; a real refusal here is diagnosed by nw-sup itself
+    cg = "/sys/fs/cgroup/nw"
+    for entry in glob.glob(os.path.join(cg, "*")):
+        try:
+            os.rmdir(entry)
+        except OSError:
+            pass
+    try:
+        os.rmdir(cg)
+    except OSError:
+        pass
+
+
+_cgroup_premount_bin_cache = None
+
+
+def _cgroup_premount_bin():
+    """Compiles tests/cgroup_premount.c once and caches the path -- boot()
+    is called from nearly every test, so this must not re-invoke gcc per
+    call. See boot()'s own comment for why this exists at all."""
+    global _cgroup_premount_bin_cache
+    if _cgroup_premount_bin_cache is not None:
+        return _cgroup_premount_bin_cache
+    src = os.path.join(ROOT, "tests", "cgroup_premount.c")
+    out = f"{WORK}/cgroup_premount"
+    c = run(["gcc", "-O2", "-o", out, src])
+    expect(c.returncode == 0, f"cgroup_premount.c\n{c.err}{c.out}")
+    _cgroup_premount_bin_cache = out
+    return out
+
+
 def boot(slot=None, plan=None, extra=None, hold=800, nofile=None, env=None):
     # Staged here so no test can forget it, and so the suite exercises the
     # production ordering: layers exist BEFORE the boot that needs them.
@@ -512,13 +597,44 @@ def boot(slot=None, plan=None, extra=None, hold=800, nofile=None, env=None):
     # that reset on every boot.
     if plan:
         stage_layers(plan)
-    cmd = ["unshare", "--pid", "--fork", "--mount-proc", "--", f"{BIN}/nw-root", "--hold-ms", str(hold)]
+    inner = [f"{BIN}/nw-root", "--hold-ms", str(hold)]
     if slot:
-        cmd += ["--slot", slot]
+        inner += ["--slot", slot]
     if plan:
-        cmd += [plan]
+        inner += [plan]
     extra = extra or []
-    cmd += extra
+    inner += extra
+    # Phase 3: nw-sup places every house with clone3(CLONE_INTO_CGROUP),
+    # unconditionally, not only for a house that declares a cgroup-backed
+    # resource field -- CLONE_INTO_CGROUP needs a genuine cgroup2
+    # directory fd to place into at all, delegated or not. On a real
+    # boot this is dawn.c's own unconditional cgroup2 mount at
+    # /sys/fs/cgroup; `--mount-proc` already gives this private mount
+    # namespace its own view of /proc for the same reason (a genuine
+    # kernel subsystem the code under test needs, not a host artifact),
+    # so mounting a second, private view of cgroup2 here is the same
+    # move, not a new one. cgroup2 is one global hierarchy -- this is a
+    # real view onto the same tree the container's own processes are
+    # in, not an isolated fake -- so a controller this container
+    # genuinely lacks (docs/ENVIRONMENT.md) is still genuinely lacking
+    # here; only the mount POINT is private. Without it, this
+    # container's own ambient /sys/fs/cgroup (a tmpfs placeholder, not
+    # cgroup2 at all) makes clone3 fail with EBADF for every house,
+    # regardless of what the plan declares -- found by running the
+    # suite after Phase 3 landed and reading exactly that errno back.
+    # Best-effort: a mount failure here is not this helper's to
+    # diagnose, and Phase 3 tests read their own environment (cgroup
+    # controllers available) the same way lid-landlock and fs_mountable
+    # already do for theirs.
+    #
+    # `sh -c 'mount ...; exec "$0" "$@"'` was tried first and broke
+    # fd-preflight's hard=8 case (SIGINT instead of the test's own
+    # controlled HALT) -- the shell's own startup, not the mount, is
+    # what does not survive that limit, the same way nw-root's own
+    # dynamic loading already does. tests/cgroup_premount.c is a single
+    # mount(2) plus execv(2), no shell, compiled once and cached here.
+    cmd = ["unshare", "--pid", "--fork", "--mount-proc", "--",
+           _cgroup_premount_bin()] + inner
     kw = {}
     if nofile is not None:
         soft, hard = nofile
@@ -2978,7 +3094,7 @@ def test_last_words_survive_group_term():
         """
         p = subprocess.Popen(
             ["unshare", "--pid", "--fork", "--mount-proc", "--",
-             f"{BIN}/nw-root", blob],
+             _cgroup_premount_bin(), f"{BIN}/nw-root", blob],
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             start_new_session=True)
         init = None
@@ -3173,67 +3289,92 @@ def test_orphans_across_restarts():
     # decision is *do not wait*: the alternative is a shutdown a stuck
     # orphan can hang forever, which is the class this project refuses.
     #
-    # Measured at the boundary, three runs per rung: children dying
-    # before the hold expires give 12 every time, children dying at or
-    # after it give 0 every time. A sharp cutoff, not a flaky race.
-    # A SLOWER CHILD, so "did shutdown wait?" is separable by a margin
-    # no scheduler noise can close. With the 400ms child above, a
-    # genuinely blocking drain closed in 0.41s against 0.16s for the
-    # correct code -- `control` installed one and this assertion, bounded
-    # at 2s, passed. A test that cannot fail for its stated property is
-    # the thing this suite exists to catch, found in this suite.
-    slow_city = f"{WORK}/orphanslow.city"
-    open(slow_city, "w").write(
-        f"house orph {BIN}/unit-orphanslow kind=longrun budget=3 lids=none\n")
-    slow_blob = f"{WORK}/orphanslow.blob"
-    b = run(["python3", CC, "--city", slow_city, "--out", slow_blob, "--lab"])
-    expect(b.returncode == 0, f"bake slow\n{b.out}{b.err}")
+    # HISTORY, kept because the mechanism it measured is still real, just
+    # no longer reachable with this fixture (see below): before Phase 3,
+    # this used unit-orphanslow (parent exits immediately, children sleep
+    # 3s) and was measured at the boundary, three runs per rung: children
+    # dying before the hold expires give 12 every time, children dying at
+    # or after it give 0 every time, a sharp cutoff rather than a flaky
+    # race. `control` verified the assertion could fail: -DORPHAN_SLEEP_MS=0
+    # made every child exit at once and this went red; a genuinely
+    # blocking logger-drain control (0.41s vs 0.16s) passed the `wall`
+    # bound below.
+    #
+    # PHASE 3 RETIRED THAT FIXTURE FOR THIS CASE, and this is not a
+    # regression to route around -- it is docs/OPERATOR-BRIEF.md Section
+    # 3's own "used on restart" doing exactly what it says. nw-sup's
+    # cg_kill_sweep() now runs after EVERY death, not only at final exit,
+    # so unit-orphanslow's own generation -- whose top-level process still
+    # exits right after forking, by design, to test restart-driven
+    # orphaning -- gets its three children SIGKILLed by that SAME
+    # generation's sweep well before the outer shutdown ever starts.
+    # Measured directly: naming unit-orphanslow here now reports
+    # orphans=12 (all reaped by nw-sup's own per-generation cleanup, not
+    # by PID 1's separate accounting), not 0 -- the exact failure this
+    # round found by running the suite after Phase 3 landed.
+    #
+    # unit-orphanhang is the replacement: same three children, but the
+    # PARENT also ignores TERM/INT and sleeps 3s instead of exiting.
+    # Its own generation therefore never completes a death inside this
+    # test's short window, so cg_kill_sweep for it never runs at all --
+    # nw-sup stays blocked inside wait_house() on a parent that will not
+    # die from the shutdown TERM it forwards. `shutdown_city()` (pid1.c)
+    # does not wait for that supervisor either: after NW_GRACE_MS it
+    # SIGKILLs `houses[i].pid` -- nw-sup itself -- directly, never
+    # reaching cg_kill_sweep, so the parent and its three children both
+    # survive exactly as far as the final teardown. That target IS the
+    # supervisor, not the house or its orphans, which is what makes "PID
+    # 1 does not wait" the right description here too: not a bound
+    # cg_kill_sweep's own cleanup would honour, but the outer machine
+    # ending regardless of what any supervisor is still doing.
+    hang_city = f"{WORK}/orphanhang.city"
+    open(hang_city, "w").write(
+        f"house orph {BIN}/unit-orphanhang kind=longrun budget=1 lids=none\n")
+    hang_blob = f"{WORK}/orphanhang.blob"
+    b = run(["python3", CC, "--city", hang_city, "--out", hang_blob, "--lab"])
+    expect(b.returncode == 0, f"bake hang\n{b.out}{b.err}")
     for f in (mark,):
         try:
             os.unlink(f)
         except FileNotFoundError:
             pass
     t0 = time.time()
-    rc, out = boot(plan=slow_blob, hold=150)
+    rc, out = boot(plan=hang_blob, hold=150)
     wall = time.time() - t0
     expect(city_closed(rc, out), f"orphan-B rc={rc}\n{out[-1500:]}")
-    # PAIRED ON THE EFFECT, exactly as case A above -- which was fixed
-    # first and left this one reading `leaving 3 behind`, a line the
-    # fixture prints whether or not any fork returned. `control` made
-    # only the slow fixture fork nothing and this stayed green, under an
-    # ok line saying shutdown does not wait for orphans still alive.
-    # Twenty lines below the comment explaining why that is wrong.
-    slow_forked = len(re.findall(r"\[orphan\] run=\d+ child=\d+ pid=\d+",
+    # PAIRED ON THE EFFECT, exactly as case A above -- "leaving 3 behind"
+    # is a line the fixture prints whether or not any fork returned.
+    hang_forked = len(re.findall(r"\[orphan\] run=\d+ child=\d+ pid=\d+",
                                  out))
-    expect(slow_forked == 12,
-           f"the slow fixture reported {slow_forked} successful forks, "
-           f"expected 12. Nothing below is about orphans until they "
+    expect(hang_forked == 3,
+           f"the hang fixture reported {hang_forked} successful forks, "
+           f"expected 3. Nothing below is about orphans until they "
            f"exist.\n{out[-1500:]}")
-    # AND THAT THEY WERE STILL ALIVE. `wall` bounds shutdown's duration
-    # and says nothing about there being anything to wait for:
-    # `control` set -DORPHAN_SLEEP_MS=0 -- one character in the Makefile
-    # -- so every child exited at once, and the test stayed green with
-    # the property vacuous. orphans=0 here is the positive evidence,
-    # because the children outlive the hold: twelve were made, none was
-    # reaped, so twelve were alive and deliberately left.
+    # AND THAT THE PARENT WAS STILL ALIVE, not merely the children:
+    # orphans=0 here means neither nw-sup's own generation-kill nor PID
+    # 1's separate orphan accounting ever caught these three. A nonzero
+    # count would mean the parent died (from TERM despite the SIG_IGN,
+    # or some other path) in time for cg_kill_sweep to run, which is a
+    # different scenario from the one this case names.
     mb = re.search(r"orphans=(\d+)", out)
     expect(mb and int(mb.group(1)) == 0,
            f"the closed line reports orphans={mb.group(1) if mb else '?'}, "
-           f"expected 0. Nonzero means the children died before shutdown "
-           f"and none was alive to be waited for, so the bound below "
+           f"expected 0. Nonzero means the parent (and so its children's "
+           f"cgroup) died before the outer shutdown, so the bound below "
            f"would be measuring nothing.\n{out[-1500:]}")
-    # The property is that shutdown did not WAIT. The children sleep 3s
-    # and the hold is 150ms, so a shutdown that waits cannot finish
-    # before ~3s while one that does not closes in ~0.2s. The bound sits
-    # an order of magnitude from both.
+    # The property is that shutdown did not WAIT -- for the supervisor,
+    # the house, or its orphans. The parent and children all sleep 3s
+    # and the hold is 150ms, so a shutdown that waited for any of them
+    # cannot finish before ~3s while one that does not closes in ~0.2s.
+    # The bound sits an order of magnitude from both.
     expect(wall < 1.5,
-           f"shutdown took {wall:.2f}s with orphans still alive. "
-           f"Shutdown is bounded by the grace period; waiting on an "
-           f"orphan is unbounded and a stuck one would hang the "
-           f"machine.\n{out[-1500:]}")
+           f"shutdown took {wall:.2f}s with the house and its orphans "
+           f"still alive. Shutdown is bounded by the grace period; "
+           f"waiting on a stuck supervisor or an orphan is unbounded and "
+           f"either would hang the machine.\n{out[-1500:]}")
     print(f"ok orphans-across-restarts ({forked} reaped across {runs} "
-          f"runs; and shutdown does not wait for orphans still alive, "
-          f"closing in {wall:.2f}s)")
+          f"runs; and shutdown does not wait for a house or its orphans "
+          f"still alive, closing in {wall:.2f}s)")
 
 
 def test_crash_does_not_halt():
@@ -3693,7 +3834,14 @@ def _read_evidence(path):
     header = data[:i].decode("utf-8")
     tail = data[i + len(sep):]
     lines = header.split("\n")
-    expect(lines[0] == "NWEVT1", f"{path}: bad magic line {lines[0]!r}")
+    # NWEVT1 -> NWEVT2 with Phase 3 (docs/OPERATOR-BRIEF.md Section 3):
+    # two new header lines, oom_kill= and pids_max=, a version bump per
+    # this project's own rule for a format change, not a silent one.
+    # Accepting only the current magic here (not both) is deliberate --
+    # this suite never boots a tree whose nw-sup writes the old format,
+    # so a reader that silently tolerated NWEVT1 forever would never
+    # notice nw-sup regressing to it.
+    expect(lines[0] == "NWEVT2", f"{path}: bad magic line {lines[0]!r}")
     fields = {}
     for line in lines[1:]:
         if not line:
@@ -4006,7 +4154,7 @@ def test_evidence_ring_buffer_is_bounded():
     log = f"{WORK}/evtfire.log"
     lg = open(log, "wb")
     cmd = ["unshare", "--pid", "--fork", "--mount-proc", "--",
-           f"{BIN}/nw-root", "--hold-ms", "5000", blob]
+           _cgroup_premount_bin(), f"{BIN}/nw-root", "--hold-ms", "5000", blob]
     p = subprocess.Popen(cmd, stdout=lg, stderr=subprocess.STDOUT)
     max_hwm_kb = 0
     logger_pid = None
@@ -4137,7 +4285,7 @@ def test_relaunch_reproduces_a_real_crash():
         expect(orig_fields["value"] == "99", f"sanity: {orig_fields}")
         doctored_fields = dict(orig_fields)
         doctored_fields["value"] = "42"
-        header = "NWEVT1\n" + "".join(
+        header = "NWEVT2\n" + "".join(
             f"{k}={v}\n" for k, v in doctored_fields.items()) + "--\n"
         open(doctored, "wb").write(header.encode() + orig_tail)
 
@@ -4261,7 +4409,7 @@ def test_relaunch_does_not_count_against_the_real_budget():
     before = _evidence_files()
     proc = subprocess.Popen(
         ["unshare", "--pid", "--fork", "--mount-proc", "--",
-         f"{BIN}/nw-root", "--hold-ms", "4000", blob],
+         _cgroup_premount_bin(), f"{BIN}/nw-root", "--hold-ms", "4000", blob],
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     time.sleep(1.0)  # let the real city die and restart at least once
 
@@ -4640,7 +4788,18 @@ def test_ctl_stop_requested_clears_across_a_relaunch():
     proc = subprocess.Popen(
         [f"{BIN}/nw-sup", _sleeper("ctlclear"), "ctlclear"],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
-    time.sleep(0.2)
+    # 0.2s here (this check only, the others in this test already use
+    # 0.3s) was tight enough that a full suite run hit it once during
+    # Phase 3 review: `claims` reproduced "first generation never
+    # reached exec" in a full `make test` run and could not reproduce
+    # it in 15 isolated re-runs of this test alone, nor in a fresh
+    # full-suite re-run -- consistent with a rare scheduling spike
+    # under load rather than a deterministic Phase 3 regression
+    # (fork-to-exec here measures 2-4ms under no load, two orders of
+    # magnitude under the old 0.2s). Widened to match this test's OWN
+    # other checks rather than guessed, since the asymmetry was already
+    # there before Phase 3.
+    time.sleep(0.4)
     gen1_pid = _find_by_comm(proc.pid, "sleep")
     expect(gen1_pid is not None, "first generation never reached exec")
 
@@ -7989,7 +8148,7 @@ def test_logger_holds_fd0():
 
     p = subprocess.Popen(
         ["unshare", "--pid", "--fork", "--mount-proc", "--",
-         f"{BIN}/nw-root", "--hold-ms", "5000", blob],
+         _cgroup_premount_bin(), f"{BIN}/nw-root", "--hold-ms", "5000", blob],
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         start_new_session=True)
     try:
@@ -8096,7 +8255,7 @@ def test_rlimit_raise():
 
     p = subprocess.Popen(
         ["unshare", "--pid", "--fork", "--mount-proc", "--",
-         f"{BIN}/nw-root", "--hold-ms", "5000", blob],
+         _cgroup_premount_bin(), f"{BIN}/nw-root", "--hold-ms", "5000", blob],
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         start_new_session=True, preexec_fn=_cap1)
     try:
@@ -8165,7 +8324,7 @@ def test_rlimit_raise():
     # SYSTEMWIDE sysctl, permanently lowered on this machine.
     p2 = subprocess.Popen(
         ["unshare", "--pid", "--fork", "--mount-proc", "--",
-         f"{BIN}/nw-root", "--hold-ms", "900", blob],
+         _cgroup_premount_bin(), f"{BIN}/nw-root", "--hold-ms", "900", blob],
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         start_new_session=True, preexec_fn=_cap2)
     try:
@@ -12113,6 +12272,7 @@ def main():
                "coverage record.")
         tests = subset
 
+    _ensure_ambient_cgroup2()
     print_environment()
     print("== city suite ==")
     passed = []

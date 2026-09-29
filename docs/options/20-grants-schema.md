@@ -190,8 +190,10 @@ decision 4 is already satisfied by existing behavior.**
 **What is new**: `nw-spawn` does not hash anything today —
 `nwspawn.c` does not include `sha256.h` and calls no hash function on
 `blob`. Neither does the boot path print such a value, nor does
-`write_evidence()`'s record (`nwsup.c:1078-1080`,
-`"NWEVT1\nunit=%s\nreason=%s\nvalue=%d\ndeath=%d\nbudget=%u\ntail_bytes=%zu\n--\n"`)
+`write_evidence()`'s record (`nwsup.c`, format string quoted where it is
+built -- grep for `NWEVT2` rather than trusting a line number here, one
+already went stale once when Phase 3 added the `oom_kill`/`pids_max`
+fields between this note being written and being read)
 carry a hash field. Both are genuinely new code: compute the sha256 (the
 primitive already exists — `sha256.c`/`sha256.h`, already used for the
 evidence record's own filename) over the blob bytes `nw-spawn` already

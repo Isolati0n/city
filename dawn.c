@@ -234,10 +234,13 @@ int main(void)
     do_mount("tmpfs", "/run", "tmpfs", 0);
     do_mount("tmpfs", "/tmp", "tmpfs", 0);
 
-    /* cgroup2 is mounted here and used by nothing yet. Houses become real
-     * containers in a later piece of work and will need it present; opening
-     * the mount code once is cheaper than opening it twice. No cgroup logic
-     * exists in nw-sup and none should be added until that work. */
+    /* cgroup2 is mounted here unconditionally; nw-sup now uses it for
+     * every house's placement (docs/OPERATOR-BRIEF.md Section 3, Phase
+     * 3: clone3(CLONE_INTO_CGROUP) plus mem_high/mem_max/cpu_weight for
+     * a house that declares them). This mount predates that work --
+     * opening the mount code once here was cheaper than opening it
+     * twice -- and nw-sup's own cgroup_parent_setup()/
+     * house_cgroup_open_generation() are what actually use it now. */
     ensure_mount("cgroup2", "/sys/fs/cgroup", "cgroup2", 0);
 
     /* No errno is tolerated here, because the branch above already knows

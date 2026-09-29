@@ -42,9 +42,27 @@
  * decoration claiming to be a guard.
  *
  * Not in the TCB.
+ *
+ * PARENT_SLEEP_MS (unit-orphanhang only; 0 for unit-orphan and
+ * unit-orphanslow, which is why their own behaviour above is
+ * unchanged): the parent itself ignores TERM/INT and sleeps this long
+ * after forking, instead of exiting right away. Added when Phase 3's
+ * cgroup-wide kill "used on restart" (docs/OPERATOR-BRIEF.md Section 3)
+ * made the ORIGINAL case B here undemonstrable with this fixture: a
+ * parent that exits immediately lets nw-sup reap that generation's
+ * death and run its own cg_kill_sweep() well before the outer
+ * shutdown, killing these same children immediately rather than
+ * leaving them alive for it. A parent that does not die within PID 1's
+ * shutdown grace period is a supervisor PID 1 itself gives up on and
+ * SIGKILLs directly (`shutdown_city()` in pid1.c) -- never reaching
+ * cg_kill_sweep at all -- so the parent and its children both survive
+ * exactly as far as the final, unconditional teardown, which is what
+ * "PID 1 does not wait" was always about. See
+ * tests/run.py's orphans-across-restarts case B.
  */
 #define _GNU_SOURCE
 #include <fcntl.h>
+#include <signal.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -55,6 +73,9 @@
 #define WIDTH 64          /* divides the logger's 256-byte buffer */
 #ifndef ORPHAN_SLEEP_MS
 #define ORPHAN_SLEEP_MS 400
+#endif
+#ifndef PARENT_SLEEP_MS
+#define PARENT_SLEEP_MS 0
 #endif
 #define MARK "/tmp/nw-orphan.mark"
 
@@ -105,6 +126,17 @@ int main(void)
 
     say_padded(line, "[orphan] run=%d leaving %d behind", run, KIDS);
 
+#if PARENT_SLEEP_MS
+    /* unit-orphanhang only -- see the file header comment. Ignore
+     * TERM/INT so nw-sup's own forwarded shutdown signal cannot end
+     * this early: the whole point is that this generation never dies
+     * inside the test's own short window. */
+    signal(SIGTERM, SIG_IGN);
+    signal(SIGINT, SIG_IGN);
+    usleep(PARENT_SLEEP_MS * 1000);
+    return 0;
+#else
     /* Nonzero: nw-sup restarts, so the next run orphans again. */
     return 1;
+#endif
 }

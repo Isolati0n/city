@@ -94,6 +94,25 @@
    field avoids it. */
 #define NW_LAYER_DIR    "/nw/layers"
 #define NW_CTL_DIR      "/nw/ctl"
+/* Phase 3: the shared parent directory under the cgroup2 mount dawn.c
+   already makes unconditionally at boot ("used by nothing yet" until
+   this). Created by nw-sup itself, the same as NW_CTL_DIR -- not by
+   dawn, because placement (which controllers, which limits) is a
+   per-house decision nw-sup already owns, not boot-time plumbing.
+   NW_CGROUP_DIR itself is created and delegated by whichever nw-sup
+   gets there first; every other nw-sup's own mkdir and
+   subtree_control write are idempotent no-ops on EEXIST/already-enabled,
+   the same shape NW_CTL_DIR's mkdir already tolerates for concurrent
+   houses.
+
+   Each house's own leaf lives under here as "<name>.<generation>", one
+   freshly created directory per fork of that house rather than one
+   persistent directory reused across restarts -- nwsup.c's
+   house_cgroup_open_generation() comment has the reason: a killed
+   cgroup (cgroup.kill written to it, even once, even when it held no
+   processes) SIGKILLs the next process ever placed into it, forever,
+   and only destroying and recreating the directory clears that. */
+#define NW_CGROUP_DIR   "/sys/fs/cgroup/nw"
 /* docs/options/12-crash-evidence.md. NW_EVIDENCE_DIR holds two kinds of
    file: <name>.tail (PID 1's per-unit logger's rolling capture, not a
    package) and <64-hex>.evt (one per real death, named by the sha256 of

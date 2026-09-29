@@ -13,7 +13,7 @@ CFLAGS = -Wall -Wextra -O2 -g -std=gnu11 -ffile-prefix-map=$(CURDIR)=.
 # the stage a parallel run is using.
 STAGE ?= /tmp/nw-init-run
 
-all: nw-dawn nw-root nw-spawn nw-check nw-sup nw-rescue unit-probe unit-boom unit-badcall unit-term unit-brick unit-slowdie unit-dieterm unit-lastwords unit-lastwordsmany unit-orphan unit-orphanslow unit-layer unit-layer-fill unit-bindfile unit-firehose unit-info unit-firstfail unit-wire
+all: nw-dawn nw-root nw-spawn nw-check nw-sup nw-rescue unit-probe unit-boom unit-badcall unit-term unit-brick unit-slowdie unit-dieterm unit-lastwords unit-lastwordsmany unit-orphan unit-orphanslow unit-orphanhang unit-layer unit-layer-fill unit-bindfile unit-firehose unit-info unit-firstfail unit-wire
 
 # blob.h IS A PREREQUISITE, and leaving it off is not cosmetic. dawn now
 # includes it for NW_BRICK_MNT, and the whole justification for that include
@@ -115,6 +115,14 @@ unit-lastwordsmany: houses/lastwords.c
 unit-orphanslow: houses/orphan.c
 	$(CC) $(CFLAGS) -DORPHAN_SLEEP_MS=3000 -o $@ houses/orphan.c
 
+# Same source again, this time the PARENT also outlives any hold the
+# suite uses (see houses/orphan.c's own PARENT_SLEEP_MS comment for
+# why: Phase 3's per-restart cgroup kill made unit-orphanslow's own
+# fixture undemonstrable for "orphans still alive when the outer
+# shutdown starts").
+unit-orphanhang: houses/orphan.c
+	$(CC) $(CFLAGS) -DORPHAN_SLEEP_MS=3000 -DPARENT_SLEEP_MS=3000 -o $@ houses/orphan.c
+
 # -static, like unit-brick and for the same reason: this one runs INSIDE
 # a brick, which contains the binary and nothing else -- no loader, no
 # libc. A dynamically linked fixture there fails as ENOENT on execve,
@@ -176,7 +184,7 @@ stage: all
 	mkdir -p $(STAGE)/efi/slots/A $(STAGE)/efi/slots/B $(STAGE)/work
 	cp -f nw-dawn nw-root nw-spawn nw-check nw-sup nw-rescue \
 	      unit-probe unit-boom unit-badcall unit-term unit-brick unit-slowdie unit-dieterm \
-	      unit-lastwords unit-lastwordsmany unit-orphan unit-orphanslow \
+	      unit-lastwords unit-lastwordsmany unit-orphan unit-orphanslow unit-orphanhang \
       unit-layer unit-layer-fill unit-bindfile unit-firehose unit-info unit-firstfail unit-wire $(STAGE)/nw/bin/
 	chmod +x $(STAGE)/nw/bin/*
 	# The sources the staged binaries were built from, staged with them.

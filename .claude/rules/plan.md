@@ -298,11 +298,19 @@ The boundary that does matter here is not between files, it is **trust**:
   baker and independently by `nwcheck.c`, because every one of these
   numbers is destined for a cgroup file or a scheduler call, whatever
   ends up writing it will not re-derive it, and a blob can arrive from
-  anywhere. **Nothing writes them yet** — `grep -n "res\." nwsup.c`
-  returns nothing, and `.claude/rules/runtime.md` carries that as kind
-  3. The rule is about where a check belongs, not about a reader that
-  exists; stating it the other way round was a kind-3 sentence written
-  as kind 1, in three files at once. `claims`.
+  anywhere. **`nw-sup` now writes `mem_high`/`mem_max`/`nice`
+  themselves** (Phase 3, docs/OPERATOR-BRIEF.md Section 3 —
+  `grep -nE 'getenv\("NW_(MEM_HIGH|MEM_MAX|NICE)"\)' nwsup.c` finds real
+  reads now, read into local C variables rather than a `res.` struct
+  access; `.claude/rules/runtime.md` carries the six enforced fields as
+  kind 1 and has the correction for why `grep -n "res\."` is the wrong
+  check here), but the point this bullet
+  makes never depended on that: it is about where a STRUCTURAL check
+  belongs — in both the baker and `nwcheck.c`, because a blob can
+  arrive from anywhere — not about whether a reader exists yet. Stating
+  it the other way round (as if the check's purpose were "nothing else
+  would validate this") was a kind-3 sentence written as kind 1, in
+  three files at once, before this round. `claims`.
 
   **`mem_high == mem_max` is the case to keep.** A throttle at its
   backstop can never fire, so the plan declares a warning pass the house

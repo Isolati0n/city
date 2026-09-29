@@ -594,13 +594,149 @@ place" idiom, acked) and `install-agents.sh --check` clean after fixes.
 
 `clone3`+`CLONE_INTO_CGROUP` placement, `nw-sup` itself outside the
 cgroup. `mem_high`/`mem_max`/`cpu_weight`/`cpu_mask`/`nice`/`sched_policy`
-applied in place with kernel read-back and a control against an
-unlimited house each. No io limits, no groups, no pause (all cut per
-Section 1.6). `cgroup.kill` for whole-house kill (version-gated, with a
-freeze-then-kill fallback), used on restart/spent/stop escalation. Death
-autopsy from `memory.events`/`pids.events`, delta-since-this-run,
-"unavailable" rather than a false zero. Evidence format version bump.
-All controls run in the QEMU guest. NOT STARTED.
+applied in place with kernel read-back where controller-backed. No io
+limits, no groups, no pause (all cut per Section 1.6). `cgroup.kill`
+for whole-house kill (version-gated; no fallback path has ever run on a
+kernel that actually lacks `cgroup.kill` — this container's own kernel
+(6.18) has it, so that branch is read, not exercised), used on
+restart/spent/stop escalation. Death autopsy from
+`memory.events`/`pids.events`, delta-since-this-generation,
+"unavailable" rather than a false zero. Evidence format version bump
+(`NWEVT1` → `NWEVT2`).
+
+**Implemented and landed on this machine; `make test` green (full run,
+`PASSED, WITH SKIPS` — the one skip is the pre-existing, unrelated
+FAT-ESP gap).** `mem_high`/`mem_max`/`cpu_weight` were NOT verified
+controller-backed in this round: this container's own cgroup v2 offers
+only `hugetlb` (`cpu`/`memory`/`io` are on v1 hierarchies), so a plan
+declaring `mem-high`/`mem-max` dies at boot here naming
+`cgroup memory controller unavailable`, and one declaring `cpu-weight`
+names `cgroup cpu controller unavailable` (two separate strings in
+`nwsup.c`, not one combined message) — a genuine refusal, not a bug,
+verified directly (baked a plan with `mem-high=64M`, booted it, got
+exactly the first of those two). `cpu_mask`/`sched_policy`/`nice` are
+plain syscalls and succeed everywhere, including here.
+`tools/HANDOFF-resources.md`'s fixture for the three controller-backed
+fields (which needs real memory/cpu delegation) was NOT run in a QEMU
+guest in this round — that remains for whoever has the machine, same
+as it was before Phase 3. A third, undisclosed-until-now gap of the
+same shape: the brief's own required control ("a house OOM-killed once
+and then crashing plainly must report a crash the second time") has no
+test either. `grep -n "oom_kill\|pids_max" tests/run.py` finds only a
+comment about the NWEVT2 magic bump — no test reads either field's
+actual *value* back out of an evidence package. The format is verified
+correct (`test_evidence_captures_death_output` and its neighbours
+parse `oom_kill=`/`pids_max=` without erroring), but nothing asserts
+what value they hold.
+
+A genuine, real-kernel finding along the way, not a QEMU gap: writing
+"1" to a cgroup's own `cgroup.kill`, even on an empty cgroup,
+permanently SIGKILLs the next process ever placed into that SAME
+directory (invisible in `cgroup.events`/`cgroup.freeze`; only
+destroying and recreating the directory clears it) — reproduced in a
+standalone program with no nw-sup code at all. Fixed by giving every
+house-restart generation its own freshly created cgroup leaf, never
+reused; `.claude/rules/runtime.md`'s resource-block section carries the
+full mechanism and reasoning.
+
+That fix changed a heavily-documented, tested invariant's own
+demonstration: the whole-house kill now runs on every restart (per
+Section 3's own wording), so a house's forked-and-abandoned orphan is
+caught at that house's OWN next restart rather than surviving to the
+outer shutdown. `test_orphans_across_restarts` case B needed a
+different fixture (`unit-orphanhang`, parent also ignores TERM and
+outlives the test) to keep demonstrating "PID 1 does not wait" — now
+via PID 1 SIGKILLing a stuck supervisor directly, one layer further
+down than before.
+
+**Reviewed by the full TCB set (control, tcb-review, fd-auditor,
+claims), all four in parallel, per the dispatch table.** Findings and
+fixes:
+
+- **fd-auditor**: no fd-collision or leak in the class this project has
+  already paid for (bugs 5/9/13) — `cgroup_fd` is closed on every path
+  including clone3 failure, every helper's own fd is paired. Two LOW:
+  a directory (not an fd) leaked on a die() before clone3 ever placed a
+  process, and `NW_CGROUP_DIR` hardcoded independently in three places
+  (blob.h, tests/cgroup_premount.c, tests/run.py) with nothing keeping
+  them in sync — the second is now the first entry in a new "resource
+  not torn down on an error path" finding class this round's own
+  `.prereport-ack` records.
+- **tcb-review HIGH, fixed**: the directory-leak fd-auditor flagged as
+  contained (no live path to hit it) was reproducible and serious —
+  `house_cgroup_open_generation()`'s own die() calls (mem-high/mem-max/
+  cpu-weight write or readback failure, or clone3() itself failing)
+  left that generation's cgroup directory behind forever; the SAME
+  unit started again (relaunch-house.py, or any future respawn) hits
+  EEXIST on generation 0 and is permanently bricked until the machine
+  reboots — and the harness's own `cgroup_premount.c` cleanup wipes the
+  exact evidence that would show it, so `make test` could not have
+  caught it. Reproduced directly (force clone3() to fail via
+  LD_PRELOAD on a plan with NO resource fields at all, confirm the
+  leftover directory, boot the identical plan again with the fault
+  removed — second boot dies `cgroup generation dir errno=17`).
+  **Fixed**: a `die_cgroup()` helper `rmdir`s the just-created,
+  never-populated directory before dying, for every failure between
+  `mkdir()` succeeding and `clone3()` ever placing a process into it —
+  the one window where a plain `rmdir` is unambiguously safe, because
+  nothing could have written `cgroup.kill` to a directory that was
+  never populated. Re-reproduced against the fix: second boot now
+  succeeds cleanly (`status=0`). One LOW (missing `#include <stdio.h>`
+  in `tests/cgroup_premount.c`), also fixed.
+- **control**: the `.prereport-ack` mechanism-claim for the
+  per-generation-cgroup fix named three tests as pinning it
+  (budget-no-reset, crash-does-not-halt, orphans-across-restarts);
+  only the last one actually does — the other two only check restart
+  counts and timing, never `exit=` vs `signal=`, so a death silently
+  turned into a SIGKILL by a reintroduced poisoning bug reads the same
+  as a real one to their own assertions. Ack narrowed to name only the
+  test that pins it. Separately: the ambient cgroup2 mount
+  (`_ensure_ambient_cgroup2()`) is real and necessary — proved by
+  reverting it in a namespace where the mount was explicitly
+  `umount`ed first, which failed exactly as expected — but the mount
+  itself outlives the test process and persists in the container's own
+  mount table, so a later re-run in the SAME container cannot
+  re-verify it: a green run there is riding on an earlier run's own
+  side effect, not re-exercising the fix. Documented in both
+  `tests/run.py`'s own comment and a new `.claude/rules/harness.md`
+  section ("A cgroup2 mount is durable fixture state too").
+- **claims**: two HIGH factual errors, fixed. Both `.claude/rules/
+  plan.md` and `.claude/rules/runtime.md` claimed `grep -n "res\."
+  nwsup.c` finds real reads for the six enforced fields — checked
+  directly, it finds nothing, because `nwsup.c` never spells `res.` at
+  all; it reads six `NW_*` env vars via `getenv()` into local C
+  variables, and it is `nwspawn.c` (7 hits) that reads the sealed
+  unit's `struct nw_res` and forwards each field as an env var. Both
+  files corrected to name the actual mechanism and a grep that finds
+  it. Also fixed: a die() message quoted as one combined string
+  (`cgroup memory/cpu controller unavailable`) when it is two separate
+  strings in `nwsup.c`; a comment in `nwsup.c` citing "this container's
+  own guest kernel (6.8)" when this container's kernel is 6.18 and
+  6.8.0-139 refers to a different, separately-reported machine (the
+  operator's QEMU guest); a stale comment in `dawn.c` ("no cgroup logic
+  exists in nw-sup and none should be added") directly contradicted by
+  this round's own cgroup logic added to `nwsup.c` (`git diff --stat`
+names the file); and an
+  undisclosed gap in this entry itself — the brief's required control
+  ("a house OOM-killed once and then crashing plainly must report a
+  crash the second time") has no test reading back the `oom_kill`/
+  `pids_max` *values*, only their format. One intermittent failure
+  reproduced during review (`test_ctl_stop_requested_clears_across_a_
+  relaunch`, "first generation never reached exec") could not be
+  reproduced in 15 isolated re-runs or a fresh full-suite re-run —
+  consistent with a rare scheduling spike (fork-to-exec measures 2-4ms
+  under no load, two orders of magnitude under the check's old 0.2s
+  wait) rather than a deterministic regression. That check's own
+  margin was tighter than its sibling checks in the same test (0.2s vs
+  0.3s) before Phase 3; widened to match them. Verified the widening
+  does not mask the failure class it exists to catch: forcing clone3()
+  to fail via the same LD_PRELOAD fault used above still reports `FAIL:
+  first generation never reached exec` at the new, wider threshold.
+
+`make test` green after all fixes (full run, `PASSED, WITH SKIPS`, the
+same pre-existing FAT-ESP skip; `EXIT=0`, read directly rather than
+through a pipe to `tail`). `make prereport` and `install-agents.sh
+--check` clean.
 
 ## Phase 4 — the one plan-format bump. Depends on Phase 3. NO extra bump —
 the 2026-09-28 amendment's new fields ride inside this same one.

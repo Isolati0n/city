@@ -628,6 +628,39 @@ blocking drain in `shutdown_city` turns the second half red at 3.01s.
 **Reaping across restarts is no longer untested** — that entry was here
 as a gap, and the fixture it lacked is `houses/orphan.c`.
 
+**Phase 3 added a SECOND way an orphan stops existing, narrower than
+either of the two above, and it fires first when it applies.**
+`cg_kill_sweep()` runs after every death nw-sup reaps, not only at
+final exit (docs/OPERATOR-BRIEF.md Section 3: "used on restart"), so an
+orphan a house forked and abandoned is SIGKILLed the moment THAT
+house's own generation dies — before the outer shutdown, and whether
+or not one is even in progress. This does not change the statement two
+paragraphs up: `test_orphans_across_restarts` case A still demonstrates
+"PID 1 reaps a genuine orphan promptly," because either mechanism
+(nw-sup's own generation-kill, or PID 1's separate catch-all `waitpid`)
+ends the same child and PID 1 still counts it once it dies.
+
+**Case B needed a different fixture, not a different property.** A
+house whose own top-level process exits immediately after forking (the
+shape both case A and the pre-Phase-3 case B used) now has its
+children reaped by ITS OWN generation's sweep well before any outer
+shutdown could matter — measured directly, naming the old fixture
+(`unit-orphanslow`) here now reports `orphans=12`, not 0. So the
+"still alive when shutdown starts" scenario needs a generation that
+never completes a death inside the test's own window at all:
+`unit-orphanhang`'s parent also ignores TERM/INT and sleeps 3s, so
+nw-sup stays blocked inside `wait_house()` the whole time, and
+`cg_kill_sweep` for that generation never runs. **This is what actually
+demonstrates "PID 1 does not wait"**, and not in the way case A's
+mechanism does: `shutdown_city()` (`pid1.c`) does not wait for that
+stuck SUPERVISOR either — after `NW_GRACE_MS` it SIGKILLs
+`houses[i].pid` (nw-sup itself) directly, never reaching `cg_kill_sweep`
+at all, so the house and its three children all survive exactly as far
+as the pid-namespace teardown at the very end. The target of that
+direct kill is the supervisor, not the house or its orphans — which is
+the same "does not wait" property, one layer further down the chain
+than case A exercises.
+
 ## File descriptors — hard limit, named shortfall
 
 `getrlimit(RLIMIT_NOFILE)` before the first fork. Need is
@@ -651,69 +684,108 @@ houses than the plan named.
 `test_fd_preflight_names_the_shortfall` asserts all three numbers
 and pairs the refusal with an accepting run.
 
-## The resource block is in the plan and nothing applies it
+## The resource block: most fields enforced, since Phase 3
 
-**Kind 3: a real rule with no subject in this territory yet, EXCEPT for
-`layer_bytes`, which moved to Hard rules on 2026-09-25.** As of
-2026-09-13 `struct nw_res` is a field of every unit — CPU affinity and
-share, a memory throttle and a memory backstop, read and write
-bandwidth, a layer capacity, scheduler policy and nice. The baker
-refuses a malformed block and `nwcheck.c` validates one independently
-for the whole struct; `grep -n "res\." nwsup.c` still returns nothing,
-and that remains true rather than becoming stale, because `layer_bytes`
-never crosses into `nw-sup` as a `struct nw_res` field access at all --
-it travels the same way the brick hash and the layer id already do, as
-a plain decimal string in its own env var (`NW_LAYER_BYTES`,
-`nwspawn.c` reading `u[i].res.layer_bytes` and forwarding it), parsed
-locally in `nwsup.c` with no `res.` anywhere in this file.
+**`layer_bytes` moved to Hard rules on 2026-09-25. Six more —
+`mem_high`, `mem_max`, `cpu_weight`, `cpu_mask`, `sched_policy`, `nice`
+— moved from kind 3 to enforced-now here on 2026-09-29
+(docs/OPERATOR-BRIEF.md Section 3).** `struct nw_res` is a field of
+every unit; the baker refuses a malformed block and `nwcheck.c`
+validates one independently for the whole struct.
 
-So a plan can still declare most of these limits with no process
-enforcing them. That is a gap, not a lie, only because nothing in this
-tree says otherwise — and the moment `nwsup.c` grows the next write,
-the rule below becomes live for that field too and belongs in Hard
-rules rather than here.
+**`nwsup.c` never spells `res.` at all, unlike `nwspawn.c` — say the
+check the right way round.** `grep -n "res\."` finds nothing in
+`nwsup.c` and 7 hits in `nwspawn.c` (`u[i].res.layer_bytes`,
+`.cpu_mask`, `.mem_high`, `.mem_max`, `.cpu_weight`, `.nice`,
+`.sched_policy`), because `nwspawn.c` is what reads the sealed unit's
+`struct nw_res` and forwards each field as a plain-decimal `NW_*` env
+var — the same convention `NW_BRICK`/`NW_LAYER` already use.
+`nwsup.c` reads those six env vars with `getenv()` into local C
+variables (`mem_high`, `mem_max`, `cpu_weight`, `cpu_mask`, `nice_val`,
+`sched_policy`; `grep -nE "getenv\(\"NW_(MEM_HIGH|MEM_MAX|CPU_WEIGHT|
+CPU_MASK|NICE|SCHED_POLICY)\"\)" nwsup.c` finds all six), never through
+a `res.` struct access — the gap this section used to describe is
+closed, and the checkable grep for it names the env vars, not a
+substring that was never going to be in this file. `mem_high`/
+`mem_max`/`cpu_weight` are applied via a per-house-GENERATION cgroup
+(`memory.high`/`memory.max`/`cpu.weight`, written and kernel-read-back);
+`cpu_mask`/`sched_policy`/`nice` are plain syscalls
+(`sched_setaffinity`/`sched_setscheduler`/`setpriority`) in the child,
+before `execv`. **Still nothing writes `io_rbps`/`io_wbps`** — neither
+`nwsup.c` nor `nwspawn.c` forwards or reads either one — because io was
+cut from Phase 3's own scope (docs/OPERATOR-BRIEF.md Section 1.6: "no
+io, no groups, no pause"). Those two, and only those two, are still kind 3
+here.
 
-**The rule, proposed and not yet ratified: a resource limit is not
-advisory.** If a declared limit cannot be applied, the house does not
-start — `die()`, not a log line and a return, the same shape every lid
-path already has. A house running unbounded while the plan says it is
-bounded is invariant 6's "the plan lying", and it fails worse than a lid
-does: an uncapped house takes the machine down rather than itself. The
-cost is that a city which boots on one machine refuses to boot on a
-kernel without the controller, which is the intended reading and is the
-opposite of what a container runtime usually does.
+**"Not advisory" is no longer proposed; it is what
+`house_cgroup_open_generation()` and the syscall block in `nwsup.c`'s
+child branch both do.** A DECLARED field that cannot be applied dies
+the house at boot, by name — `die("mem-high write")`,
+`die("cpu mask")`, and so on for each of the six — never a log line
+and a return. Scoped to what is actually declared:
+`cgroup_parent_setup()`'s own `need_memory`/`need_cpu` gating means a
+house declaring none of the three cgroup-backed fields never attempts
+controller delegation at all, so a machine with no memory/cpu
+controller is not lied to by a missing MECHANISM for a field nothing
+asked for.
 
-**THIS MACHINE CANNOT EXERCISE THE CGROUP-BACKED FIELDS**, so do not
-write a test on them here that reads green. cgroup v2 is mounted with
-`hugetlb` as its only controller — `cpu`, `memory` and `io` are on v1
-hierarchies. That covers `mem_high`, `mem_max`, `io_rbps` and `io_wbps`.
+**CLONE_INTO_CGROUP and `cgroup.kill` need no controller delegated at
+all**, unlike `memory.high`/`memory.max`/`cpu.weight` — confirmed by
+running this suite, which places every house into its own cgroup
+regardless of what it declares, on a machine where `memory` and `cpu`
+have never been delegated. Controller delegation gates writing those
+three specific files, not cgroup placement or the whole-house kill.
 
-**The layer capacity is NOT one of them, and this list said otherwise
-for a year.** Project quota being off on the root device (`quotactl`
-answers `ESRCH` for `/dev/vda`) is exactly why that route was refused
-for `layer_bytes` rather than pursued — see Hard rules, below. The
-mechanism built instead is a loop-mounted, ext4-formatted, fixed-size
-file, which needs no cgroup controller and no project quota at all;
-`test_layer_bytes_enforces_capacity` runs on this machine and passes
-for real, not on the unavailable branch.
+**A cgroup is never reused across a restart of the house, and this is
+load-bearing, not tidiness.** Writing "1" to a cgroup's own
+`cgroup.kill` — even on an EMPTY cgroup — SIGKILLs the next process
+ever placed into that SAME directory, invisibly (neither
+`cgroup.events` nor `cgroup.freeze` show it), and only destroying and
+recreating the directory (even at the identical path) clears it.
+Reproduced in a standalone program with no nw-sup code at all: mkdir,
+clone3, exit, write "1" to the empty cgroup's `cgroup.kill`, clone3
+again into the same directory — SIGKILL, 0/20 survivals across a tight
+loop. So `house_cgroup_open_generation()` creates a fresh,
+uniquely-named leaf (`"<name>.<generation>"`) for every fork, and
+`cg_kill_sweep()` is always followed by an `rmdir` of that same
+directory rather than a reuse for the next one.
 
-**It does NOT cover the whole block, and this said "any of it" until
-`claims` ran the rest.** `cpu_mask`, `sched_policy` and `nice` are
-`sched_setaffinity`, `sched_setscheduler` and `setpriority` —
-syscalls, not cgroup files — and all three succeed here. A measurement
-over cgroup controllers does not establish a claim over the block, and
-`tools/HANDOFF-resources.md`'s table is what distinguishes them.
-A test on such a machine takes the unavailable branch, which is
-`lid-landlock`'s entire life. `skip()` with a named reason, and put the
-guard in the helper the way `make_brick()` does, not at each call site.
+**This is also why the whole-house kill (Section 3's "used on
+restart") runs immediately after every death, not deferred to final
+exit** — a house's own forked-and-abandoned orphan is now caught the
+moment ITS OWN generation dies, not merely at the outer shutdown. See
+the Orphans-at-shutdown section above for exactly what this changes
+(restart-driven orphans no longer survive to the outer shutdown) and
+what it does not (PID 1 still does not wait for a stuck supervisor or
+a still-alive house — it SIGKILLs the supervisor directly after
+`NW_GRACE_MS`, which is a different mechanism reaching the same "does
+not wait" property one layer further down).
 
-`tools/HANDOFF-resources.md` carries the fixture — the city, the file
-or syscall each field decides, and the probe that decides it — for
-whoever has the machine. The two memory numbers need different probes
-and that is the load-bearing part: `mem_high` must be shown NOT killing
-and `mem_max` must be shown killing, because a test that reads both
-files back is satisfied by a supervisor that writes them to a kernel
-that ignores them.
+**THIS MACHINE CANNOT EXERCISE `mem_high`/`mem_max`/`cpu_weight` VIA A
+REAL BOOT, and that is a refusal, not a bug.** cgroup v2's real global
+hierarchy here is mounted with `hugetlb` as its only controller —
+`cpu`, `memory` and `io` are on v1 hierarchies (docs/ENVIRONMENT.md) —
+so a house declaring `mem-high`/`mem-max` dies at boot on this machine
+specifically, by name (`cgroup memory controller unavailable`), and one
+declaring `cpu-weight` names `cgroup cpu controller unavailable` — two
+separate `die()` strings in `nwsup.c`, not one combined message —
+because delegation is genuinely attempted and genuinely fails.
+Verified directly: baking a plan with `mem-high=64M` and booting it
+here produces exactly the first of those two. `cpu_mask`/`sched_policy`/`nice`
+succeed everywhere, since those are plain syscalls, not cgroup files —
+a measurement over cgroup controllers does not establish a claim over
+the whole block, and `tools/HANDOFF-resources.md`'s table is what
+distinguishes them.
+
+`tools/HANDOFF-resources.md` still carries the fixture — the city, the
+file or syscall each field decides, and the probe that decides it —
+for whoever has a machine with real memory/cpu delegation. `mem_high`
+must be shown NOT killing and `mem_max` must be shown killing, because
+a test that reads both files back is satisfied by a supervisor that
+writes them to a kernel that ignores them. No test in this suite
+exercises those three on the unavailable branch, matching
+`lid-landlock`'s own rule: `skip()` with a named reason rather than a
+green line that means nothing.
 
 ## Known open in this territory
 
