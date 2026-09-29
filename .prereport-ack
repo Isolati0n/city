@@ -366,7 +366,7 @@ mechanism-claim	blob.h	/* "if any" is the load-bearing clause and it is not a sa
 # names both cases in the two bullets immediately below (no brick; layer shadow), which is the redundant-but-checkable form CLAUDE.md permits
 prose-count	blob.h	* Two cases where resolution is NOT inside a sealed image:
 # not an instance count: "the only one with no line" is a statement about which death printed nothing, and the `spent` line this patch adds is what makes it false going forward
-prose-count	nwsup.c	* death that ENDED the house was the only one with no line at all,
+prose-count	nwsup.c	* ENDED the house was the only one with no line at all,
 # "the two" are the two lists named in the sentence before it -- this loop and initrd-init.c's load() calls; naming, not counting, and the paragraph exists because they disagreed
 prose-count	tools/mkboot.sh	# a load-order bug, changing nothing. Keep the two in step as
 
@@ -1075,3 +1075,39 @@ prose-count	docs/options/22-lock-unlock.md	`docs/OPERATOR-BRIEF.md` Section 2 it
 # named list immediately following (state=, deaths=, last_exit=), not an
 # unnamed instance-count -- all three are spelled out in the same sentence
 prose-count	docs/options/22-lock-unlock.md	line, three fields, matching the existing line-based `OK\n`/`ERR
+prose-count	CLAUDE.md	once, at the declaration, in the one file that assigns to `deaths` at
+# naming the file already named earlier in the same sentence (nwsup.c), not a count of anything that can grow
+prose-count	decide.h	*   live child and we are shutting down", which is the one input
+# naming a single specific input combination just described, not counting a growable set
+prose-count	decide.h	*   the two OTHER places nw-sup sends a child SIGTERM on the main
+# both places are named in the very next clause (the post-fork check and handle_ctl_live()); checkable against the enumeration, per CLAUDE.md's own "name them and the number is redundant but checkable" allowance
+prose-count	nwsup.c	* anything here being able to select them -- this is the one place
+# naming the single call site being described, not counting a growable set
+prose-count	nwsup.c	* two places nw_decide()'s NW_DECIDE_TERM_CHILD governs a kill
+# same claim as decide.h's "the two OTHER places", both named in the surrounding comment
+prose-count	nwsup.c	/* Covers both of the two cases the code before this
+# the two cases (shutdown-exit, oneshot-clean-exit) are named in the next sentence
+prose-count	proofs/caller_decide.c	* arguments (deaths, budget, exit_status). Six named invariants, seven
+# quotes the operator's own brief text ("Six named invariants... each with a CBMC harness"), a fixed count from Section 3 of docs/OPERATOR-BRIEF.md, not one invented here that could drift independently
+prose-count	tests/decide_seq.c	* 10000 sequences total, each at most 4 steps -- enough to reach SPENT
+# 4 is SEQLEN, a literal in the same file's code; the sentence explains why that code value was chosen, the same shape proofs/run.sh uses to justify its own unwind bounds
+unpaired-absence	tests/run.py	expect(not dec_taken,
+# a static source-text sweep (regex over decide.c's stripped-comment text), not a runtime behavioral assertion -- the "mechanism that would produce the absence" is the read+regex itself, which cannot silently no-op (an unreadable file raises); same shape as the pre-existing, unflagged nwsup.c sweep two functions above using the identical pattern
+unpaired-absence	tests/run.py	expect(not dec_clocks,
+# same reasoning as the dec_taken ack immediately above
+prose-count	CLAUDE.md	CBMC (`proofs/caller_decide.c`) proves six named invariants
+# quotes the operator's own fixed brief text (docs/OPERATOR-BRIEF.md Section 3: "Six named invariants"), not a count invented here that could drift independently
+prose-count	docs/options/20-grants-schema.md	clause 3 constrains fields to one mechanism EACH and explicitly says the
+# "clause 3" names a specific numbered clause of CLAUDE.md's own mechanism rule (a fixed reference, not a growable count)
+prose-count	proofs/caller_decide.c	* arguments (deaths, budget, exit_status). Six named invariants, seven
+# same quoted brief count as the other three acks for this phrase; "seven" is the file's own literal, checkable assert count (7 __CPROVER_assert calls), not a free-floating estimate
+prose-count	proofs/README.md	| `caller_decide.c` | `nw_decide` (`decide.c`, Phase 2) | every value of every argument, unrestricted — the function has no loop and touches no buffer, so nothing is narrowed. Proves six named invariants (STOP/UNLOCKED never increment deaths; SPENT is LOCKED-only; deaths rise only on an unrequested LOCKED exit; a shutting-down supervisor never forks or restarts; START on a running house is a no-op) as seven assertions. **None of them mentions `budget`'s value** — this harness proves nothing about where the RESTART/SPENT threshold falls; that is `tests/decide_seq.c`'s job, over its own bounded domain (budget 0..3, sequences of length 4), not this one's. |
+# quotes the operator's own fixed brief text ("Six named invariants"), same as the other acks for this phrase in this round; "seven assertions" is this file's own literal count of __CPROVER_assert calls, not a free-floating estimate
+prose-count	tests/decide_seq.c	* and did not, for these two cases. Asserted here
+# names the two specific mutations described in the surrounding sentences (STOP-counts-as-death, disabled-oneshot-completion), not a growable count
+unpaired-absence	tests/run.py	expect(_comm(gen1_pid) is None,
+# paired: `expect(gen1_pid is not None, "first generation never reached exec")` runs immediately before this, confirming the mechanism that would produce a non-None comm actually ran, the same shape test_ctl_stop_does_not_count already uses for its own identical check
+unpaired-absence	tests/run.py	expect(_comm(gen2_pid) is None,
+# paired: `expect(gen2_pid is not None, "second generation never reached exec")` runs immediately before this, same shape as the gen1 ack above
+unpaired-absence	tests/run.py	expect("restart ctlclear" not in out, f"a STOP counted as a death\n{out}")
+# paired the same way test_ctl_stop_does_not_count's identical assertion already is: gen1_pid/gen2_pid are each confirmed alive before their respective STOP and confirmed dead after, so a death that produced this line would have already been caught by an earlier positive assertion in this same test if the STOP mechanism had not run

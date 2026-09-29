@@ -12,7 +12,7 @@ session restart: read both files, nothing else, to pick back up.
 If this file disagrees with the repo, the repo wins, and whoever notices
 fixes this file.
 
-Base at last edit: `07ebd9f` (origin/main).
+Base at last edit: `015e402` (origin/main).
 
 ## Decision authority (Section 5 of the brief)
 
@@ -294,7 +294,30 @@ Status of each, current as of this commit:
     Phase-4 mislabel, a stated-vs-actual grep-scope mismatch, one
     proposed-not-practiced rule cited as practiced, one overstated
     Observer claim, one overreached ownership inference); all fixed.
-  NOT STARTED.
+
+    **§6 added, this commit, per direct instruction**: two capability-lid
+    facts for the not-yet-built capabilities field. (a) A measured gap —
+    dropping a house's entire capability bounding set does not make a
+    sibling's `/proc/<pid>/status` unreadable (confirmed against
+    `fs/proc/base.c`'s `has_pid_permissions()`: at this tree's default
+    `hidepid=0`, no ptrace check runs at all). Decision: accept for v1 —
+    process-visibility isolation is a PID namespace's job, not a
+    capability set's, and Phase 4's "rootless houses" slice is where
+    that would eventually land if taken up. (b) A settled fact — a
+    process ptracing its own direct descendant under matching uid/gid
+    needs no `CAP_SYS_PTRACE`, robustly under every plausible reading of
+    "the target kernel leaves YAMA off" (both readings, and even the
+    stricter scope-1 default, agree), cited to `ptrace(2)` and
+    `Documentation/admin-guide/LSM/Yama.rst`. Explicitly does NOT assert
+    that Wine's own process topology matches this premise — flagged as
+    a separate, unverified question for whoever needs the answer for a
+    real deployment. A first draft of (b) claimed a false safety
+    boundary ("does not extend between separate houses") that its own
+    quoted scope-0 text contradicted, silently equated "YAMA off" with
+    a specific `ptrace_scope` value, pinned an unverified `hidepid=`
+    integer, and overclaimed CLAUDE.md's mechanism-rule clause 3 — a
+    `claims` pass found all four (plus one already-caught wineserver
+    premise issue) and a second `claims` pass confirmed all five fixed.
 
 No ordering dependency among 1a/1d/1e/1f/1g/Section-4 — any can run
 concurrently; 1b and 1c gate Phase 2 specifically, not each other or the
@@ -314,7 +337,70 @@ the commit. Six named invariants (STOP never increments deaths; UNLOCKED
 never increments deaths; SPENT, LOCKED-only, is absorbing; deaths rise
 only on an unrequested LOCKED exit; a shutting-down supervisor never
 forks or restarts; START on a running house is a no-op), each with a
-CBMC harness and a mutation check that turns it red. NOT STARTED.
+CBMC harness and a mutation check that turns it red. **DONE, this
+commit.**
+
+Built as new files `decide.c`/`decide.h` (`nw_decide()`, a genuinely
+stateless function — no static or global variable of any kind, checked
+directly), wired into `nwsup.c` at every real decision point (the
+top-of-loop shutdown check, the idle/`stopped` branch's START handling,
+the post-fork race-window check, the post-`wait_house` cascade, and
+`handle_ctl_live()`'s STOP branch), replacing the inline conditional
+logic that used to live there. `nw_lock` is hardcoded to `1` (`const
+int nw_lock = 1;`) until the plan-format bump adds a real field; the
+`UNLOCKED` rows are proven and tested regardless, ahead of anything
+selecting them. Behavior-preserving: every pre-existing test passes
+unchanged, confirmed by three full `make test` runs across the review
+cycle. `deaths` keeps its exact pre-refactor shape in `nwsup.c`
+(`int deaths = 0;`, one increment, nothing else) so CLAUDE.md
+invariant 4's existing checkbrief annotations keep matching; the
+budget *comparison* moved into `decide.c` and invariant 4's prose and
+annotations were updated to say so precisely, including which specific
+mechanism (CBMC vs. the exhaustive event-sequence test) proves which
+specific claim — the first draft overclaimed that CBMC proves the
+budget threshold, and a `claims` pass caught it.
+
+**The exhaustive event-sequence test** (`tests/decide_seq.c`,
+`test_decide_exhaustive_sequences`): 10000 sequences (5-symbol
+alphabet, length 4, both lock states, both `complete_on_0` states,
+budget 0..3) — enough to reach `SPENT` via consecutive deaths at every
+tested budget, place `TERM` at every position, and interleave
+STOP/START with a death inside one run, in well under a second.
+Asserts the priority order decide.h documents (`stopping` >
+`stop_requested` > clean-oneshot > `lock` > budget) directly at every
+child-exit event, not only the generic budget/lock bookkeeping a first
+draft had — `control` found the first draft silently accepted a
+mutation reintroducing "STOP counts as a death" and one disabling the
+oneshot-clean-exit check (both still caught by the pre-existing real-boot
+tests, but not by this new machinery, despite its own docstring implying
+otherwise); both are fixed and independently re-verified to catch those
+exact mutations.
+
+**Review, in full**: `control` found the two decide_seq.c gaps above
+(fixed) and one real, previously-uncovered wiring gap — `nwsup.c`'s
+`NW_DECIDE_IDLE` case resetting `stop_requested = 0` was unprotected
+by anything in the suite, discovered by mutating it out and finding
+every existing test, including a ~60-test prefix of the full suite,
+stayed green. New test `test_ctl_stop_requested_clears_across_a_relaunch`
+closes it deterministically (a second, genuine STOP against a
+relaunched house, which `handle_ctl_live()`'s own `!stop_requested`
+guard would silently swallow if the flag were never cleared) — verified
+to catch the exact mutation `control` found, without relying on the
+fork-to-exec signal-timing race a naive "does the relaunch survive"
+test would have been. `tcb-review` found the refactor otherwise clean
+(traced every call site against the pre-refactor behavior; ran the
+CBMC proof directly plus its own mutation control; found one LOW
+cosmetic asymmetry — the top-of-loop stopping check discarded
+`nw_decide()`'s answer instead of switching on it — fixed to match the
+other four call sites). `claims` on the CLAUDE.md invariant 4 edit
+found the overclaim above (fixed), a stale TCB-boundary table missing
+`decide.c` (fixed), and `proofs/caller_decide.c`'s docstring undercounting
+its own assertions (six invariants, seven asserts — invariant 4 is two
+independent asserts; fixed, and `proofs/README.md` gained the row it
+was missing for this harness). `make checkbrief`: 5 verified, 0
+contradicted throughout. `make test`: `PASSED, WITH SKIPS`, run three
+times clean across the review cycle. `make prereport`: clean, every
+finding acked with a stated reason.
 
 ## Phase 3 — per-house cgroups. Depends on Phase 2.
 
@@ -414,6 +500,10 @@ deleted per the "not kept" convention. Full result:
 
 ## Open questions carried forward
 
-None blocking right now. Item 1b's own ten questions get answered inside
-that note, then batched to the operator as that item's own step, not
-listed here in advance.
+None blocking. 1a-1g, Section 4 and Phase 2 are all landed as of this
+commit; every flagged item along the way (the `.sha256` sidecar scope in
+docs/options/20, the optional on-disk per-run tail trim in
+docs/options/21, the Wine-process-topology premise in docs/options/20
+§6) was resolved with a stated recommended default or explicitly
+deferred to whoever picks up the relevant later work, not left as a
+blocking question here.

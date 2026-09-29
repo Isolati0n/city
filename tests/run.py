@@ -1515,6 +1515,58 @@ def test_kind_required():
     print("ok kind-required")
 
 
+def test_decide_exhaustive_sequences():
+    """Phase 2 (docs/OPERATOR-BRIEF.md Section 3): nw-sup's supervision
+    decision, factored into the pure nw_decide() (decide.c). CBMC
+    (proofs/caller_decide.c, `make proof`) already proves every SINGLE
+    call exhaustively over its whole input domain and all six named
+    invariants. What that cannot check is the SHELL wiring: whether a
+    SEQUENCE of calls, threaded the way nwsup.c's real loop threads
+    them (fork it, wait for it, feed the next event), stays consistent
+    -- deaths only rising the ways they should, SPENT/EXIT_SUP genuinely
+    ending the run rather than being followed by more calls (the
+    "absorbing" half of invariants 3 and 5, which a stateless per-call
+    proof has no notion of "calling again" to even ask about), and an
+    unlocked house never once touching the budget across a whole run.
+
+    tests/decide_seq.c is that minimal shell, built only from decide.h's
+    documented contract, driven over EVERY sequence of length 4 from a
+    5-symbol alphabet (START, STOP, TERM, EXIT_OK, EXIT_BAD), for both
+    lock states, both complete_on_0 states and budget 0..3: 10000
+    sequences. Length 4 is enough to reach SPENT via consecutive deaths
+    at every tested budget, to place TERM at every position, and to
+    interleave STOP/START with a death inside one run, in well under a
+    second -- read tests/decide_seq.c's own docstring for the count.
+
+    Compiled against the STAGED decide.c, not the source tree's, for
+    the same reason crcdiff.c is: harness.md's staging trap -- a result
+    about the previous build reads as a result about this one.
+
+    Control, run by hand against decide.c: deleting the `if (!lock)
+    return NW_DECIDE_IDLE;` guard inside the child-exited branch (the
+    UNLOCKED-never-touches-budget invariant) turned this red at the
+    first UNLOCKED sequence reaching SPENT, exit 1, `UNLOCKED reached
+    SPENT`. `proofs/caller_decide.c` caught the same mutation on its own
+    (a per-call proof), and this test additionally shows the mutant
+    reachable through a real event sequence rather than only through a
+    quantified single call."""
+    srcdir = os.path.join(STAGE, "src")
+    expect(os.path.exists(os.path.join(srcdir, "decide.c")),
+           f"{srcdir}/decide.c is missing -- run make stage")
+    src = os.path.join(ROOT, "tests", "decide_seq.c")
+    exe = f"{WORK}/decide_seq"
+    c = subprocess.run(
+        ["gcc", "-Wall", "-Wextra", "-Werror", "-O2", f"-I{srcdir}",
+         "-o", exe, src, os.path.join(srcdir, "decide.c")],
+        capture_output=True, text=True)
+    expect(c.returncode == 0, f"decide_seq build\n{c.stderr}")
+    r = subprocess.run([exe], capture_output=True, text=True, timeout=30)
+    expect(r.returncode == 0,
+           f"decide_seq found a failing sequence\n{r.stdout}{r.stderr}")
+    expect("all clean" in r.stdout, f"unexpected output\n{r.stdout}")
+    print(f"ok decide-exhaustive-sequences ({r.stdout.strip()})")
+
+
 def test_kind_exit0():
     """D12: exit 0 no longer means do-not-restart on its own. A longrun that
     exits 0 is restarted within budget; a oneshot that exits 0 is done. Same
@@ -2645,8 +2697,8 @@ def test_every_code_file_is_accounted_for():
         # goes stale the first time someone rewraps a line.
         for label, o, n, want in (
             ("a name in two MAP sets, undeclared",
-             '"scale-probe.py"}, "harness"),',
-             '"scale-probe.py", "dawn.c"}, "harness"),',
+             '"decide_seq.c"}, "harness"),',
+             '"decide_seq.c", "dawn.c"}, "harness"),',
              "sets of MAP and SHARED does not declare it"),
             ("a blank UNOWNED reason",
              '"the pre-push heuristics. Gate tooling."', '""',
@@ -2683,8 +2735,8 @@ def test_every_code_file_is_accounted_for():
              '("mansions/", "harness")]',
              "no tracked code file is under it"),
             ("a MAP name for a file that does not exist",
-             '"unit_probe.c", "scale-probe.py"}',
-             '"unit_probe.c", "scale-probe.py", "vanished.c"}',
+             '"unit_probe.c", "scale-probe.py",\n      "decide_seq.c"}',
+             '"unit_probe.c", "scale-probe.py",\n      "decide_seq.c", "vanished.c"}',
              "no tracked code file is called that"),
             # AN UNOWNED PATH SHORTENED TO A PREFIX, which is the one
             # case that separates unowned_reason's exact match from
@@ -3218,9 +3270,12 @@ def test_budget_is_hard_total():
     "Hard total" is a claim about all time and a timing test cannot
     reach it -- so the structural assertions at the end of this function
     carry that half: `deaths` is assigned exactly twice in nwsup.c (one
-    init, one increment) and the file has no clock, so there is nowhere
-    for a reset to live. Handed over by the agent who owns the restart
-    loop, who was right that keeping the old name was the wrong answer.
+    init, one increment), neither file has a clock, and (Phase 2,
+    docs/OPERATOR-BRIEF.md Section 3) decide.c, which now holds the
+    actual comparison against budget, assigns to `deaths` zero times --
+    so there is nowhere in either file for a reset to live. Handed over
+    by the agent who owns the restart loop, who was right that keeping
+    the old name was the wrong answer.
 
     This docstring also used to end "Control: restore a window reset and
     this test sees death=4 inside the hold." It does not, and the correction had
@@ -3316,6 +3371,32 @@ def test_budget_is_hard_total():
            f"coming back, and this suite's timing assertions above would "
            f"stay green against any window longer than their hold.")
 
+    # Phase 2 moved the COMPARISON against budget into decide.c (a pure
+    # function nw-sup calls); the sweep above only ever covered nwsup.c,
+    # so this repeats it there -- a window, a pointer-written reset, or a
+    # second assignment to `deaths` would be exactly as unbounded if it
+    # arrived in decide.c instead, and nothing else checks for that.
+    # decide() takes `deaths` as a read-only parameter and is proven
+    # stateless by CBMC (proofs/caller_decide.c) and by direct reading
+    # (it declares no static or global variable at all) -- zero
+    # assignments, zero address-of, zero clocks is the expected shape,
+    # not the two-assignment shape nwsup.c has.
+    dec = strip_c_comments(open(os.path.join(ROOT, "decide.c")).read())
+    dec_assigns = re.findall(r"\bdeaths\s*(?:=[^=]|\+\+|--|[-+*/]=)", dec)
+    expect(len(dec_assigns) == 0,
+           f"decide.c assigns `deaths` {len(dec_assigns)} times; it should "
+           f"only ever read the parameter it was given: {dec_assigns}")
+    dec_taken = re.findall(r"&\s*deaths\b", dec)
+    expect(not dec_taken,
+           f"decide.c takes the address of `deaths` ({len(dec_taken)}x).")
+    dec_clocks = re.findall(
+        r"\b(clock_gettime|now_ms|alarm|nanosleep|clock_nanosleep|usleep|"
+        r"setitimer|timerfd_create|timer_create|gettimeofday|times|clock|"
+        r"sysinfo|time)\s*\(", dec)
+    expect(not dec_clocks,
+           f"decide.c has a timing primitive: {sorted(set(dec_clocks))}. "
+           f"nw_decide() must stay a pure function of its arguments.")
+
     # WHAT THIS DOES NOT CLOSE, said plainly because the previous wording
     # ("there is nowhere for a reset to live") claimed more than it
     # checks. A denylist of names cannot be exhaustive: `control` got a
@@ -3328,8 +3409,19 @@ def test_budget_is_hard_total():
     # A window longer than the hold and built from a name not listed here
     # is still invisible, and closing that needs deaths spaced further
     # apart than any plausible window -- the slow test the handoff names.
+    #
+    # THE SAME LIMIT APPLIES TO THE decide.c SWEEP ABOVE, and `control`
+    # measured exactly how narrow: a real, dangerous off-by-one
+    # (`deaths >= budget` weakened to `deaths > budget`, letting one
+    # extra restart past the budget) produces zero assignments, zero
+    # address-of and zero clock hits on `deaths` in decide.c -- this
+    # sweep is a syntactic check against a literal reset mechanism, not
+    # a check on the comparison's correctness. That comparison is
+    # pinned by `test_decide_exhaustive_sequences` and by
+    # `proofs/caller_decide.c` instead, not by this sweep.
     print("ok budget-no-reset (3 restarts in a 7s hold; nwsup.c assigns "
-          "deaths twice, never takes its address, and names no clock)")
+          "deaths twice, never takes its address, and names no clock; "
+          "decide.c assigns it zero times, same three checks)")
 
 
 def test_sha256_known_vectors():
@@ -4512,6 +4604,88 @@ def test_ctl_stop_does_not_count():
     expect("restart ctlstop" not in out, f"STOP counted as a death\n{out}")
     expect("spent ctlstop" not in out, f"STOP spent the budget\n{out}")
     print("ok ctl-stop-does-not-count")
+
+
+def test_ctl_stop_requested_clears_across_a_relaunch():
+    """Phase 2's own `control` review: nw_decide()'s NW_DECIDE_IDLE case
+    clears `stop_requested` (nwsup.c), and nothing in the suite would
+    have caught its removal -- CBMC and decide_seq.c both only ever
+    call decide() itself, which has no notion of "the shell forgot to
+    reset a flag between two calls"; that is exactly the kind of bug a
+    stateless per-call proof structurally cannot see, the same gap
+    invariant 3's own comment already names for SPENT's absorbing
+    property.
+
+    NOT tested by "does the second generation survive a moment after
+    START": the post-fork race-window check would send it a spurious
+    TERM_CHILD immediately if `stop_requested` were stuck at 1, but
+    whether that actually kills the fresh process is a genuine kernel
+    scheduling race against execv() (the same fork-to-exec window
+    D11 and the exec-fence history already document) -- sometimes
+    absorbed by the inherited, soon-to-be-replaced on_term handler,
+    sometimes not. A test built on that would be exactly the flaky
+    test this project's own rule refuses to paper over with a retry.
+
+    So this checks something with no race in it: after the relaunch,
+    issue a FRESH, genuine STOP against the second generation and
+    require it to actually die. handle_ctl_live()'s own guard is
+    `if (live > 0 && !stop_requested)` -- if the first STOP's flag were
+    never cleared, this second STOP satisfies neither half of that
+    condition's failure mode by accident: it still replies "OK\n"
+    (the reply is unconditional) but the guard silently skips the
+    kill(2) entirely, so the second generation would still be running
+    afterward despite the "OK". That is fully deterministic -- it does
+    not depend on when any signal is delivered relative to any exec."""
+    os.makedirs("/nw/ctl", exist_ok=True)
+    env = os.environ.copy()
+    env["NW_KIND"] = "1"
+    env["NW_BUDGET"] = "3"
+    env["NW_LIDS"] = "0"
+    proc = subprocess.Popen(
+        [f"{BIN}/nw-sup", _sleeper("ctlclear"), "ctlclear"],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
+    time.sleep(0.2)
+    gen1_pid = _find_by_comm(proc.pid, "sleep")
+    expect(gen1_pid is not None, "first generation never reached exec")
+
+    r = _ctl("ctlclear", b"STOP\n")
+    expect(r == "OK\n", f"first STOP not OK: {r!r}")
+    time.sleep(0.2)
+    expect(_comm(gen1_pid) is None,
+           "first STOP replied OK but the first generation is still alive")
+
+    r2 = _ctl("ctlclear", b"START\n")
+    expect(r2 == "OK\n", f"START not OK: {r2!r}")
+    time.sleep(0.3)
+    gen2_pid = _find_by_comm(proc.pid, "sleep")
+    expect(gen2_pid is not None, "second generation never reached exec")
+    expect(gen2_pid != gen1_pid,
+           "START did not produce a genuinely new pid")
+
+    # The check that has no race in it: a STOP issued well after the
+    # relaunch, against a house that has been running long enough that
+    # any leftover fork-to-exec signal timing has already resolved one
+    # way or the other. If `stop_requested` was left at 1 by the first
+    # STOP, this second STOP's kill(2) is silently skipped by
+    # handle_ctl_live()'s own `!stop_requested` guard.
+    r3 = _ctl("ctlclear", b"STOP\n")
+    expect(r3 == "OK\n", f"second STOP not OK: {r3!r}")
+    time.sleep(0.2)
+    expect(_comm(gen2_pid) is None,
+           "second STOP replied OK but the second generation is still "
+           "alive -- stop_requested was not cleared after the first "
+           "STOP was satisfied, so this STOP's kill(2) was silently "
+           "skipped by the !stop_requested guard")
+
+    proc.send_signal(9)
+    try:
+        out, err = proc.communicate(timeout=1)
+    except subprocess.TimeoutExpired:
+        os.kill(proc.pid, 9)
+        out, err = proc.communicate()
+    out = (out or "") + (err or "")
+    expect("restart ctlclear" not in out, f"a STOP counted as a death\n{out}")
+    print("ok ctl-stop-requested-clears-across-a-relaunch")
 
 
 def test_ctl_exec_resets_sigchld_mask():
@@ -11870,6 +12044,7 @@ def main():
         test_shutdown_does_not_restart,
         test_pidfd_reaps_and_counts, test_pidfd_open_failure_falls_back,
         test_ctl_stop_does_not_count,
+        test_ctl_stop_requested_clears_across_a_relaunch,
         test_ctl_exec_resets_sigchld_mask,
         test_ctl_start_relaunch_and_spent,
         test_ctl_malformed_refused, test_ctl_socket_and_death_together,
@@ -11878,7 +12053,8 @@ def main():
         test_wait_is_poll_not_spin,
         test_poll_set_takes_a_second_fd,
         test_term_signal, test_dawn_real_boot,
-        test_kind_required, test_kind_exit0, test_seccomp_kills,
+        test_kind_required, test_kind_exit0,
+        test_decide_exhaustive_sequences, test_seccomp_kills,
         test_brick_is_a_root, test_brick_image_is_sealed,
         test_the_layer_reset_fires_once_per_run,
         test_layer_survives_a_restart,

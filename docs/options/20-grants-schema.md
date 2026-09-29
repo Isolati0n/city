@@ -8,7 +8,10 @@ hash under decision 4") plus the amendment's provides/needs item
 (`docs/OPERATOR-BRIEF.md` amendment, Phase-4 list item under Section 3:
 "Services declared provides/needs follow note 20: the baker resolves
 them, requires exactly one provider per service, and PRINTS the edges it
-added.").
+added."), plus (§6, added after this note first landed) two capability-lid
+facts folded in per the operator's direct instruction: a measured gap in
+what dropping capabilities closes, and a settled ptrace/YAMA fact for
+Proton/Wine, recorded here so neither has to be re-derived later.
 
 Every claim below was checked against the tree at the time this note was
 written; grep the cited lines rather than trusting the prose if this
@@ -282,6 +285,151 @@ that is `gate`, unchanged and still deferred, not this feature.
 
 **Not built this round** — Phase 4 territory, tracked in
 `docs/QUEUE.md`'s Phase 4 list already.
+
+## 6. The capability lid: a measured gap, and a settled ptrace/YAMA fact
+
+Two findings about the not-yet-built capabilities field (amendment item
+A.1, `docs/OPERATOR-BRIEF.md`), folded in here per direct instruction so
+neither is re-derived or relitigated later.
+
+**The gap, measured on 6.12.8+: dropping a house's entire capability
+bounding set does not make another house's `/proc/<pid>/status`
+unreadable.** A capability-dropped house can still read a sibling's
+process status — name, uid, capabilities — it can only no longer
+`PTRACE_ATTACH` to it or signal it. Confirmed against the kernel's own
+source rather than assumed: `fs/proc/base.c`'s `has_pid_permissions()`
+gates access to `/proc/<pid>` at the default `hidepid=0` mount option
+(what this tree uses — nothing here sets `hidepid=`) with **no ptrace
+check at all**:
+
+```c
+static bool has_pid_permissions(struct proc_fs_info *fs_info,
+                 struct task_struct *task,
+                 enum proc_hidepid hide_pid_min)
+{
+    if (fs_info->hide_pid == HIDEPID_NOT_PTRACEABLE)
+        return ptrace_may_access(task, PTRACE_MODE_READ_FSCREDS);
+
+    if (fs_info->hide_pid < hide_pid_min)
+        return true;
+    ...
+```
+
+At `hidepid=0`, the second branch returns `true` unconditionally and
+ordinary DAC then applies (`/proc/<pid>/status` is mode 0444) — no
+capability of any kind is consulted. This tree sets no `hidepid=`
+anywhere, so this is the branch that applies, and it alone already
+settles the claim: reading a sibling's `/proc/<pid>/status` needs no
+capability at all under this tree's actual mount options. The elided
+stricter branch (`HIDEPID_NOT_PTRACEABLE`, reached under a non-default
+`hidepid=` value this note does not pin a number to — the exact mount
+option string and its integer mapping were not independently verified
+and are not needed for the claim above) would fall through to a real
+`ptrace_may_access(..., PTRACE_MODE_READ_FSCREDS)` check, and even
+there, `ptrace(2)`'s own documented access-mode algorithm (man7.org,
+"Ptrace access mode checking," step 3) grants access on matching
+real/effective/saved uid and gid **without CAP_SYS_PTRACE at all** — the
+capability is only the alternative path for *non-matching* credentials,
+and every house here runs uid 0 (invariant 5), so credentials always
+match regardless of which `hidepid=` mode is in effect. `PTRACE_MODE_
+READ` (the class covering `status`-like reads: the man page enumerates
+`/proc/pid/auxv`, `/proc/pid/environ`, `/proc/pid/stat`; `status` is
+gated by the same `has_pid_permissions()` mechanism per the kernel
+source, not separately documented in `proc(5)` by name) is deliberately
+weaker than `PTRACE_MODE_ATTACH` (the class covering `PTRACE_ATTACH`
+itself and `process_vm_writev(2)`), which is where a capability
+requirement would actually bind.
+
+**So the capability lid does not, and structurally cannot on its own,
+make houses blind to each other's existence.** Nothing here is arguing
+that the capability field is failing at a job it was assigned —
+process-existence isolation is a **PID namespace's** job, a different
+mechanism from a capability set, and capabilities were never a
+visibility boundary. (This is this note's own judgement about scope,
+not a reading CLAUDE.md's mechanism rule states directly — that rule's
+clause 3 constrains fields to one mechanism EACH and explicitly says the
+converse, one mechanism legitimately serving several fields, does not
+hold either way; it does not itself say a mechanism may never be
+expected to cover an adjacent job. The argument here rests on what
+capabilities and PID namespaces each actually do, not on that clause.)
+
+**Decision: accept the gap for v1.** The capability field applies
+capabilities alone, as already scoped (`docs/OPERATOR-BRIEF.md`
+amendment item A.1); it does not claim to isolate process visibility,
+and this note does not propose widening it to pretend otherwise. Phase
+4's already-planned "rootless houses (last)" slice is the natural place
+a PID namespace would eventually land, if and when full inter-house
+blindness becomes an actual goal rather than an assumed side effect of
+dropping capabilities — this note flags the connection so that work, if
+taken up, starts from a measured gap rather than rediscovering it.
+Reopening that scope is a design decision for whoever picks up rootless
+houses, not something this note decides.
+
+**The settled fact: a process ptracing its own direct descendant, under
+matching credentials, needs no `CAP_SYS_PTRACE` grant — robustly, under
+every plausible reading of this project's own "YAMA off" setting.**
+`docs/OPERATOR-BRIEF.md` Section 1 states, verbatim: "the target kernel
+leaves YAMA off." That phrase is read here as covering two distinct
+possibilities without needing to settle which one is meant, because
+both lead to the same answer for this specific case: either (a) the
+Yama LSM is not compiled in or not in the active `security=` list at
+all, in which case only the baseline `ptrace(2)` algorithm applies (no
+Yama restriction exists to layer on top of it), or (b) Yama is present
+with `ptrace_scope` left at its most permissive setting, 0 ("classic":
+"a process can `PTRACE_ATTACH` to any other process running under the
+same uid, as long as it is dumpable," `Documentation/admin-guide/LSM/
+Yama.rst`). Under either reading, a process ptracing its own direct
+child satisfies `ptrace(2)`'s own baseline access check (step 3: matching
+real/effective/saved uid and gid needs no capability at all) with
+nothing further required. **It would hold even under the stricter
+scope 1** ("restricted," the common distro default this tree does not
+use): "a process must have a predefined relationship with the inferior
+it wants to call `PTRACE_ATTACH` on. By default, this relationship is
+that of only its descendants" — a direct parent-child relationship
+already satisfies that. So the claim does not depend on resolving the
+"YAMA off" ambiguity, and does not depend on the target's specific
+choice being the most permissive one available.
+
+**What this does NOT establish, said plainly rather than assumed: that
+a Proton/Wine house's actual process relationships are parent-child in
+the first place.** Whether `wineserver` (or any other coordinating
+process in a Wine session) is genuinely the forking ancestor of the
+processes it would need to ptrace — as opposed to a sibling reached
+over its own IPC socket, spawned by a common ancestor rather than by
+`wineserver` itself — was not verified against Wine's own source or
+documentation here. The kernel-side fact above is solid on its own
+terms; whether it is the fact a real Proton/Wine deployment needs
+depends on that separate, unverified premise about Wine's process
+topology, and that premise should be checked against Wine's own
+documentation before this is treated as closing the question for a
+real game house.
+
+**The cross-house question this raises, and left as a further open
+gap rather than papered over**: under the actual permissive
+scope-0-or-absent setting above, the same-uid clause that lets a
+process ptrace its own child ("any other process running under the
+same uid") does not, on its own text, distinguish "own descendant" from
+"any other house" — every house here runs uid 0 (invariant 5). This is
+the same shape as the `/proc/<pid>/status` gap earlier in this section,
+not a separate boundary this note can draw: neither ptrace permission
+nor `/proc` visibility is scoped per-house by anything measured so far,
+because nothing here makes houses distinct principals to the kernel's
+credential checks. Whichever of scope 1 (which *does* have a
+descendant/relationship requirement, per its own quote above) or the
+absent-LSM/scope-0 reading actually applies in practice bounds how far
+this gap reaches, and that was not resolved here. A capability grant
+that would *close* cross-house ptrace, if ever wanted, is a question
+for whatever eventually addresses the visibility gap (PID namespaces,
+per the decision above) — capabilities alone were already established
+not to be the mechanism for it.
+
+Sources, quoted rather than paraphrased where it matters: `ptrace(2)`,
+man7.org, "Ptrace access mode checking"; `Documentation/admin-guide/
+LSM/Yama.rst`, kernel tree; `fs/proc/base.c`'s `has_pid_permissions()`,
+kernel tree — all read from the kernel's current tree as of this note
+(2026-09-29), not pinned to a specific released version; re-check
+against the target's exact kernel tag if that distinction ever matters
+for this specific pair of facts.
 
 ## Definition of done
 

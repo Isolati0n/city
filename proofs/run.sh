@@ -69,7 +69,7 @@ python3 proofs/mkcomp.py nwcheck.c "$OUT/nwcheck_comp.c"
 # Found by fd-auditor.
 echo "proofs: signature check (gcc, not cbmc -- cbmc does not enforce this)"
 for h in proofs/leaf_path_ok.c proofs/leaf_name_ok.c proofs/leaf_name_dup.c \
-         proofs/caller_nw_check.c; do
+         proofs/caller_nw_check.c proofs/caller_decide.c; do
     gcc -fsyntax-only -std=gnu11 -Wall -Wextra -Werror -DPROOF_SIGCHECK \
         -Wno-type-limits \
         -D'__CPROVER_havoc_object(x)=((void)(x))' \
@@ -455,6 +455,20 @@ if wanted caller; then
     expect FAIL caller_nw_check_bind_reached $BIND_UNW \
         -DPROOF_UNITS=1u -DPROOF_BINDS=1u -DPROOF_BIND_REACHED \
         proofs/caller_nw_check.c
+fi
+
+if wanted decide; then
+    # nw_decide() (decide.c, Phase 2) has no loop and no abstracted leaf,
+    # so none of the unwind/mkcomp machinery above applies -- every
+    # argument is free over its full width and CBMC explores it directly.
+    # No PROOF_VACUITY variant: that flag exists to catch an abstraction's
+    # assumption making its own postcondition unreachable, and this
+    # harness abstracts nothing. The control this file's own rule asks
+    # for ("a control that must FAIL") is a deliberate mutation of
+    # decide.c itself, run by hand (or by `control`) rather than carried
+    # as a permanent second build here -- there is no abstraction to be
+    # vacuous about, only an implementation to mutate.
+    expect PASS caller_decide proofs/caller_decide.c
 fi
 
 echo "proofs: every proof verified and every control failed."

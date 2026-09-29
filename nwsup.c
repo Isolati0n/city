@@ -1,5 +1,6 @@
 #define _GNU_SOURCE
 #include "blob.h"
+#include "decide.h"
 #include "lids.h"
 #include "sha256.h"
 #include "store.h"
@@ -787,6 +788,33 @@ static void on_term(int sig)
  */
 static int stop_requested;
 
+/* Phase 2 (docs/OPERATOR-BRIEF.md Section 3): file-scope, alongside
+ * `child`/`stopping`/`stop_requested` above, for the same reason those
+ * are -- handle_ctl_live() needs them to call nw_decide() the same way
+ * main()'s own loop does, and it is a separate function rather than
+ * inline code in main(). nw_budget and nw_complete_on_0 are set once,
+ * near the top of main(), from the unit's environment; nw_lock is
+ * hardcoded, since there is no plan field for it yet.
+ *
+ * `deaths` keeps its pre-Phase-2 name and its pre-Phase-2 shape
+ * deliberately: CLAUDE.md invariant 4 pins "initialised once,
+ * incremented once, nothing else assigns it" by grepping nwsup.c for
+ * exactly this token, and test_budget_is_hard_total's own structural
+ * half does the same. Moving the BUDGET COMPARISON into decide.c (a
+ * stateless function that never assigns to anything) does not change
+ * what this pins; it makes the claim strictly easier to keep true,
+ * since there is now nowhere in nwsup.c a comparison against `budget`
+ * happens at all, only the two assignments below. */
+static unsigned nw_budget;
+static int deaths = 0;
+static int nw_complete_on_0;
+/* Always LOCKED until the plan-format bump adds a `lock` field
+ * (Phase 4). nw_decide()'s UNLOCKED rows are proven (proofs/caller_
+ * decide.c) and exhaustively tested (tests/decide_seq.c) ahead of
+ * anything here being able to select them -- this is the one place
+ * that selection will happen the day the field exists. */
+static const int nw_lock = 1;
+
 static void ctl_reply(int c, const char *s)
 {
     ssize_t n = write(c, s, strlen(s));
@@ -808,7 +836,20 @@ static void handle_ctl_live(int listen_fd, pid_t live)
     } else if (n == 5 && memcmp(buf, "STOP\n", 5) == 0) {
         if (live > 0 && !stop_requested) {
             stop_requested = 1;
-            kill(live, SIGTERM);
+            /* Phase 2: routed through nw_decide() rather than an
+             * inline kill(), so this call site and the post-fork one
+             * below share one decision. has_child=1, child_exited=0,
+             * stop_requested=1 has exactly one outcome regardless of
+             * lock/complete_on_0/deaths/budget -- TERM_CHILD -- and
+             * the assertion is that this is still true, not a
+             * decision this call site is making on its own. */
+            enum nw_decision d = nw_decide(nw_lock, nw_complete_on_0,
+                                            stopping, stop_requested, 0,
+                                            /*has_child=*/1,
+                                            /*child_exited=*/0, 0,
+                                            deaths, nw_budget);
+            if (d == NW_DECIDE_TERM_CHILD)
+                kill(live, SIGTERM);
         }
         ctl_reply(c, "OK\n");
     } else {
@@ -1110,6 +1151,11 @@ int main(int argc, char **argv)
     if ((e = getenv("NW_LIDS"))) lids = (unsigned)atoi(e);
     if ((e = getenv("NW_BUDGET"))) budget = (unsigned)atoi(e);
     if ((e = getenv("NW_KIND"))) kind = (unsigned)atoi(e);
+    /* Mirrored into file scope for nw_decide()'s other caller,
+     * handle_ctl_live() -- see the comment beside nw_budget's own
+     * declaration. */
+    nw_budget = budget;
+    nw_complete_on_0 = (kind == NW_KIND_ONESHOT);
     /* RE-VALIDATED for the same reason NW_BRICK/NW_LAYER are: nw-sup reads
      * its unit from the environment, not the sealed blob, so nothing the
      * baker or nw-check did stands behind this value. */
@@ -1244,7 +1290,6 @@ int main(int argc, char **argv)
     signal(SIGTERM, on_term);
     signal(SIGINT, on_term);
 
-    int deaths = 0;
     if (mkdir("/nw", 0755) < 0 && errno != EEXIST)
         die("ctl parent");
     /* 0700, not 0755: item 1e (docs/OPERATOR-BRIEF.md Section 2, item
@@ -1309,8 +1354,21 @@ int main(int argc, char **argv)
 
     for (;;) {
         /* TERM during the previous house, or before this fork: do not
-         * start another one so shutdown can finish. */
+         * start another one so shutdown can finish. Routed through
+         * nw_decide() like every other decision point below, even
+         * though has_child=0 at loop top makes the answer always
+         * NW_DECIDE_EXIT_SUP -- a live child is always either reaped
+         * or never forked before control returns here, and
+         * proofs/caller_decide.c proves that combination has no other
+         * outcome. */
         if (stopping) {
+            enum nw_decision d = nw_decide(nw_lock, nw_complete_on_0,
+                                            stopping, stop_requested, 0,
+                                            /*has_child=*/0,
+                                            /*child_exited=*/0, 0,
+                                            deaths, nw_budget);
+            if (d != NW_DECIDE_EXIT_SUP)
+                die("decide: unexpected decision while idle and stopping");
             unlink(sockpath);
             _exit(0);
         }
@@ -1330,10 +1388,31 @@ int main(int argc, char **argv)
             char buf[16];
             ssize_t n = read(c, buf, sizeof buf);
             if (n == 6 && memcmp(buf, "START\n", 6) == 0) {
+                /* Phase 2: nw_decide() decides FORK-vs-stay-idle here
+                 * rather than an unconditional `stopped = 0`.
+                 * nw_lock==1 (the only value reachable today) always
+                 * answers FORK, so this is byte-identical to the code
+                 * it replaces; an unlocked house would get
+                 * NW_DECIDE_IDLE back and stay in this branch, which
+                 * proofs/caller_decide.c and tests/decide_seq.c already
+                 * prove and test ahead of a plan field being able to
+                 * select it. */
+                enum nw_decision d = nw_decide(nw_lock, nw_complete_on_0,
+                                                stopping, stop_requested,
+                                                /*start_requested=*/1,
+                                                0, 0, 0, deaths,
+                                                nw_budget);
                 ctl_reply(c, "OK\n");
                 close(c);
-                stopped = 0;
-                continue;
+                if (d == NW_DECIDE_FORK) {
+                    stopped = 0;
+                    continue;
+                }
+                if (d == NW_DECIDE_EXIT_SUP) {
+                    unlink(sockpath);
+                    _exit(0);
+                }
+                continue; /* NW_DECIDE_IDLE: stay idle */
             } else if (n == 5 && memcmp(buf, "STOP\n", 5) == 0) {
                 ctl_reply(c, "OK\n");
             } else {
@@ -1423,81 +1502,108 @@ int main(int argc, char **argv)
         }
         /* child = p is set before this point so a TERM that arrives
          * between fork returning and wait_house can still signal the
-         * house. If stopping is already set, do not block on a house
-         * that was never asked to stop: TERM it, then wait via pidfd. */
+         * house. Phase 2: nw_decide() names the one thing the main
+         * thread of control ever needs to do about that here -- send
+         * the TERM itself, for the fork-to-`child=p` race window
+         * on_term()'s handler cannot see (decide.h explains why the
+         * handler's own direct kill does not cover this case). Every
+         * other window is covered by that handler, asynchronously;
+         * this call site and the one in handle_ctl_live() are the only
+         * two places nw_decide()'s NW_DECIDE_TERM_CHILD governs a kill
+         * issued from ordinary control flow. */
         int st = 0;
-        if (stopping) {
-            if (p > 0)
+        {
+            enum nw_decision d = nw_decide(nw_lock, nw_complete_on_0,
+                                            stopping, stop_requested, 0,
+                                            /*has_child=*/1,
+                                            /*child_exited=*/0, 0,
+                                            deaths, nw_budget);
+            if (d == NW_DECIDE_TERM_CHILD && p > 0)
                 kill(p, SIGTERM);
-            st = wait_house(p, lfd);
-            child = 0;
-            unlink(sockpath);
-            _exit(WIFEXITED(st) ? WEXITSTATUS(st) : 0);
         }
         st = wait_house(p, lfd);
         child = 0;
 
-        /* Same TERM that PID 1 sent to start shutdown. Restarting here
-         * races the city closing: the house comes back after it was
-         * asked to stop. No extra channel — the signal is the news. */
-        if (stopping) {
+        /* The one decision point every child exit reaches, whatever
+         * ended it: shutdown (this generation's own TERM or PID 1's),
+         * an explicit STOP satisfied by this exit, a oneshot's clean
+         * finish, or the restart budget. Same six facts, same
+         * evidence record, same say() lines as before -- nw_decide()
+         * only names which of them applies now. */
+        enum nw_decision d = nw_decide(nw_lock, nw_complete_on_0, stopping,
+                                        stop_requested, 0, /*has_child=*/1,
+                                        /*child_exited=*/1, st, deaths,
+                                        nw_budget);
+        switch (d) {
+        case NW_DECIDE_EXIT_SUP:
+            /* Covers both of the two cases the code before this
+             * refactor exited separately for: shutdown (TERM sent
+             * before or during this run), and an unlocked oneshot's
+             * clean exit(0) -- unreachable today since nw_lock is
+             * always 1, exercised instead by tests/decide_seq.c and
+             * proofs/caller_decide.c. Neither writes evidence or logs
+             * a line, matching both of the originals. */
             unlink(sockpath);
             _exit(WIFEXITED(st) ? WEXITSTATUS(st) : 0);
-        }
 
-        if (stop_requested) {
+        case NW_DECIDE_IDLE:
+            /* An explicit STOP, now satisfied by this exit -- the
+             * house goes idle rather than being restarted or counted
+             * against the budget. */
             stop_requested = 0;
             stopped = 1;
             continue;
-        }
 
-        /* Only a oneshot is finished by a clean exit. For a longrun, exit 0
-         * is as unexpected as any other exit and goes to the budget: a
-         * compositor that quits or a daemon that reloads itself should come
-         * back, not vanish silently. (D12) */
-        if (kind == NW_KIND_ONESHOT && WIFEXITED(st) && WEXITSTATUS(st) == 0) {
-            unlink(sockpath);
-            _exit(0);
-        }
-
-        /* D18: budget is a hard total for the life of this supervisor.
-         * There is no window. A death slower than the old window_s
-         * reset the tally and never hit the cap — budget=3 window=1
-         * dying every 1.2s restarted for as long as anyone watched. */
-        deaths++;
-        /* The supervisor holds six facts at a death and reported two.
-         * `restart X death=1` was byte-identical whether the house
-         * segfaulted, was OOM-killed, or returned 1 from main -- WIFEXITED
-         * was in scope and the branch that would use it did not exist. The
-         * ordinal was bare: death=2 reads as one more chance or nearly
-         * spent depending on a budget the reader did not have. And the
-         * death that ENDED the house was the only one with no line at all,
-         * because the exhaustion path _exit()s before the line below.
-         *
-         * Nothing new is computed. WIFEXITED(st) selects the form,
-         * WEXITSTATUS/WTERMSIG supplies the value, budget is a parameter.
-         * No new state, no new syscall, no new field, same say(), same
-         * fixed buffer. NW-SUPERVISOR-OBSERVATION proposal 1. */
-        char line[96];
-        if (budget == 0 || deaths > (int)budget) {
+        case NW_DECIDE_SPENT:
+        case NW_DECIDE_RESTART: {
+            /* D18: budget is a hard total for the life of this
+             * supervisor. There is no window. A death slower than the
+             * old window_s reset the tally and never hit the cap --
+             * budget=3 window=1 dying every 1.2s restarted for as long
+             * as anyone watched. */
+            deaths++;
+            /* The supervisor holds six facts at a death and reported
+             * two. `restart X death=1` was byte-identical whether the
+             * house segfaulted, was OOM-killed, or returned 1 from
+             * main -- WIFEXITED was in scope and the branch that would
+             * use it did not exist. The ordinal was bare: death=2
+             * reads as one more chance or nearly spent depending on a
+             * budget the reader did not have. And the death that
+             * ENDED the house was the only one with no line at all,
+             * because the exhaustion path _exit()s before the line
+             * below.
+             *
+             * Nothing new is computed. WIFEXITED(st) selects the
+             * form, WEXITSTATUS/WTERMSIG supplies the value, budget is
+             * a parameter. No new state, no new syscall, no new
+             * field, same say(), same fixed buffer.
+             * NW-SUPERVISOR-OBSERVATION proposal 1. */
+            char line[96];
+            const char *verb = (d == NW_DECIDE_SPENT) ? "spent" : "restart";
             if (WIFEXITED(st))
-                snprintf(line, sizeof line, "spent %s death=%d/%u exit=%d",
-                         name, deaths, (unsigned)budget, WEXITSTATUS(st));
+                snprintf(line, sizeof line, "%s %s death=%d/%u exit=%d",
+                         verb, name, deaths, nw_budget,
+                         WEXITSTATUS(st));
             else
-                snprintf(line, sizeof line, "spent %s death=%d/%u signal=%d",
-                         name, deaths, (unsigned)budget, WTERMSIG(st));
-            write_evidence(name, deaths, budget, st);
+                snprintf(line, sizeof line, "%s %s death=%d/%u signal=%d",
+                         verb, name, deaths, nw_budget, WTERMSIG(st));
+            write_evidence(name, deaths, nw_budget, st);
             say(line);
-            unlink(sockpath);
-            _exit(WIFEXITED(st) ? WEXITSTATUS(st) : 71);
+            if (d == NW_DECIDE_SPENT) {
+                unlink(sockpath);
+                _exit(WIFEXITED(st) ? WEXITSTATUS(st) : 71);
+            }
+            continue; /* NW_DECIDE_RESTART: loop back to the top and fork */
         }
-        if (WIFEXITED(st))
-            snprintf(line, sizeof line, "restart %s death=%d/%u exit=%d",
-                     name, deaths, (unsigned)budget, WEXITSTATUS(st));
-        else
-            snprintf(line, sizeof line, "restart %s death=%d/%u signal=%d",
-                     name, deaths, (unsigned)budget, WTERMSIG(st));
-        write_evidence(name, deaths, budget, st);
-        say(line);
+
+        default:
+            /* WAIT/FORK/TERM_CHILD are not reachable from a
+             * has_child=1,child_exited=1 call -- proved directly by
+             * proofs/caller_decide.c's exhaustive run. A death this
+             * project has already paid for twice (bugs 4/9/13): dying
+             * by name beats silently misrouting into some other
+             * branch. */
+            die("decide: unexpected decision after a child exit");
+        }
     }
 }

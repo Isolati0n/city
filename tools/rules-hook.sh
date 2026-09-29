@@ -113,14 +113,16 @@ MAP = [
       "sha256.c", "sha256.h", "store.c", "store.h",
       "rescue.c", "initrd-init.c", "mkboot.sh",
       "landlock-assertions-dryrun.py", "stage-layers.py",
-      "relaunch-house.py", "unit-info.c"}, "runtime"),
+      "relaunch-house.py", "unit-info.c",
+      "decide.c", "decide.h", "caller_decide.c"}, "runtime"),
     ({"blob.h", "nwcheck.c", "nwcheck_main.c", "nw-cc.py", "plan.als",
       "Plan.tla", "stage-candidate.py", "gen-spec-limits.py",
       "bootneed-oracle.c",
       "caller_nw_check.c", "leaf_name_dup.c", "leaf_name_ok.c",
       "leaf_path_ok.c", "stage-layers.py", "unit-info.c"}, "plan"),
     ({"fdorder-sweep.py", "cloexec-proof.c",
-      "console-boot-test.py", "run.py", "unit_probe.c", "scale-probe.py"}, "harness"),
+      "console-boot-test.py", "run.py", "unit_probe.c", "scale-probe.py",
+      "decide_seq.c"}, "harness"),
 ]
 
 # A FILE MAY BE OWNED BY TWO TERRITORIES, and this is where that is

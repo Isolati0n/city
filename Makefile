@@ -38,8 +38,8 @@ nw-check: nwcheck_main.c nwcheck.c blob.h
 lids.o: lids.c lids.h
 	$(CC) $(CFLAGS) -c -o $@ lids.c
 
-nw-sup: nwsup.c lids.o sha256.c sha256.h store.c store.h blob.h lids.h
-	$(CC) $(CFLAGS) -o $@ nwsup.c lids.o sha256.c store.c
+nw-sup: nwsup.c decide.c decide.h lids.o sha256.c sha256.h store.c store.h blob.h lids.h
+	$(CC) $(CFLAGS) -o $@ nwsup.c decide.c lids.o sha256.c store.c
 
 nw-rescue: rescue.c
 	$(CC) $(CFLAGS) -o $@ rescue.c
@@ -187,7 +187,7 @@ stage: all
 	# trap inside a test, found by fd-auditor. Staged together, they cannot
 	# disagree.
 	mkdir -p $(STAGE)/src
-	cp -f nwcheck.c blob.h $(STAGE)/src/
+	cp -f nwcheck.c blob.h decide.c decide.h $(STAGE)/src/
 	# The specs' limits, derived from blob.h. Generated at stage time and
 	# not only inside tests/run.py, because a fresh clone has no specs/
 	# (it is a build product, gitignored) and install-agents --check reads

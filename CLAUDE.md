@@ -12,7 +12,7 @@ offline, then a runtime table interpreter executes it. Robustness comes from
 | `nw-root` (PID 1) | `pid1.c` + `nwcheck.c` | C | **yes** |
 | `nw-spawn` (boot spawner) | `nwspawn.c` + `nwcheck.c` | C | **yes** |
 | `nw-check` | `nwcheck_main.c` + `nwcheck.c` | C | **yes** |
-| `nw-sup` | `nwsup.c` + `lids.c` | C | **yes** |
+| `nw-sup` | `nwsup.c` + `lids.c` + `decide.c` | C | **yes** |
 | `nw-rescue` | `rescue.c` | C | yes |
 | baker (`nw-cc`) | `bakery/nw-cc.py` | Python | **no** |
 | brick packer (`mkbrick`) | `bakery/mkbrick.py` | Python | **no** |
@@ -178,21 +178,42 @@ sections after this one and are deliberately not numbered here.
    budgets live in `nw-sup`. Do not give the spawner a mid-life.
 
    The budget belongs to `nw-sup`, where it is **a hard total of deaths for
-   that supervisor's life** — `int deaths` in `nwsup.c`, compared against
-   `budget`, never reset by a time window.
+   that supervisor's life** — `int deaths` in `nwsup.c`, never reset by a
+   time window. Phase 2 (docs/OPERATOR-BRIEF.md Section 3) moved the
+   COMPARISON against `budget` out of `nwsup.c` and into `nw_decide()`
+   (`decide.c`), a pure function with no state of its own. **Say what each
+   check actually pins, because the two are not the same guarantee.**
+   CBMC (`proofs/caller_decide.c`) proves six named invariants
+   exhaustively over every input — none of its assertions mentions
+   `budget` at all, so it says nothing about whether the RESTART/SPENT
+   split lands at the right threshold. That threshold is pinned by
+   `tests/decide_seq.c` instead, exhaustively over its own bounded domain
+   (budget 0..3, event sequences of length 4, `test_decide_
+   exhaustive_sequences`) — bounded, not proved for every possible
+   budget value, and said that way rather than folded into CBMC's
+   stronger-sounding "every input." Both together are still a better
+   guarantee than a string count alone gives, because a count only pins a
+   token's shape; neither is "proven correct over every input" for the
+   budget comparison specifically. `nwsup.c` still declares `deaths` and
+   still does the one increment; it contains no comparison against
+   `budget` at all any more.
    <<filecontains:nwsup.c:int deaths = 0>>
    <<count:nwsup.c:deaths++:1>>
-   <<count:nwsup.c:deaths > (int)budget:1>>
+   <<count:decide.c:deaths >= (int)budget:1>>
    <<count:nwsup.c:deaths = 0:1>>
    The last one is how "never reset" is pinned, and it is a **count**
    rather than an absence for a reason: `deaths = 0` must appear exactly
-   once, at the declaration. A reset added anywhere makes it two and
-   contradicts. An `absent-in` could not express this, and `window_s` —
-   the obvious token — has a hit in this very file, in the comment
-   recording its removal, so annotating it would report a contradiction
-   while the claim is true. `docs/checkbrief.md`. `window_s` left the blob on
-   2026-09-11 (`HISTORY.md` §35, D18): deaths slower than the window were
-   unbounded, so a house could die forever. Budgets are **never nested**: bug 3 was a
+   once, at the declaration, in the one file that assigns to `deaths` at
+   all. A reset added anywhere makes it two and contradicts. `decide.c`
+   itself declares no static or global variable of any kind — checkable
+   by reading it, not by a fourth annotation, since a file with no state
+   cannot hold a reset either. An `absent-in` could not express the
+   "exactly once" half, and `window_s` — the obvious token — has a hit in
+   this very file, in the comment recording its removal, so annotating it
+   would report a contradiction while the claim is true. `docs/checkbrief.md`.
+   `window_s` left the blob on 2026-09-11 (`HISTORY.md` §35, D18): deaths
+   slower than the window were unbounded, so a house could die forever.
+   Budgets are **never nested**: bug 3 was a
    supervisor giving up, PID 1 restarting it with a fresh budget, and the pair
    looping. One budget authority per unit, and PID 1 is not it.
 
