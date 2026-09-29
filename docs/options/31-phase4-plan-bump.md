@@ -98,12 +98,18 @@ here and untestable, and nothing in `nwsup.c` has ever written
 `io.max` (`grep -n "res\." nwsup.c` returns nothing per the correction
 already landed in Phase 3 review). Deleting rather than leaving unused:
 a declared, unenforced io limit is exactly the `nw_res` defect this
-project already paid for once. `nwcheck.c`'s validation of these two
-fields and the baker's parser for `io-rbps=`/`io-wbps=` are deleted with
-the fields — **there is no refusal to add**, because a plan naming a key
-that no longer exists in the grammar is already an unknown-key error via
-whatever generic mechanism the baker uses for that (the same path a
-typo in any other key takes).
+project already paid for once. **Correcting an overstatement from this
+section's first draft: there is no `nwcheck.c` range check on either
+field to delete.** `nwcheck.c:327`'s own comment says so directly —
+`cpu_mask`, `mem_high`, `mem_max`, `io_rbps`, `io_wbps` and
+`layer_bytes` "have no range check here and that is correct: every
+64-bit value of a mask, a byte count or a rate is a legal declaration,
+so there is no bound to quote." Only the baker side is real
+(`bakery/nw-cc.py:647-650`, `parse_bytes(v, "io-rbps")`/`"io-wbps"`),
+and that parser key goes with the fields — **there is no refusal to
+add**, because a plan naming a key that no longer exists in the grammar
+is already an unknown-key error via whatever generic mechanism the
+baker uses for that (the same path a typo in any other key takes).
 
 **`sched_ext`** (`blob.h:484`, `NW_SCHED_EXT_*` at `blob.h:368-370`):
 supersedes `docs/options/15-per-house-scheduling.md`'s reject path
@@ -117,12 +123,26 @@ detection with no allocation and a bounded scan, per its own comment),
 and `apply_sched_ext()` (`nwsup.c:694-`) is wired into the boot sequence
 (`nwsup.c:1994`). What it does with that detection is the reason it's
 being deleted rather than kept: `NW_SCHED_EXT_DEFAULT` names exactly one
-policy with **no working BPF artifact behind it** — `docs/options/15`'s
-own measurement is that nothing available to this project can build
-one — so `apply_sched_ext()`'s only two outcomes, both today and for as
-long as that remains true, are `die("sched-ext unsupported")` on a
-kernel lacking the feature, or a different, equally-final `die()` on a
-kernel that has it, because loading nothing while claiming a policy was
+policy with **no working, loadable artifact behind it on this project's
+own test kernel** — this section's first draft quoted `docs/options/15`
+as saying "nothing available to this project can build one," and that
+framing is `docs/options/15`'s own, since-superseded first draft: its
+newest section ("Attempt 3," measured 2026-09-29, the same day as this
+note) got a real, distro-packaged binary (Fedora's `scx_c_schedulers`,
+`scx_simple`) to the point of an actual load attempt against the
+runner's kernel, where it failed on a kernel-BTF mismatch specific to
+that kernel (`libpf: extern (func ksym) 'scx_bpf_consume': not found in
+kernel or module BTFs`) — a narrower, kernel-specific failure, not "no
+artifact exists." **The decision this note makes is unchanged by that
+correction** — `docs/QUEUE.md`'s own record of Attempt 3 says explicitly
+that Phase 4 deletes `sched_ext` regardless of the result — but the
+justification is restated accurately: there is still no policy this
+project can demonstrate loading and verified on the kernel it actually
+tests against, whatever the reason on any one kernel turns out to be.
+So `apply_sched_ext()`'s only two outcomes, both today and for as long
+as that remains true, are `die("sched-ext unsupported")` on a kernel
+lacking the feature, or a different, equally-final `die()` on a kernel
+that has it, because loading nothing while claiming a policy was
 applied is exactly `nw_res`'s original defect reached through the one
 branch nothing available here can exercise. A field whose only real
 behavior is "always refuse, for one of two reasons" is a two-line
@@ -148,7 +168,7 @@ because `sched_ext`/`sched_policy` read as one family and are not.
 
 ## 4. `lock` — mostly already built
 
-`docs/options/22-lock-unlock.md` is a complete, 443-line design note for
+`docs/options/22-lock-unlock.md` is a complete, 442-line design note for
 this field, written before this bump had a number. Read against the
 current tree, its designs still hold: the encoding it proposes (a
 single byte reusing the freed `sched_ext` position, `locked=0` as the
@@ -179,11 +199,16 @@ hardcoded pending "the day the field exists."
 **What this bump actually does for `lock`, concretely:**
 
 1. `struct nw_unit` gains the `lock` byte at the position §2 assigns.
-2. The baker parses `lock=locked`/`lock=unlocked`
-   (`docs/options/22`'s own §"Encoding" argues for named values over a
-   bare `0`/`1` in plan source, matching how `lids=` and `kind=` are
-   spelled — recommendation: follow that, `lock=locked` is the default
-   when the key is omitted).
+2. The baker parses `lock=locked`/`lock=unlocked`. `docs/options/22`'s
+   §5 "Encoding" only argues for the byte's own position and
+   size-neutrality in the struct, not for this spelling in plan source —
+   an earlier draft of this bullet attributed the naming argument to
+   that section and it isn't there; `lock=unlocked` appears once,
+   unargued, in that note's own §9 Tests. The named-value recommendation
+   is this note's own, made here for consistency with how `lids=` and
+   `kind=` are already spelled — a bare `0`/`1` would be the one plan
+   key that breaks that pattern. `lock=locked` is the default when the
+   key is omitted.
 3. `nwcheck.c` validates the byte is one of the two known values
    (`NW_E_LOCK`, next code = 28) — the same closed-set shape
    `NW_E_LIDS` already uses for `lids`.
@@ -244,11 +269,11 @@ directly:
 
 **`stop_signal` is a real applier, buildable now, because `kill(2)`
 itself is the mechanism and it's already async-signal-safe.** A plan
-declares `stop-signal=<name>` from a closed set (recommend: `TERM`,
-`INT`, `HUP`, `QUIT` — the signals a well-behaved daemon typically
-treats as "shut down," not an arbitrary integer, for the same reason
-`lids=` is a named set rather than a raw bitmask the plan language
-elsewhere avoids). Mechanism: a new file-scope
+declares `stop-signal=<name>` from a closed set — **open question 5**:
+recommend `{TERM, INT, HUP, QUIT}`, the signals a well-behaved daemon
+typically treats as "shut down," not an arbitrary integer, for the same
+reason `lids=` is a named set rather than a raw bitmask the plan
+language elsewhere avoids. Mechanism: a new file-scope
 `static int nw_stop_signal = SIGTERM;` in `nwsup.c`, set once at
 startup from `getenv("NW_STOP_SIGNAL")` before `on_term` is installed —
 a plain global int read inside a signal handler is signal-safe (it's
@@ -315,33 +340,48 @@ numbering in §1 doesn't need to skip around when that later note lands.
 
 **What exists today**: every house runs as uid 0 with nothing dropped.
 The only privilege-adjacent call in the whole TCB is
-`PR_SET_NO_NEW_PRIVS` (`grep -nE "PR_SET_NO_NEW_PRIVS" nwsup.c lids.c"`
+`PR_SET_NO_NEW_PRIVS` (`grep -nE "PR_SET_NO_NEW_PRIVS" nwsup.c lids.c`
 — confirmed present in both, part of the seccomp/Landlock setup, not a
 capability drop). `docs/options/20-grants-schema.md` §6 (already in the
-tree, read in full for this note) establishes a fact that constrains
-this field's controls directly, and it cuts the opposite way from what
-an earlier draft of this section assumed: **`CAP_SYS_PTRACE` does not
-gate ptrace access between houses on this tree today, and dropping it
-from a house will not stop that house from ptracing a sibling.**
-Sourced from the kernel's own `fs/proc/base.c` `has_pid_permissions()`
-(quoted in full in §6): at this tree's actual mount option
-(`hidepid=0`, nothing here sets any other value), `/proc/<pid>/status`
-is readable by DAC alone, no capability or ptrace check at all; and
-separately, `ptrace(2)`'s own documented access-mode algorithm
-(man7.org, "Ptrace access mode checking," step 3) grants access on a
-matching real/effective/saved uid — `CAP_SYS_PTRACE` is only the
-fallback path for *non-matching* credentials — and every house here
-runs uid 0 (invariant 5), so credentials always match and the
-capability is never actually consulted. **So `CAP_SYS_PTRACE` is a
-real, correctly-named class to include in the capability set (it is
-still a genuine kernel capability with real effects generally), but a
-test asserting "a capabilities-dropped house cannot ptrace a sibling"
-would be asserting something this field cannot deliver while every
-house shares uid 0** — that gap is a uid problem, not a capability
-problem, and closing it is exactly what the later, explicitly deferred
-"rootless houses" item exists for. Recorded here so the control list
-below doesn't repeat the mistake `docs/options/20` already corrected
-once.
+tree, read in full for this note) settles a narrower fact than this
+section's first draft claimed, and getting the scope right matters
+because §6's own drafting history records exactly this overclaim being
+made once already and corrected (`docs/QUEUE.md`'s account of that
+correction round). **What §6 actually settles: a process ptracing its
+own direct descendant, under matching credentials, needs no
+`CAP_SYS_PTRACE`** — sourced from `ptrace(2)`'s documented access-mode
+algorithm (man7.org, "Ptrace access mode checking," step 3: matching
+real/effective/saved uid needs no capability), and holding under every
+plausible reading of this project's stated "YAMA off," including the
+stricter scope-1 reading, because a direct parent-child relationship
+satisfies scope 1's own descendant requirement too. **What §6
+explicitly does NOT settle, calling it "a further open gap rather than
+papered over": whether that same freedom extends to one house ptracing
+a sibling.** The same-uid clause in the permissive reading ("any other
+process running under the same uid") does not, on its own text,
+distinguish "own descendant" from "any other house" — every house here
+runs uid 0 (invariant 5) — but §6 states plainly that which reading
+actually governs in practice "was not resolved here." A related,
+separately-sourced fact from the same section — `/proc/<pid>/status` is
+readable by DAC alone at this tree's `hidepid=0`, no ptrace or
+capability check at all — is fully settled and unaffected by the
+sibling-ptrace ambiguity; it answers a different question (process
+visibility, not attach permission).
+
+**So this field's controls have to be written against what's actually
+settled, not against the broader, since-corrected claim.** A
+descendant-ptrace control (a house's own child) can assert the settled
+fact directly: dropping `CAP_SYS_PTRACE` does not, and per the kernel
+source cannot, prevent a process from ptracing its own fork, so a test
+here is a control on the FIELD's honesty rather than on the mechanism —
+it should never be sold as something the field prevents. A
+*sibling*-ptrace control cannot assert either direction as settled: §6
+leaves it open which YAMA reading governs, so a control here can only
+report what this specific kernel does today, labeled as a measurement
+of the current environment rather than a property this field
+guarantees either way. Closing the sibling case for real is a uid
+problem, not a capability problem, and belongs to the later, explicitly
+deferred "rootless houses" item, exactly as §6's own decision states.
 
 **Design questions, answered:**
 
@@ -416,25 +456,43 @@ once.
   divergence from the bump's own stated UNSET convention and is called
   out as open question 2.**
 
-**Controls** (from the amendment, restated against this tree's actual
-test conventions, and dropping the ptrace case the amendment names —
-per the finding above, that one is not this field's to deliver while
-every house is uid 0): a dropped house's attempt to `mknod`, `mount`,
-or open a raw `AF_PACKET` socket must each fail with `EPERM` from the
-capability check specifically — distinguished from a seccomp
-`EPERM`-via-`SIGSYS` or a Landlock `EACCES` by running the probe against
-a house with **capabilities dropped and no other lid set**, the same
-"test the mechanism in isolation" discipline `harness.md`'s "claim with
-parts" bullet requires (the seccomp allow-list already denies raw
-sockets independently — invariant 6's grant comment — so a combined-lids
-test would be satisfied by the wrong mechanism and prove nothing about
-the capability drop specifically). A `CAP_SYS_PTRACE` control still
-belongs in the suite, but honestly scoped: assert that dropping it does
-**not** prevent a same-uid ptrace today (a control proving the negative
-finding above stays true, so a kernel change or a later rootless-houses
-landing that silently altered this doesn't go unnoticed), not that it
-does. Read-back-matches-plan is a direct string comparison against
-`/proc/<pid>/status`.
+**Controls**, covering all four probes the amendment names
+(`mknod`/`mount`/raw-socket/`ptrace`-`bpf`), each restated against this
+tree's actual test conventions and against what §6 actually settles
+rather than the corrected overclaim: a dropped house's attempt to
+`mknod`, `mount`, or open a raw `AF_PACKET` socket must each fail with
+`EPERM` from the capability check specifically — distinguished from a
+seccomp `EPERM`-via-`SIGSYS` or a Landlock `EACCES` by running the probe
+against a house with **capabilities dropped and no other lid set**, the
+same "test the mechanism in isolation" discipline `CLAUDE.md`'s "a
+claim with parts is covered when every part is" bullet requires (the
+seccomp allow-list already denies raw sockets independently —
+invariant 6's grant comment — so a combined-lids test would be
+satisfied by the wrong mechanism and prove nothing about the
+capability drop specifically). Ptrace splits into the two controls §7
+above already draws: a descendant-ptrace control asserting dropping
+`CAP_SYS_PTRACE` does **not** prevent a same-uid parent-child ptrace
+today (proving the settled negative stays true, so a kernel change or
+a later rootless-houses landing that silently alters it doesn't go
+unnoticed), and a sibling-ptrace control labeled as a measurement of
+this specific kernel/YAMA setting rather than an assertion either
+direction, since §6 leaves that question open. **`bpf` — the fourth probe the amendment names and the one an earlier
+draft of this section silently dropped rather than scoping.**
+`grep -n "__NR_bpf" lids.c` returns nothing: `bpf(2)` is already absent
+from `strict_allow[]`, so any house with `lids=...,seccomp` already gets
+`EPERM`-via-`SIGSYS` on the syscall regardless of capabilities — the
+same "test the mechanism in isolation" concern the mknod/mount/socket
+controls already raise applies here in the opposite direction: a house
+with BOTH seccomp and a capability drop would have its `bpf` control
+satisfied by the wrong mechanism. So a real capability-only `bpf`
+control needs a house with **capabilities dropped and seccomp
+absent** — the one combination not otherwise exercised by this
+section's other three controls, each of which assumes seccomp is
+present as an independent, unrelated lid. Whether `CAP_BPF` (kernel
+≥ 5.8) or the older, broader `CAP_SYS_ADMIN` gate applies on the target
+kernel is a separate, unverified primary-source question, left for the
+code round rather than answered here. Read-back-matches-plan is a
+direct string comparison against `/proc/<pid>/status`.
 
 ## 8. `task_cap` (pids.max) and `oom_score_adj` — built now
 
@@ -465,14 +523,21 @@ both directions" discipline for a different field).
 
 **`oom_score_adj`**: written to `/proc/self/oom_score_adj` **in the
 child, before capabilities are dropped** per the amendment's own
-ordering — this is a `/proc` write, not a capability-gated syscall for
-a process adjusting its own score (no `CAP_SYS_RESOURCE` needed for a
-process to write its own `oom_score_adj` within the allowed range;
-`CAP_SYS_RESOURCE` is only required to set another process's, which
-this TCB doesn't do), so the ordering relative to the capability drop
-is not load-bearing the way it might first appear — recorded here so a
-future reader doesn't assume it's a workaround for a capability
-requirement that doesn't exist. Range, from primary source
+ordering. **Correcting this section's first draft on why that ordering
+isn't load-bearing**: the claim was that `CAP_SYS_RESOURCE` only gates
+setting *another* process's value, never your own — checked against the
+kernel's actual gate (`fs/proc/base.c`'s `__set_oom_adj()`) and that
+isn't the distinction the kernel draws. The real condition is
+`(short)oom_adj < task->signal->oom_score_adj_min && !capable(CAP_SYS_RESOURCE)`
+— the capability is required to *lower* a value below a floor a
+previous, privileged write already raised, for self or other alike, not
+gated by whose process it is. In practice this still doesn't make the
+ordering load-bearing for this TCB: nw-sup's forked child holds every
+capability up to the point it drops them, so it can write any value in
+range regardless of which check governs, and nothing here has
+previously raised `oom_score_adj_min` for this process to hit the
+floor against. Recorded here so a future reader has the actual
+mechanism rather than the corrected-away one. Range, from primary source
 (`kernel.org/doc/Documentation/filesystems/proc.rst`, quoted verbatim):
 **-1000 (`OOM_SCORE_ADJ_MIN`) to +1000 (`OOM_SCORE_ADJ_MAX`)**; "-1000...
 is equivalent to disabling oom killing entirely for that task since it
@@ -502,14 +567,14 @@ named as such so nobody later cites it as proof the ordering works.
 - This init's own current default, from the code rather than a guess:
   PID 1 raises its **soft** `RLIMIT_NOFILE` to
   `NW_BOOT_NEED(n_houses, n_edges)` (`pid1.c:723-724`,
-  `blob.h:264`'s macro) — a small, city-wide number bounded by
+  `blob.h:263`'s macro) — a small, city-wide number bounded by
   `NW_FD_RESERVED + NW_MAX_UNITS + 2*NW_MAX_EDGES` — against the
   **original, kernel-inherited hard limit**, which it never raises
   except in the documented EPERM fallback (`pid1.c:704-707`, and that
   fallback *lowers* the hard limit to `need`, it doesn't raise it).
   Every house inherits this exact soft/hard pair unmodified through
   fork (`pid1.c:690-691`'s own comment: "Every house inherits this
-  table by fork, unmodified before exec"). **So today's uniform
+  table by fork, unmodified before exec,"). **So today's uniform
   per-house ceiling is whatever the kernel handed PID 1 at boot** — not
   measured in this note beyond that, because it is a property of the
   boot environment (initramfs/kernel defaults), not of this code, and
