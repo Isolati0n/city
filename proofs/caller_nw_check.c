@@ -155,8 +155,10 @@ int main(void)
             __CPROVER_assert(nul, "accepted: unit name is NUL-terminated");
             __CPROVER_assert(u[k].exec_path[0] == '/',
                              "accepted: exec_path is absolute");
-            __CPROVER_assert(u[k].sched_ext <= NW_SCHED_EXT_MAX,
-                             "accepted: sched-ext field within its closed range");
+            /* docs/options/31: sched_ext deleted, `lock` reuses its
+             * byte (docs/options/22). Same shape assertion, new field. */
+            __CPROVER_assert(u[k].lock <= NW_LOCK_MAX,
+                             "accepted: lock field within its closed range");
             /* "Has a brick" is ANY nonzero byte of the hash, and these
              * two assertions must say so rather than reading brick[0].
              *

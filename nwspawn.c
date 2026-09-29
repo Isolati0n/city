@@ -349,19 +349,42 @@ int main(int argc, char **argv)
                 snprintf(envk, sizeof envk, "NW_WIRE_%d", 3 + k);
                 setenv(envk, u[my_wire_peer[k]].name, 1);
             }
-            char lbuf[8], bbuf[8], kbuf[8], nbuf[8], sxbuf[8];
+            char lbuf[8], bbuf[8], kbuf[8], nbuf[8], lockbuf[8];
             snprintf(lbuf, sizeof lbuf, "%u", (unsigned)u[i].lids);
             snprintf(bbuf, sizeof bbuf, "%u", (unsigned)u[i].budget);
             snprintf(kbuf, sizeof kbuf, "%u", (unsigned)u[i].kind);
-            /* docs/options/15-per-house-scheduling.md. Decimal, same
-             * "0 = unset" convention every other field here uses. */
-            snprintf(sxbuf, sizeof sxbuf, "%u", (unsigned)u[i].sched_ext);
+            /* docs/options/22-lock-unlock.md, docs/options/31. Decimal,
+             * same "0 = unset" convention every other field here uses --
+             * except this one is not unset/set, it is the blob's own
+             * NW_LOCK_LOCKED/UNLOCKED byte, forwarded as-is; nw-sup
+             * inverts it into nw_decide()'s opposite convention at the
+             * one point it reads this variable. */
+            snprintf(lockbuf, sizeof lockbuf, "%u", (unsigned)u[i].lock);
             setenv("NW_UNIT", u[i].name, 1);
             setenv("NW_HOUSE", u[i].name, 1);
             setenv("NW_LIDS", lbuf, 1);
             setenv("NW_BUDGET", bbuf, 1);
             setenv("NW_KIND", kbuf, 1);
-            setenv("NW_SCHED_EXT", sxbuf, 1);
+            setenv("NW_LOCK", lockbuf, 1);
+            /* docs/options/31 Sections 5-9. Same "0 = unset" decimal
+             * convention; nw-sup re-validates all of them anyway, for
+             * the same reason it re-validates NW_LIDS/NW_KIND/etc -- it
+             * reads its unit from the environment, not the sealed blob.
+             * capabilities is a uint64_t, so %llu like NW_CPU_MASK
+             * below. */
+            char ssigbuf[8], gpbuf[24], nfbuf[24], capbuf[24], sdpbuf[8];
+            snprintf(ssigbuf, sizeof ssigbuf, "%u", (unsigned)u[i].stop_signal);
+            snprintf(gpbuf, sizeof gpbuf, "%u", (unsigned)u[i].grace_period);
+            snprintf(nfbuf, sizeof nfbuf, "%u", (unsigned)u[i].nofile);
+            snprintf(capbuf, sizeof capbuf, "%llu",
+                     (unsigned long long)u[i].capabilities);
+            snprintf(sdpbuf, sizeof sdpbuf, "%u",
+                     (unsigned)u[i].supervisor_death_policy);
+            setenv("NW_STOP_SIGNAL", ssigbuf, 1);
+            setenv("NW_GRACE_PERIOD", gpbuf, 1);
+            setenv("NW_NOFILE", nfbuf, 1);
+            setenv("NW_CAPABILITIES", capbuf, 1);
+            setenv("NW_SUPERVISOR_DEATH_POLICY", sdpbuf, 1);
             /* The brick and the paths bound into it. Names, not descriptors:
              * nw-sup mounts them itself and the house opens what it needs.
              * Neither a bind nor a brick adds to the descriptor table this
@@ -405,7 +428,7 @@ int main(int argc, char **argv)
              * `nice` is signed (int8_t, -20..19) and is the one field
              * here that needs %d rather than an unsigned conversion. */
             char cmbuf[24], mhbuf[24], mmbuf[24], cwbuf[8], nicebuf[8],
-                 spbuf[8];
+                 spbuf[8], tcbuf[24], oombuf[8];
             snprintf(cmbuf, sizeof cmbuf, "%llu",
                      (unsigned long long)u[i].res.cpu_mask);
             snprintf(mhbuf, sizeof mhbuf, "%llu",
@@ -415,12 +438,19 @@ int main(int argc, char **argv)
             snprintf(cwbuf, sizeof cwbuf, "%u", (unsigned)u[i].res.cpu_weight);
             snprintf(nicebuf, sizeof nicebuf, "%d", (int)u[i].res.nice);
             snprintf(spbuf, sizeof spbuf, "%u", (unsigned)u[i].res.sched_policy);
+            /* docs/options/31 Section 8. task_cap is a uint32_t, unsigned
+             * decimal like NW_CPU_WEIGHT; oom_score_adj is signed
+             * (int16_t, -1000..1000) and needs %d like NW_NICE. */
+            snprintf(tcbuf, sizeof tcbuf, "%u", (unsigned)u[i].res.task_cap);
+            snprintf(oombuf, sizeof oombuf, "%d", (int)u[i].res.oom_score_adj);
             setenv("NW_CPU_MASK", cmbuf, 1);
             setenv("NW_MEM_HIGH", mhbuf, 1);
             setenv("NW_MEM_MAX", mmbuf, 1);
             setenv("NW_CPU_WEIGHT", cwbuf, 1);
             setenv("NW_NICE", nicebuf, 1);
             setenv("NW_SCHED_POLICY", spbuf, 1);
+            setenv("NW_TASK_CAP", tcbuf, 1);
+            setenv("NW_OOM_SCORE_ADJ", oombuf, 1);
             int nb = 0;
             for (uint32_t b = 0; b < h->n_binds; b++) {
                 if (bd[b].unit != (uint16_t)i) continue;

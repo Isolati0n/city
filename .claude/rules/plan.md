@@ -347,11 +347,16 @@ The boundary that does matter here is not between files, it is **trust**:
   `blob.h`'s `NW_AT(nw_res, ...)` lines only pin the reader.
   `test_baker_writes_the_declared_layout` reads every field back at its
   declared offset **and its declared width** on a house whose values are
-  all distinct. The mutation that needs it: swapping `io_rbps` and
-  `io_wbps` in the baker alone is legal in every direction — both u64,
-  both unconstrained, no cross-field rule touches either — so a plan
-  capping reads gets its writes capped instead, bakes clean, validates
-  clean, and nothing but a byte position can see it.
+  all distinct. The worked example moved with Phase 4 (`io_rbps`/
+  `io_wbps` are deleted from the struct entirely, `docs/options/31`) —
+  read `tests/run.py`'s own comment at the swap-test site rather than a
+  copy of it here, since that comment is what names the current pair
+  (`cpu_mask`/`task_cap` as of this writing) and it is the one that goes
+  stale first when a field is added or removed. The mutation the test
+  guards against, generally: swapping two cross-field-rule-free members
+  in the baker alone is legal in every direction — a plan capping one
+  field gets the other's value instead, bakes clean, validates clean,
+  and nothing but a byte position can see it.
 
 - **Check the struct sizes, do not eyeball them.** The Python
   `struct.pack` format and the C struct must agree. Take the format from

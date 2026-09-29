@@ -13,7 +13,7 @@ CFLAGS = -Wall -Wextra -O2 -g -std=gnu11 -ffile-prefix-map=$(CURDIR)=.
 # the stage a parallel run is using.
 STAGE ?= /tmp/nw-init-run
 
-all: nw-dawn nw-root nw-spawn nw-check nw-sup nw-rescue unit-probe unit-boom unit-badcall unit-term unit-brick unit-slowdie unit-dieterm unit-lastwords unit-lastwordsmany unit-orphan unit-orphanslow unit-orphanhang unit-layer unit-layer-fill unit-bindfile unit-firehose unit-info unit-firstfail unit-wire
+all: nw-dawn nw-root nw-spawn nw-check nw-sup nw-rescue unit-probe unit-boom unit-badcall unit-term unit-anysig unit-brick unit-slowdie unit-dieterm unit-lastwords unit-lastwordsmany unit-orphan unit-orphanslow unit-orphanhang unit-layer unit-layer-fill unit-bindfile unit-firehose unit-info unit-firstfail unit-wire
 
 # blob.h IS A PREREQUISITE, and leaving it off is not cosmetic. dawn now
 # includes it for NW_BRICK_MNT, and the whole justification for that include
@@ -69,6 +69,9 @@ unit-badcall: houses/badcall.c
 
 unit-term: houses/term.c
 	$(CC) $(CFLAGS) -o $@ houses/term.c
+
+unit-anysig: houses/anysig.c
+	$(CC) $(CFLAGS) -o $@ houses/anysig.c
 
 unit-firstfail: houses/firstfail.c
 	$(CC) $(CFLAGS) -static -o $@ houses/firstfail.c
@@ -183,7 +186,7 @@ stage: all
 	mkdir -p /nw/mnt /nw/layers /nw/evidence
 	mkdir -p $(STAGE)/efi/slots/A $(STAGE)/efi/slots/B $(STAGE)/work
 	cp -f nw-dawn nw-root nw-spawn nw-check nw-sup nw-rescue \
-	      unit-probe unit-boom unit-badcall unit-term unit-brick unit-slowdie unit-dieterm \
+	      unit-probe unit-boom unit-badcall unit-term unit-anysig unit-brick unit-slowdie unit-dieterm \
 	      unit-lastwords unit-lastwordsmany unit-orphan unit-orphanslow unit-orphanhang \
       unit-layer unit-layer-fill unit-bindfile unit-firehose unit-info unit-firstfail unit-wire $(STAGE)/nw/bin/
 	chmod +x $(STAGE)/nw/bin/*

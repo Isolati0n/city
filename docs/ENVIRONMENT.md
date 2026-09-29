@@ -48,7 +48,14 @@ the answers.
   `vfat-esp` half on every run here and substitutes ext4.
 
 - **No `sched_ext`, in the kernel build itself, not just at runtime.**
-  Measured four independent ways, for per-house scheduling
+  **The mechanism this measurement was FOR is deleted from the tree**
+  (docs/options/31-phase4-plan-bump.md Section 3: no working artifact
+  across three measured attempts, and the field is gone regardless of
+  the result) -- kept here as history rather than deleted, matching
+  this file's own "measured, not asserted" discipline, since the
+  underlying kernel facts are still true and someone re-adding a
+  scheduling mechanism to this tree would want them. Measured four
+  independent ways, for per-house scheduling
   (`docs/options/15-per-house-scheduling.md` -- this entry first cited
   a roadmap number, "#10," that does not match this design note or any
   numbered list found anywhere in the tree; `claims` checked and found
@@ -102,6 +109,26 @@ the answers.
   lines from the sentence being doubted. An entry recording a failed
   measurement, in a file about measurement, while the successful one sat
   in the repository. `claims`.*
+
+- **This container's own process lacks `CAP_SYS_RESOURCE`, despite
+  running as uid 0.** `grep CapEff /proc/self/status` reads
+  `000001fffeffffff` -- bit 24 clear, the only gap in an otherwise
+  full-looking mask. Consequence for docs/options/31's `oom_score_adj`
+  field: the kernel's own gate (`fs/proc/base.c`'s `__set_oom_adj`)
+  requires that capability only to move a process's `oom_score_adj`
+  *below* its current floor (0 for a fresh process, per the kernel's
+  own `oom_score_adj_min` tracking), so writing a NEGATIVE value here
+  fails with EPERM before nw-sup ever drops any capability of its own
+  -- measured directly, `NW_OOM_SCORE_ADJ=-500` against a plain
+  `nw-sup` invocation with nothing else declared answers
+  `FAIL oom score adj errno=13`. A positive value needs no privilege
+  and this container can exercise it, which is what
+  `test_oom_score_adj_readback` does; the negative direction is real,
+  proven in Phase 4's own design note by a scratch program run
+  specifically to confirm it (docs/options/31 Section 10 item 3,
+  fully clearing CAP_SYS_RESOURCE via raw capget/capset rather than
+  relying on this container's own pre-existing gap), and untestable
+  here for the same reason mem_high/mem_max/cpu_weight are.
 
 - **Landlock is ABI 7**, which is a capability rather than a gap and is
   listed because the suite branches on it and names the branch in its `ok`

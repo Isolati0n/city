@@ -12,7 +12,9 @@ static const char *errs[] = {
     "name",
     "duplicate name",
     "exec_path",
-    "sched-ext policy out of range",
+    /* NW_E_SCHEDEXT's slot (was here) is retired, not kept as a dead
+     * string with no producer -- docs/options/31, blob.h's enum
+     * comment has the reasoning. Every code below shifted down by one. */
     "lids",
     "kind",
     "brick without NEWNS lid",
@@ -31,7 +33,13 @@ static const char *errs[] = {
     "layer capacity without a layer",
     "edge count",
     "edge endpoint index",
-    "duplicate edge"
+    "duplicate edge",
+    /* docs/options/31-phase4-plan-bump.md. */
+    "lock outside the closed set",
+    "an unlocked unit is named by a declared edge",
+    "stop-signal outside the closed set",
+    "supervisor-death policy is reserved and must be 0",
+    "oom-score-adj out of range"
 };
 
 _Static_assert(sizeof errs / sizeof errs[0] == NW_E__COUNT,
@@ -324,11 +332,15 @@ int nw_check(const void *blob, uint32_t len)
          *
          * ONE CODE PER FIELD, because a refusal naming "the resource
          * block" would leave an operator guessing which of nine numbers
-         * was wrong. cpu_mask, mem_high, mem_max, io_rbps, io_wbps and
-         * layer_bytes have no range check here and that is correct:
-         * every 64-bit value of a mask, a byte count or a rate is a
-         * legal declaration, so there is no bound to quote. What
-         * relations exist between them are checked below. */
+         * was wrong. cpu_mask, mem_high, mem_max, layer_bytes and
+         * task_cap have no range check here and that is correct: every
+         * 64-bit value of a mask, a byte count or a rate is a legal
+         * declaration (task_cap the same, docs/options/31: it is
+         * declared policy, not bounded by a kernel constant worth
+         * quoting), so there is no bound to quote. What relations exist
+         * between them are checked below. (io_rbps/io_wbps, formerly in
+         * this same "no range check" class, are DELETED, docs/options/31
+         * Section 3 -- not merely unchecked any more.) */
         const struct nw_res *r = &u[i].res;
         /* No floor test: 0 is unset and NW_CPU_WEIGHT_MIN is 1, so this
          * accepts exactly {0} union [MIN, MAX] already -- see blob.h. */
@@ -336,6 +348,15 @@ int nw_check(const void *blob, uint32_t len)
         if (r->sched_policy > NW_SCHED_MAX) return NW_E_RESSCHED;
         if (r->nice < NW_NICE_MIN || r->nice > NW_NICE_MAX)
             return NW_E_RESNICE;
+        /* docs/options/31 Section 8. Same shape as `nice` immediately
+         * above: 0 sits inside the kernel's real range rather than at a
+         * boundary, so the baker (not this checker) is what refuses a
+         * declared oom-score-adj=0 -- the blob genuinely cannot tell it
+         * from unset, the same argument nice=0 and cpu-weight=0 already
+         * make. This check is the OTHER direction: a value the kernel's
+         * own range flatly rejects. */
+        if (r->oom_score_adj < NW_OOM_ADJ_MIN || r->oom_score_adj > NW_OOM_ADJ_MAX)
+            return NW_E_OOMRANGE;
         /* mem_high below mem_max, when both are declared. A throttle at
          * or above its backstop can never fire, so the house is killed
          * with no warning pass -- which is what omitting the throttle
@@ -365,11 +386,19 @@ int nw_check(const void *blob, uint32_t len)
          * against cannot be expressed any more. HISTORY.md records this,
          * because a deleted security check reads as a regression to
          * anyone who finds it without the reason. */
-        /* docs/options/15-per-house-scheduling.md. NW_SCHED_EXT_UNSET (0)
-         * is the same value the spare byte was always required to hold, so
-         * an old blob is still correctly "no sched-ext declared" under this
-         * closed-range check. */
-        if (u[i].sched_ext > NW_SCHED_EXT_MAX) return NW_E_SCHEDEXT;
+        /* docs/options/22-lock-unlock.md / docs/options/31. The byte
+         * sched_ext used to occupy; NW_LOCK_LOCKED (0) is the same value
+         * the spare byte was always required to hold under every past
+         * meaning, so an old blob's byte is still 0 here -- not that it
+         * matters, since the magic bump already refuses every blob from
+         * before this meaning existed. */
+        if (u[i].lock > NW_LOCK_MAX) return NW_E_LOCK;
+        if (u[i].stop_signal > NW_STOPSIG_MAX) return NW_E_STOPSIG;
+        /* RESERVED: no plan syntax exists for this byte yet (docs/
+         * options/31 Section 6). Unlike every other closed-set field
+         * above, there is no non-zero value to accept -- this is the
+         * `_pad` shape, not the sched_ext-becoming-lock shape. */
+        if (u[i].supervisor_death_policy != 0) return NW_E_SUPDEATH;
         if (u[i].lids & ~(uint8_t)(NW_LID_SECCOMP | NW_LID_LANDLOCK
                                    | NW_LID_NEWNS | NW_LID_NEWNET))
             return NW_E_LIDS;
@@ -402,6 +431,16 @@ int nw_check(const void *blob, uint32_t len)
     for (uint32_t i = 0; i < h->n_edges; i++) {
         if (ed[i].a >= h->n_units || ed[i].b >= h->n_units || ed[i].a == ed[i].b)
             return NW_E_EDGEIDX;
+        /* docs/options/22-lock-unlock.md, docs/options/31 Section 4. An
+         * edge is nw-spawn wiring a socketpair into both units BEFORE
+         * either forks -- a promise that both ends exist. An unlocked
+         * unit may never fork at all, so an edge naming one is a promise
+         * the plan cannot keep, refused here independently of whatever
+         * the baker already refused (plan.md's "any rule the runtime
+         * relies on must be in nwcheck.c too"). */
+        if (u[ed[i].a].lock == NW_LOCK_UNLOCKED
+            || u[ed[i].b].lock == NW_LOCK_UNLOCKED)
+            return NW_E_LOCKEDGE;
         /* Duplicate-pair check, bounded by NW_MAX_EDGES (128) rather than
          * an open-addressed hash: field_dup's own header comment names the
          * scale that justified a hash table -- 64k UNITS, 15.26s nested vs

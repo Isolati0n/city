@@ -7,6 +7,7 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <linux/capability.h>
 #include <linux/filter.h>
 #include <linux/landlock.h>
 #include <linux/loop.h>
@@ -635,81 +636,86 @@ static void lid_landlock(char *const *binds, int nbinds)
     say("lid landlock");
 }
 
-/* docs/options/15-per-house-scheduling.md. Real, syscall/kernel-data
- * level, not simulated -- the same shape sys_landlock_create_ruleset()
- * already uses for Landlock: ask the kernel itself, not a proxy for it.
+/* docs/options/31-phase4-plan-bump.md Section 7, amendment item A.1.
+ * Drops every capability outside the plan's declared set: the bounding
+ * set (PR_CAPBSET_DROP, one prctl per bit -- there is no bulk form) and
+ * then effective/permitted/inheritable together (capset(2), one call,
+ * since a bit missing from the bounding set does not by itself clear an
+ * already-held effective capability). No libcap: this project hand-rolls
+ * everything else in the TCB, and capget/capset are two syscalls with a
+ * fixed-shape argument struct, not a library's worth of surface.
  *
- * Two checks, cheapest first. /sys/kernel/sched_ext is the kobject the
- * scheduler class creates unconditionally the moment it initialises, so
- * its absence alone is decisive on a kernel where the feature was left
- * out of the build (measured on this project's own sandbox: absent,
- * because CONFIG_SCHED_CLASS_EXT is not set there). Where the directory
- * exists, the second check confirms the specific struct_ops type this
- * mechanism needs is actually registered, by scanning the running
- * kernel's own exported BTF for the literal type name -- the same
- * authoritative source a userspace loader (libbpf, bpftool) has to
- * resolve before it could load a struct_ops program against it, and the
- * same file this feature's own design note measured by hand before a
- * line of this function was written. No allocation: mmap rather than a
- * read into a buffer, scanned in place, unmapped immediately. Bounded:
- * the scan is over exactly the kernel-reported size of the file, no
- * recursion, no unbounded loop. */
-#define NW_SCHED_EXT_MARKER "/sys/kernel/sched_ext"
-#define NW_SCHED_EXT_BTF    "/sys/kernel/btf/vmlinux"
-#define NW_SCHED_EXT_TYPE   "sched_ext_ops"
+ * SPLIT IN TWO, deliberately, across two different points in the child
+ * branch's own timeline -- the exact bug tcb-review found once already,
+ * for sched_ext_supported(), caught here before it shipped a second
+ * time. nw_cap_last_cap() reads /proc/sys/kernel/cap_last_cap, a MACHINE
+ * property, and a brick house's lid_brick() pivots into the brick's own
+ * root before this function would otherwise run -- nothing here mounts
+ * a /proc inside a brick (dawn.c's own /proc mount is for the shared,
+ * pre-pivot namespace only), so a cap_last_cap read after the pivot
+ * would resolve against whatever the brick's own empty /proc directory
+ * holds, which is nothing, rather than the real host's. So the KERNEL
+ * QUESTION is asked early, in main()'s own re-validation block, before
+ * lid_brick() ever runs; only the DROP ITSELF -- prctl/capget/capset,
+ * no filesystem access at all -- runs late, after every lid, matching
+ * invariant 6's fixed lid order for the same reason every lid there is
+ * applied late: the process needs every capability everything before
+ * this point uses (mount, pivot_root, the Landlock ruleset calls,
+ * prctl(PR_SET_SECCOMP)) to still be held when those run. */
+#define NW_CAP_LAST_CAP_FILE "/proc/sys/kernel/cap_last_cap"
 
-static int sched_ext_supported(void)
+struct nw_cap_hdr { uint32_t version; int pid; };
+struct nw_cap_data { uint32_t effective, permitted, inheritable; };
+
+/* The kernel's own advertised ceiling, not a constant this project
+ * chose -- CAP_LAST_CAP grows as kernels add capabilities (39, CAP_BPF,
+ * is the newest this project's own NW_CAP_* table names; a future
+ * kernel may define more). Called from main(), BEFORE any lid --
+ * see this section's own header comment for why. */
+static unsigned nw_cap_last_cap(void)
 {
-    struct stat mst;
-    if (stat(NW_SCHED_EXT_MARKER, &mst) < 0) return 0;
-
-    int fd = open(NW_SCHED_EXT_BTF, O_RDONLY | O_CLOEXEC);
-    if (fd < 0) return 0;
-    struct stat bst;
-    if (fstat(fd, &bst) < 0 || bst.st_size <= 0) { close(fd); return 0; }
-    void *m = mmap(NULL, (size_t)bst.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
+    int fd = open(NW_CAP_LAST_CAP_FILE, O_RDONLY | O_CLOEXEC);
+    if (fd < 0) die("cap_last_cap unavailable");
+    char buf[16];
+    ssize_t n = read(fd, buf, sizeof buf - 1);
     close(fd);
-    if (m == MAP_FAILED) return 0;
-
-    const char *needle = NW_SCHED_EXT_TYPE;
-    size_t nlen = strlen(needle);
-    const unsigned char *base = m;
-    int found = 0;
-    for (size_t i = 0; i + nlen <= (size_t)bst.st_size; i++) {
-        if (memcmp(base + i, needle, nlen) == 0) { found = 1; break; }
-    }
-    munmap(m, (size_t)bst.st_size);
-    return found;
+    if (n <= 0) die("cap_last_cap read");
+    buf[n] = 0;
+    char *endp = NULL;
+    errno = 0;
+    long v = strtol(buf, &endp, 10);
+    if (errno || !endp || (*endp != '\n' && *endp != 0) || v < 0 || v > 63)
+        die("cap_last_cap parse");
+    return (unsigned)v;
 }
 
-/* This round names exactly one policy, NW_SCHED_EXT_DEFAULT -- the
- * brief's own "no-op, prove the plumbing" policy -- and there is no
- * working BPF artifact for it yet (docs/options/15's own measurement:
- * nothing available to this project can build one). So the only
- * behavior this function can have TODAY is the refusal, which is real:
- * it dies loudly rather than starting a house whose plan says it is
- * scheduled and is not, the same rule every other lid already follows.
- * Adding a real accept path later means adding a branch here, not
- * replacing this one. */
-static void apply_sched_ext(unsigned sched_ext)
+/* The drop itself: no filesystem access, safe to run after the pivot.
+ * `last` is nw_cap_last_cap()'s answer, computed earlier by the caller
+ * -- see this section's header comment. UNSET (0) means drop
+ * everything -- a deliberate, encoded choice under NWPLAN12, not an
+ * inherited default (docs/options/31 Section 10 item 2) -- so this
+ * function always runs; there is no early return the way every other
+ * applier here has one. */
+static void apply_capabilities(uint64_t capabilities, unsigned last)
 {
-    if (sched_ext == NW_SCHED_EXT_UNSET) return;
-    if (!sched_ext_supported())
-        die("sched-ext unsupported");
-    /* tcb-review's MEDIUM finding: a bare `say()` here, on a kernel that
-     * DOES pass sched_ext_supported(), would print the same line every
-     * other successful lid application prints while loading no policy
-     * at all -- nw_res's own defect ("declared, validated... and doing
-     * nothing") reached through a branch nothing available to this
-     * project can exercise to notice. There are exactly two honest
-     * outcomes for a declared sched-ext=: refused, by name, or loaded
-     * and verified. There is no third one, so until a real loader
-     * exists this branch is not a success path either -- it dies with
-     * a DIFFERENT, distinguishing reason from the capability refusal
-     * above, matching the design note's answer to question 5. Replace
-     * this whole branch, not the die() call inside it, the day a real
-     * policy artifact exists. */
-    die("sched-ext no policy artifact");
+    for (unsigned b = 0; b <= last; b++) {
+        if (capabilities & (1ull << b)) continue;
+        if (prctl(PR_CAPBSET_DROP, b, 0, 0, 0) < 0 && errno != EINVAL)
+            die("capabilities: bounding set drop");
+    }
+    struct nw_cap_hdr hdr = { _LINUX_CAPABILITY_VERSION_3, 0 };
+    struct nw_cap_data data[2] = {{0}};
+    if (syscall(SYS_capget, &hdr, data) < 0) die("capabilities: capget");
+    hdr.version = _LINUX_CAPABILITY_VERSION_3;
+    for (int w = 0; w < 2; w++) {
+        uint32_t keep = (w == 0)
+            ? (uint32_t)(capabilities & 0xffffffffu)
+            : (uint32_t)(capabilities >> 32);
+        data[w].effective &= keep;
+        data[w].permitted &= keep;
+        data[w].inheritable &= keep;
+    }
+    if (syscall(SYS_capset, &hdr, data) < 0) die("capabilities: capset");
 }
 
 /* Phase 3 (docs/OPERATOR-BRIEF.md Section 3): mem_high/mem_max/
@@ -796,18 +802,21 @@ static int cg_enable_subtree(const char *dir, const char *controllers)
  * is not a promise broken. So delegation is attempted for every
  * controller a declared field needs, and only THOSE failures die. */
 static void cgroup_parent_setup(uint64_t mem_high, uint64_t mem_max,
-                                 unsigned cpu_weight)
+                                 unsigned cpu_weight, unsigned task_cap)
 {
     if (mkdir(NW_CGROUP_DIR, 0700) < 0 && errno != EEXIST)
         die("cgroup parent dir");
 
     int need_memory = (mem_high != 0) || (mem_max != 0);
     int need_cpu = (cpu_weight != 0);
-    /* pids is never a hard requirement in this phase -- nothing here
-     * declares a pids.max limit (docs/OPERATOR-BRIEF.md's own task-cap
-     * item names this "needs Phase 3", i.e. comes after it) -- so its
-     * delegation is attempted, purely to widen what the autopsy below
-     * can read, and never dies either way. */
+    /* docs/options/31 Section 8, amendment item A.2. Was attempted but
+     * never fatal, because nothing declared a pids.max limit -- now a
+     * hard requirement exactly like memory/cpu above the moment
+     * task_cap IS declared, "not advisory" the same way every other
+     * resource-block field is (runtime.md's Phase 3 section). A house
+     * with no task_cap still gets pids delegated on a best-effort basis
+     * purely to widen what the death autopsy below can read. */
+    int need_pids = (task_cap != 0);
     if (need_memory &&
         (cg_enable_subtree("/sys/fs/cgroup", "+memory") < 0 ||
          cg_enable_subtree(NW_CGROUP_DIR, "+memory") < 0))
@@ -816,8 +825,14 @@ static void cgroup_parent_setup(uint64_t mem_high, uint64_t mem_max,
         (cg_enable_subtree("/sys/fs/cgroup", "+cpu") < 0 ||
          cg_enable_subtree(NW_CGROUP_DIR, "+cpu") < 0))
         die("cgroup cpu controller unavailable");
-    (void)cg_enable_subtree("/sys/fs/cgroup", "+pids");
-    (void)cg_enable_subtree(NW_CGROUP_DIR, "+pids");
+    if (need_pids &&
+        (cg_enable_subtree("/sys/fs/cgroup", "+pids") < 0 ||
+         cg_enable_subtree(NW_CGROUP_DIR, "+pids") < 0))
+        die("cgroup pids controller unavailable");
+    if (!need_pids) {
+        (void)cg_enable_subtree("/sys/fs/cgroup", "+pids");
+        (void)cg_enable_subtree(NW_CGROUP_DIR, "+pids");
+    }
 }
 
 /* Creates ONE GENERATION's own leaf cgroup -- never reused across a
@@ -886,6 +901,7 @@ static void die_cgroup(const char *dir, const char *what)
 static int house_cgroup_open_generation(const char *name, unsigned gen,
                                          uint64_t mem_high, uint64_t mem_max,
                                          unsigned cpu_weight,
+                                         unsigned task_cap,
                                          char *out_path, size_t out_path_sz)
 {
     char dir[160];
@@ -916,6 +932,14 @@ static int house_cgroup_open_generation(const char *name, unsigned gen,
             die_cgroup(dir, "cpu-weight write");
         if (cg_read_back_u64(p, (unsigned long long)cpu_weight) < 0)
             die_cgroup(dir, "cpu-weight readback");
+    }
+    if (task_cap) {
+        char p[192];
+        snprintf(p, sizeof p, "%s/pids.max", dir);
+        if (cg_write_u64(p, (unsigned long long)task_cap) < 0)
+            die_cgroup(dir, "task-cap write");
+        if (cg_read_back_u64(p, (unsigned long long)task_cap) < 0)
+            die_cgroup(dir, "task-cap readback");
     }
 
     if (snprintf(out_path, out_path_sz, "%s", dir) >= (int)out_path_sz)
@@ -1058,13 +1082,22 @@ static int cg_read_counter(const char *cgroup_path, const char *file,
 
 static pid_t child;
 static volatile sig_atomic_t stopping;
+/* docs/options/31 Section 5. Set once in main(), from NW_STOP_SIGNAL,
+ * BEFORE on_term() below is installed as a handler and never written
+ * again -- reading it inside that handler is as signal-safe as reading
+ * `child` already is. UNSET behaves as SIGTERM, matching every
+ * kill() site's pre-Phase-4 hardcoded value exactly. Declared here,
+ * beside `child`/`stopping`, rather than with nw_lock and the rest of
+ * this file's other plan-derived globals below, because on_term()
+ * needs it and on_term() is defined immediately below this point. */
+static int nw_stop_signal = SIGTERM;
 
 static void on_term(int sig)
 {
     (void)sig;
     stopping = 1;
     if (child > 0)
-        kill(child, SIGTERM);
+        kill(child, nw_stop_signal);
 }
 
 /*
@@ -1163,12 +1196,16 @@ static int stop_requested;
 static unsigned nw_budget;
 static int deaths = 0;
 static int nw_complete_on_0;
-/* Always LOCKED until the plan-format bump adds a `lock` field
- * (Phase 4). nw_decide()'s UNLOCKED rows are proven (proofs/caller_
- * decide.c) and exhaustively tested (tests/decide_seq.c) ahead of
- * anything here being able to select them -- this is the one place
- * that selection will happen the day the field exists. */
-static const int nw_lock = 1;
+/* docs/options/22-lock-unlock.md, docs/options/31. Set once in main()
+ * from NW_LOCK, INVERTED from the blob byte's own sense
+ * (NW_LOCK_LOCKED=0/NW_LOCK_UNLOCKED=1) into nw_decide()'s convention
+ * (1=LOCKED/0=UNLOCKED, decide.h) -- the one place that translation
+ * happens; every nw_decide() call site below reads this variable and
+ * needs to know nothing about the blob's own encoding. nw_decide()'s
+ * UNLOCKED rows were proven (proofs/caller_decide.c) and exhaustively
+ * tested (tests/decide_seq.c) before this field existed to select
+ * them. */
+static int nw_lock = 1;
 
 static void ctl_reply(int c, const char *s)
 {
@@ -1204,7 +1241,7 @@ static void handle_ctl_live(int listen_fd, pid_t live)
                                             /*child_exited=*/0, 0,
                                             deaths, nw_budget);
             if (d == NW_DECIDE_TERM_CHILD)
-                kill(live, SIGTERM);
+                kill(live, nw_stop_signal);
         }
         ctl_reply(c, "OK\n");
     } else {
@@ -1527,7 +1564,6 @@ int main(int argc, char **argv)
     const char *path = argv[1];
     const char *name = argv[2];
     unsigned lids = 0, budget = 0, kind = NW_KIND_LONGRUN;
-    unsigned sched_ext = NW_SCHED_EXT_UNSET;
     const char *e;
     if ((e = getenv("NW_LIDS"))) lids = (unsigned)atoi(e);
     if ((e = getenv("NW_BUDGET"))) budget = (unsigned)atoi(e);
@@ -1537,11 +1573,76 @@ int main(int argc, char **argv)
      * declaration. */
     nw_budget = budget;
     nw_complete_on_0 = (kind == NW_KIND_ONESHOT);
-    /* RE-VALIDATED for the same reason NW_BRICK/NW_LAYER are: nw-sup reads
-     * its unit from the environment, not the sealed blob, so nothing the
-     * baker or nw-check did stands behind this value. */
-    if ((e = getenv("NW_SCHED_EXT"))) sched_ext = (unsigned)atoi(e);
-    if (sched_ext > NW_SCHED_EXT_MAX) die("sched-ext value");
+    /* docs/options/22-lock-unlock.md, docs/options/31. RE-VALIDATED for
+     * the same reason NW_BRICK/NW_LAYER are: nw-sup reads its unit from
+     * the environment, not the sealed blob. NW_LOCK carries the blob's
+     * own byte, un-translated; this is the one point that inverts it
+     * into nw_decide()'s convention (see nw_lock's own declaration). */
+    unsigned lock_byte = NW_LOCK_LOCKED;
+    if ((e = getenv("NW_LOCK"))) lock_byte = (unsigned)atoi(e);
+    if (lock_byte > NW_LOCK_MAX) die("lock value");
+    nw_lock = (lock_byte == NW_LOCK_UNLOCKED) ? 0 : 1;
+    unsigned stop_signal_byte = NW_STOPSIG_UNSET;
+    if ((e = getenv("NW_STOP_SIGNAL"))) stop_signal_byte = (unsigned)atoi(e);
+    if (stop_signal_byte > NW_STOPSIG_MAX) die("stop-signal value");
+    nw_stop_signal = stop_signal_byte == NW_STOPSIG_TERM ? SIGTERM
+                    : stop_signal_byte == NW_STOPSIG_INT  ? SIGINT
+                    : stop_signal_byte == NW_STOPSIG_HUP  ? SIGHUP
+                    : stop_signal_byte == NW_STOPSIG_QUIT ? SIGQUIT
+                    : SIGTERM; /* NW_STOPSIG_UNSET, or anything else --
+                                 * unreachable past the range check above,
+                                 * but a closed switch needs a default. */
+    /* docs/options/31 Section 5, Section 6. Neither field has an
+     * applier yet (the escalation mechanism and the death-policy
+     * vocabulary are their own later design-note rounds) -- refused
+     * here, by name, at supervisor startup, the same shape
+     * apply_capabilities()'s neighbour sched_ext used to refuse a
+     * declared-but-unbuildable policy. A blob baked today starts
+     * working the day the applier lands, with no rebake. */
+    unsigned grace_period = 0;
+    if ((e = getenv("NW_GRACE_PERIOD"))) grace_period = (unsigned)atoi(e);
+    if (grace_period != 0)
+        die("grace-period: declared but not yet applied (docs/options/31 Section 5)");
+    unsigned supervisor_death_policy = 0;
+    if ((e = getenv("NW_SUPERVISOR_DEATH_POLICY")))
+        supervisor_death_policy = (unsigned)atoi(e);
+    if (supervisor_death_policy != 0)
+        die("supervisor-death-policy: reserved, no plan syntax exists yet "
+            "(docs/options/31 Section 6)");
+    unsigned nofile = 0;
+    if ((e = getenv("NW_NOFILE"))) nofile = (unsigned)atoi(e);
+    uint64_t capabilities = 0;
+    if ((e = getenv("NW_CAPABILITIES"))) {
+        for (const char *p = e; *p; p++)
+            if (*p < '0' || *p > '9') die("capabilities not a number");
+        errno = 0;
+        char *endp = NULL;
+        unsigned long long v = strtoull(e, &endp, 10);
+        if (errno == ERANGE || !endp || *endp) die("capabilities range");
+        capabilities = (uint64_t)v;
+    }
+    /* THE KERNEL QUESTION, ASKED HERE RATHER THAN INSIDE
+     * apply_capabilities() -- see that function's own header comment
+     * for the full reasoning: a brick house's later pivot makes /proc
+     * unreliable, so this runs in the PARENT, once, well before any
+     * child ever calls lid_brick(). A declared bit past this ceiling
+     * names a capability the RUNNING kernel does not have, which bake
+     * time on a different machine cannot see. */
+    unsigned cap_last = nw_cap_last_cap();
+    /* fd-auditor: cap_last == 63 makes cap_last + 1 == 64, and a shift
+     * of a uint64_t by its own width is undefined behaviour in C, not
+     * merely "big but defined" -- unreachable on any kernel measured so
+     * far (today's real ceiling is ~40, CAP_CHECKPOINT_RESTORE) and
+     * even under UB the practical case has no security consequence
+     * (nothing can name a bit past 63 in a 64-bit set either way), but
+     * an -O0 build or a different compiler is free to make the shift
+     * NOT reduce to shift-by-0, which would refuse a perfectly legal
+     * capabilities= declaration and burn the restart budget for it.
+     * Special-cased rather than relying on the shift never reaching
+     * the type's width. */
+    if (cap_last == 63 ? 0 : capabilities >> (cap_last + 1))
+        die("capabilities: a declared bit names a capability past this "
+            "kernel's own cap_last_cap");
     /* NW_BRICK IS 64 HEX CHARACTERS, AND THIS RE-VALIDATES THEM. The sealed
      * plan carries 32 raw bytes, which cannot express a path traversal at
      * all -- but nw-spawn has to turn them into text to cross an env var,
@@ -1659,6 +1760,18 @@ int main(int argc, char **argv)
     if (mem_high && mem_max && mem_high >= mem_max) die("mem high/max order");
     if (nice_val && sched_policy != NW_SCHED_OTHER)
         die("nice without sched=other");
+    /* docs/options/31 Section 8. task_cap: pids.max on the house's own
+     * cgroup, applied alongside mem_high/mem_max/cpu_weight below.
+     * oom_score_adj: a direct /proc write on this process, applied in
+     * the early "process attribute" phase with cpu_mask/nice/
+     * sched_policy. Both RE-VALIDATED for the same reason every other
+     * resource-block field above is. */
+    unsigned task_cap = 0;
+    if ((e = getenv("NW_TASK_CAP"))) task_cap = (unsigned)atoi(e);
+    int oom_score_adj = 0;
+    if ((e = getenv("NW_OOM_SCORE_ADJ"))) oom_score_adj = atoi(e);
+    if (oom_score_adj < NW_OOM_ADJ_MIN || oom_score_adj > NW_OOM_ADJ_MAX)
+        die("oom-score-adj range");
 
     /* Landlock grants beneath the house's root, which is only a restriction
      * if that root is a brick. nw-check returns NW_E_LLBRICK; re-checked here
@@ -1791,10 +1904,15 @@ int main(int argc, char **argv)
      * never reused across a restart; see house_cgroup_open_generation()
      * for why. cg_gen is this supervisor's own monotonic counter,
      * naming each generation's directory. */
-    cgroup_parent_setup(mem_high, mem_max, cpu_weight);
+    cgroup_parent_setup(mem_high, mem_max, cpu_weight, task_cap);
     unsigned cg_gen = 0;
 
-    int stopped = 0;
+    /* docs/options/22-lock-unlock.md Section 6. Reuses the STOP'd idle
+     * branch verbatim -- an unlocked house starts in exactly the state
+     * a locked house reaches after an explicit STOP, with no new code
+     * path. A locked house's behavior is byte-for-byte unchanged
+     * (nw_lock=1 -> stopped=0 -> immediate fork, today's only path). */
+    int stopped = !nw_lock;
 
     for (;;) {
         /* TERM during the previous house, or before this fork: do not
@@ -1878,6 +1996,7 @@ int main(int argc, char **argv)
         char cgroup_path[160];
         int cgroup_fd = house_cgroup_open_generation(name, cg_gen++, mem_high,
                                                        mem_max, cpu_weight,
+                                                       task_cap,
                                                        cgroup_path,
                                                        sizeof cgroup_path);
         pid_t p = clone_into_cgroup(cgroup_fd);
@@ -1946,10 +2065,9 @@ int main(int argc, char **argv)
 
             /* cpu_mask/nice/sched_policy: syscalls on this process, not
              * cgroup files -- `tools/HANDOFF-resources.md`'s own table.
-             * Applied here, before any lid, for the same reason
-             * sched_ext is applied early: these affect the CALLING
-             * process's own attributes, which execv() preserves, so
-             * the house inherits them without ever calling these
+             * Applied here, before any lid, because these affect the
+             * CALLING process's own attributes, which execv() preserves,
+             * so the house inherits them without ever calling these
              * syscalls itself -- no seccomp allow-list entry is needed
              * for any of the three. "Not advisory": a declared value
              * the kernel refuses dies here, by name, rather than
@@ -1975,25 +2093,102 @@ int main(int argc, char **argv)
                 if (setpriority(PRIO_PROCESS, 0, nice_val) < 0)
                     die("nice");
             }
+            /* docs/options/31 Section 8, amendment item A.3. Written
+             * before capabilities are dropped -- confirmed by fault
+             * injection (Section 10 item 3) that a negative value below
+             * this process's current floor needs CAP_SYS_RESOURCE, which
+             * this early in the child branch it still holds regardless
+             * of what the plan's capabilities= is about to drop. A
+             * write of 0 is skipped entirely (0 = unset), matching every
+             * other resource-block field's convention -- the process
+             * already starts at oom_score_adj=0 by kernel default, so
+             * skipping is observably identical to writing 0. */
+            if (oom_score_adj) {
+                char buf[8];
+                int bn = snprintf(buf, sizeof buf, "%d", oom_score_adj);
+                int fd = open("/proc/self/oom_score_adj", O_WRONLY | O_CLOEXEC);
+                if (fd < 0 || bn < 0
+                    || write(fd, buf, (size_t)bn) != (ssize_t)bn)
+                    die("oom score adj");
+                close(fd);
+            }
+            /* docs/options/31 Section 9, corrected by fd-auditor: a
+             * SINGLE unconditional `rl.rlim_cur = nofile` here can also
+             * LOWER the limit, and lid_brick()/lid_landlock() (next)
+             * still need to open several more descriptors after this
+             * point -- a loop-control fd and a loop-device fd (two, for
+             * a sized layer), the brick image fd, a Landlock ruleset fd
+             * plus one O_PATH fd per bind. A declared `nofile=` tight
+             * enough to starve that reachable via a baker-accepted
+             * plan (nothing bounds `nofile` against kit size or lid
+             * needs) produced `FAIL open loop-control errno=24` or
+             * `FAIL open brick image errno=24` -- misdiagnosed as a
+             * loop/brick defect, burning the restart budget on every
+             * retry. So only the RAISE runs here, while CAP_SYS_
+             * RESOURCE is still held (same ordering reason as
+             * oom_score_adj above) and before anything else opens a
+             * descriptor; a LOWER is deferred past every lid that still
+             * needs headroom -- see the second half, just before
+             * execv. Named errno either way, not a silent clamp --
+             * pid1.c's own "named shortfall" convention for the
+             * city-wide case. */
+            int nofile_lower = 0;
+            if (nofile) {
+                struct rlimit rl;
+                if (getrlimit(RLIMIT_NOFILE, &rl) < 0) die("nofile getrlimit");
+                if ((rlim_t)nofile > rl.rlim_cur) {
+                    rl.rlim_cur = nofile;
+                    if (rl.rlim_max != RLIM_INFINITY && nofile > rl.rlim_max)
+                        rl.rlim_max = nofile;
+                    if (setrlimit(RLIMIT_NOFILE, &rl) < 0) die("nofile setrlimit");
+                } else if ((rlim_t)nofile < rl.rlim_cur) {
+                    nofile_lower = 1;
+                }
+            }
 
-            /* BEFORE lid_brick(), not after: tcb-review's HIGH finding.
-             * sched_ext_supported() asks a question about the MACHINE's
-             * kernel (/sys/kernel/sched_ext, /sys/kernel/btf/vmlinux),
-             * and lid_brick()'s pivot_root makes the house's `/` the
-             * brick -- after which nothing under the machine's /sys is
-             * reachable at all unless the plan happens to bind it. Applied
-             * after the pivot, EVERY brick house with a declared
-             * sched-ext= died with "sched-ext unsupported" regardless of
-             * the real host kernel's capability -- a mount-visibility
-             * artifact wearing a capability-gap message, on a kernel that
-             * might genuinely have sched_ext. NEWNET/NEWNS do not affect
-             * /sys's visibility (a fresh mount namespace starts as a copy
-             * of the parent's table; nothing here unmounts anything), so
-             * this is the earliest point that is still unconditionally
-             * correct. */
-            apply_sched_ext(sched_ext);
             if (brick) lid_brick(brick, layer, layer_bytes, binds, nbinds);
             if (lids & NW_LID_LANDLOCK) lid_landlock(binds, nbinds);
+            /* docs/options/31 Section 7. BEFORE seccomp, not after --
+             * this note's first draft put it after every lid, matching
+             * the amendment's literal "after ... lids" wording, and
+             * that broke every seccomp house immediately: the drop
+             * itself needs prctl(PR_CAPBSET_DROP)/capget/capset, none
+             * of which are in lids.c's strict_allow[], so a house with
+             * `lids=seccomp` (declaring no capabilities= at all --
+             * UNSET still runs this function, it drops everything)
+             * died SIGSYS the moment apply_capabilities() ran after the
+             * filter was installed. Measured directly: `--only happy`
+             * killed every default-city house with `signal=31` before
+             * this reordering.
+             *
+             * Moving it here instead of widening the allow-list is the
+             * right fix, not merely the convenient one: seccomp's
+             * allow-list governs the HOUSE's own process too, once
+             * exec'd, so adding prctl/capget/capset to it would let a
+             * confined house call them -- a real widening of what the
+             * program itself can do, not just an nw-sup implementation
+             * detail, and exactly the kind of addition runtime.md's
+             * "adding a syscall to the allow-list requires naming the
+             * unit that needs it and why" exists to gate. Landlock does
+             * not need any capability this drop would remove --
+             * landlock_restrict_self is designed to be callable by an
+             * unprivileged process -- so nothing between the brick
+             * pivot and this point is disturbed by moving it earlier.
+             * seccomp stays the LAST, tightest gate, which is still the
+             * property invariant 6's fixed lid order is about; this
+             * class of field just cannot be the one thing after it. */
+            apply_capabilities(capabilities, cap_last);
+            /* The deferred half of `nofile`: only a LOWER reaches here
+             * (the raise already happened above, before lid_brick()/
+             * lid_landlock() needed their own headroom) -- and a lower
+             * needs no privilege, so it is safe this late, after every
+             * lid that opens a descriptor of its own has already run. */
+            if (nofile_lower) {
+                struct rlimit rl;
+                if (getrlimit(RLIMIT_NOFILE, &rl) < 0) die("nofile getrlimit");
+                rl.rlim_cur = nofile;
+                if (setrlimit(RLIMIT_NOFILE, &rl) < 0) die("nofile setrlimit");
+            }
             if (lids & NW_LID_SECCOMP) {
                 if (nw_apply_house_seccomp() < 0) die("house seccomp");
                 say("lid seccomp");
@@ -2021,7 +2216,7 @@ int main(int argc, char **argv)
                                             /*child_exited=*/0, 0,
                                             deaths, nw_budget);
             if (d == NW_DECIDE_TERM_CHILD && p > 0)
-                kill(p, SIGTERM);
+                kill(p, nw_stop_signal);
         }
         st = wait_house(p, lfd);
         child = 0;

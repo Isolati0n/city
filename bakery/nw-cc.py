@@ -106,17 +106,47 @@ SCHED_OTHER = _const("NW_SCHED_OTHER")
 SCHED_BATCH = _const("NW_SCHED_BATCH")
 SCHED_IDLE = _const("NW_SCHED_IDLE")
 SCHED_NAMES = {"other": SCHED_OTHER, "batch": SCHED_BATCH, "idle": SCHED_IDLE}
-# docs/options/15-per-house-scheduling.md. A different mechanism from
-# SCHED_* above (sched_ext, not sched_setscheduler(2)), keyed as
-# `sched-ext=` specifically so it cannot collide with `sched=`.
-SCHED_EXT_UNSET = _const("NW_SCHED_EXT_UNSET")
-SCHED_EXT_DEFAULT = _const("NW_SCHED_EXT_DEFAULT")
-SCHED_EXT_NAMES = {"default": SCHED_EXT_DEFAULT}
+# docs/options/15-per-house-scheduling.md's sched_ext mechanism (a
+# DIFFERENT thing from SCHED_* above) was DELETED, docs/options/31
+# Section 3 -- no working, loadable artifact on this project's own test
+# kernel across three measured attempts. SCHED_EXT_UNSET/DEFAULT/NAMES
+# and the `sched-ext=` key are gone with it.
+# docs/options/22-lock-unlock.md. Reuses the byte sched_ext freed.
+LOCK_LOCKED = _const("NW_LOCK_LOCKED")
+LOCK_UNLOCKED = _const("NW_LOCK_UNLOCKED")
+LOCK_NAMES = {"locked": LOCK_LOCKED, "unlocked": LOCK_UNLOCKED}
+# docs/options/31 Section 5. UNSET behaves as TERM (today's only
+# behavior); the explicit TERM value lets a plan RECORD the choice.
+STOPSIG_UNSET = _const("NW_STOPSIG_UNSET")
+STOPSIG_TERM = _const("NW_STOPSIG_TERM")
+STOPSIG_INT = _const("NW_STOPSIG_INT")
+STOPSIG_HUP = _const("NW_STOPSIG_HUP")
+STOPSIG_QUIT = _const("NW_STOPSIG_QUIT")
+STOPSIG_NAMES = {"term": STOPSIG_TERM, "int": STOPSIG_INT,
+                  "hup": STOPSIG_HUP, "quit": STOPSIG_QUIT}
+# docs/options/31 Section 8. Same shape as NICE_MIN/MAX: the kernel's own
+# range for oom_score_adj, 0 sitting inside it rather than at a boundary.
+OOM_ADJ_MIN = _const("NW_OOM_ADJ_MIN")
+OOM_ADJ_MAX = _const("NW_OOM_ADJ_MAX")
+# docs/options/31 Section 7, amendment item A.1. Read from blob.h's own
+# NW_CAP_* table (the kernel's own bit numbering) rather than hand-typed
+# a second time -- invariant 3's drift class, one level down, the same
+# argument blob.h's own comment beside that table makes. A STARTER
+# vocabulary; blob.h's comment explains why widening it later needs no
+# magic bump.
+CAP_NAMES = {
+    name.lower(): _const(f"NW_CAP_{name}")
+    for name in ("CHOWN", "DAC_OVERRIDE", "FOWNER", "KILL", "SETGID",
+                 "SETUID", "NET_BIND_SERVICE", "NET_ADMIN", "NET_RAW",
+                 "SYS_CHROOT", "SYS_PTRACE", "SYS_ADMIN", "SYS_NICE",
+                 "SYS_RESOURCE", "SYS_TTY_CONFIG", "MKNOD", "BPF")
+}
 # cpu_mask is a uint64, so a CPU index is bounded by its width rather than
 # by a number anybody picked. The baker names the bound when it refuses.
 CPU_INDEX_MAX = 63
-RES_FIELDS = ("cpu_mask", "mem_high", "mem_max", "io_rbps", "io_wbps",
-              "layer_bytes", "cpu_weight", "nice", "sched_policy")
+RES_FIELDS = ("cpu_mask", "mem_high", "mem_max",
+              "layer_bytes", "cpu_weight", "nice", "sched_policy",
+              "task_cap", "oom_score_adj")
 
 
 def empty_res():
@@ -124,11 +154,18 @@ def empty_res():
 
 
 def pack_res(r):
-    """Must match struct nw_res in blob.h: six u64, one u16, i8, u8."""
-    return struct.pack("<QQQQQQHbB",
+    """Must match struct nw_res in blob.h: four u64, u16, i8, u8, u32, i16.
+
+    io_rbps/io_wbps DELETED (docs/options/31 Section 3); task_cap and
+    oom_score_adj APPENDED (Section 8) -- the same order blob.h declares
+    the struct in, which is what pins this format string against a
+    field reordering the way test_baker_writes_the_declared_layout
+    checks."""
+    return struct.pack("<QQQQHbBIh",
                        r["cpu_mask"], r["mem_high"], r["mem_max"],
-                       r["io_rbps"], r["io_wbps"], r["layer_bytes"],
-                       r["cpu_weight"], r["nice"], r["sched_policy"])
+                       r["layer_bytes"],
+                       r["cpu_weight"], r["nice"], r["sched_policy"],
+                       r["task_cap"], r["oom_score_adj"])
 
 
 def parse_bytes(v, what):
@@ -241,6 +278,19 @@ def check(houses, binds, edges=()):
         raise SystemExit("bind count")
     if len(edges) > MAX_EDGES:
         raise SystemExit("edge count")
+    # docs/options/22-lock-unlock.md, docs/options/31 Section 4. An edge
+    # is nw-spawn wiring a socketpair into both units before either
+    # forks -- a promise that both ends exist. An unlocked unit may never
+    # fork at all, so an edge naming one is a promise the plan cannot
+    # keep. Refused here independently of nwcheck.c's own NW_E_LOCKEDGE.
+    for a, b in edges:
+        if houses[a]["lock"] == LOCK_UNLOCKED or houses[b]["lock"] == LOCK_UNLOCKED:
+            unlocked = houses[a]["name"] if houses[a]["lock"] == LOCK_UNLOCKED \
+                else houses[b]["name"]
+            raise SystemExit(
+                f"edge {houses[a]['name']},{houses[b]['name']}: house "
+                f"{unlocked} is lock=unlocked, so it may never fork at "
+                f"all -- an edge would be a promise this plan cannot keep")
     idx = {n: i for i, n in enumerate(names)}
     # docs/OPERATOR-BRIEF.md Section 1.3, invariant 3's drift class --
     # the same arithmetic is in blob.h's NW_BOOT_NEED macro and its
@@ -437,13 +487,20 @@ def bake(path, houses, edges_raw=()):
                  else b"\0" * BRICK_HASH)
         unit += pad(h["layer"], NAME_LEN)
         # kind (the byte that was "critical" until 2026-09-10), then the
-        # spare byte -- WAS always 0 ("_pad"), now sched_ext
-        # (docs/options/15-per-house-scheduling.md), NW_SCHED_EXT_UNSET
-        # (0) by default so an undeclared house bakes the same byte it
-        # always did.
+        # spare byte -- WAS always 0 ("_pad"), then sched_ext
+        # (docs/options/15), now `lock` (docs/options/22, docs/options/31):
+        # LOCK_LOCKED (0) by default so an undeclared house bakes the
+        # same byte it always did.
         unit += struct.pack("<BBBB", h["kind"], h["budget"], h["lids"],
-                             h["sched_ext"])
+                             h["lock"])
         unit += pack_res(h["res"])
+        # docs/options/31 Section 2. Everything new in this bump, appended
+        # after res -- matching blob.h's own field order exactly, which is
+        # what pins this format string against a reordering the way
+        # test_baker_writes_the_declared_layout checks for the block above.
+        unit += struct.pack("<BIIQB", h["stop_signal"], h["grace_period"],
+                             h["nofile"], h["capabilities"],
+                             h["supervisor_death_policy"])
     table = b""
     for u, p in binds:
         table += struct.pack("<H", u) + pad(p, PATH_LEN)
@@ -456,7 +513,7 @@ def bake(path, houses, edges_raw=()):
         edge_table += struct.pack("<HH", a, b)
     # Must equal NW_MAGIC in blob.h. tests/run.py asserts that agreement;
     # the version moves when the layout moves -- see the comment there.
-    prefix = b"NWPLAN11" + struct.pack("<III", len(houses), len(binds),
+    prefix = b"NWPLAN12" + struct.pack("<III", len(houses), len(binds),
                                         len(edges))
     crc = zlib.crc32(prefix + struct.pack("<I", 0) + unit + table
                       + edge_table) & 0xFFFFFFFF
@@ -538,11 +595,16 @@ def _is_hex64(v):
 
 
 def house(name, exe, kind, budget, lids, brick="", binds=(), layer="",
-          res=None, sched_ext=SCHED_EXT_UNSET):
+          res=None, lock=LOCK_LOCKED, stop_signal=STOPSIG_UNSET,
+          grace_period=0, nofile=0, capabilities=0,
+          supervisor_death_policy=0):
     return {"name": name, "exec": exe, "kind": kind, "budget": budget,
             "lids": lids, "brick": brick, "layer": layer,
             "res": res if res is not None else empty_res(),
-            "binds": list(binds), "sched_ext": sched_ext}
+            "binds": list(binds), "lock": lock, "stop_signal": stop_signal,
+            "grace_period": grace_period, "nofile": nofile,
+            "capabilities": capabilities,
+            "supervisor_death_policy": supervisor_death_policy}
 
 
 def default_city(probe: str, lids: int):
@@ -563,6 +625,25 @@ def parse_lids(s: str) -> int:
                 f"unknown lid {tok!r}: one of {', '.join(sorted(LID_NAMES))}")
         lids |= LID_NAMES[tok]
     return lids
+
+
+def parse_capabilities(s: str) -> int:
+    """Comma-separated named classes, OR'd into a closed bitmask -- the
+    same shape parse_lids already uses. docs/options/31 Section 7: a raw
+    numeric mask would spell a kernel ABI bit position in plan language,
+    which is a concern for the kernel and not the plan, and would let a
+    plan silently target a capability the running kernel doesn't define
+    yet -- named classes make an unknown name a bake-time syntax error
+    instead."""
+    caps = 0
+    for tok in s.split(","):
+        tok = tok.strip().lower()
+        if tok not in CAP_NAMES:
+            raise SystemExit(
+                f"unknown capability {tok!r}: one of "
+                f"{', '.join(sorted(CAP_NAMES))}")
+        caps |= 1 << CAP_NAMES[tok]
+    return caps
 
 
 def load_city(path: str, lab: bool = False):
@@ -594,7 +675,11 @@ def load_city(path: str, lab: bool = False):
             kind = None
             brick, layer, binds = "", "", []
             res = empty_res()
-            sched_ext = SCHED_EXT_UNSET
+            lock = LOCK_LOCKED
+            stop_signal = STOPSIG_UNSET
+            grace_period = 0
+            nofile = 0
+            capabilities = 0
             for kv in parts[3:]:
                 k, _, v = kv.partition("=")
                 if k == "critical":
@@ -622,13 +707,60 @@ def load_city(path: str, lab: bool = False):
                     layer = v
                 elif k == "bind":
                     binds.append(v)
-                elif k == "sched-ext":
+                elif k == "lock":
                     tok = v.strip().lower()
-                    if tok not in SCHED_EXT_NAMES:
+                    if tok not in LOCK_NAMES:
                         raise SystemExit(
-                            f"house {name}: sched-ext={v} must be one of "
-                            f"{', '.join(sorted(SCHED_EXT_NAMES))}")
-                    sched_ext = SCHED_EXT_NAMES[tok]
+                            f"house {name}: lock={v} must be one of "
+                            f"{', '.join(sorted(LOCK_NAMES))}. Omit the "
+                            f"key to inherit locked, today's only "
+                            f"behavior.")
+                    lock = LOCK_NAMES[tok]
+                elif k == "stop-signal":
+                    tok = v.strip().lower()
+                    if tok not in STOPSIG_NAMES:
+                        raise SystemExit(
+                            f"house {name}: stop-signal={v} must be one "
+                            f"of {', '.join(sorted(STOPSIG_NAMES))}. Omit "
+                            f"the key to inherit TERM, today's only "
+                            f"behavior.")
+                    stop_signal = STOPSIG_NAMES[tok]
+                elif k == "grace-period":
+                    # No mechanism exists yet -- nw-sup refuses any
+                    # nonzero value at startup until the escalation
+                    # applier lands (docs/options/31 Section 5). The
+                    # baker only validates the byte fits; unlike
+                    # cpu-weight= or nice=, a declared 0 is not refused
+                    # here, because 0 genuinely means "no grace period
+                    # declared" with no other meaning to collide with.
+                    try:
+                        n = int(v)
+                    except ValueError:
+                        n = -1
+                    if not 0 <= n <= 0xFFFFFFFF:
+                        raise SystemExit(
+                            f"house {name}: grace-period={v} must be a "
+                            f"millisecond count that fits a uint32")
+                    grace_period = n
+                elif k == "nofile":
+                    try:
+                        n = int(v)
+                    except ValueError:
+                        n = -1
+                    if not 0 <= n <= 0xFFFFFFFF:
+                        raise SystemExit(
+                            f"house {name}: nofile={v} must be a file "
+                            f"count that fits a uint32")
+                    if n == 0:
+                        raise SystemExit(
+                            f"house {name}: nofile=0 is the byte an "
+                            f"unset field already holds -- omit the key "
+                            f"to inherit the city-wide default instead "
+                            f"of declaring a house with no descriptors "
+                            f"at all.")
+                    nofile = n
+                elif k == "capabilities":
+                    capabilities = parse_capabilities(v)
                 elif k == "cpus":
                     res["cpu_mask"] = parse_cpus(v)
                 elif k == "cpu-weight":
@@ -644,10 +776,44 @@ def load_city(path: str, lab: bool = False):
                     res["mem_high"] = parse_bytes(v, "mem-high")
                 elif k == "mem-max":
                     res["mem_max"] = parse_bytes(v, "mem-max")
-                elif k == "io-rbps":
-                    res["io_rbps"] = parse_bytes(v, "io-rbps")
-                elif k == "io-wbps":
-                    res["io_wbps"] = parse_bytes(v, "io-wbps")
+                elif k == "task-cap":
+                    # pids.max on the house's own cgroup. Same "declared
+                    # zero collides with unset" shape as cpu-weight=0 and
+                    # nice=0: task-cap=0 is a real, meaningful declaration
+                    # (no further forking at all) that the blob cannot
+                    # tell apart from "no cap declared".
+                    n = int(v) if v.isdecimal() else -1
+                    if not 0 <= n <= 0xFFFFFFFF:
+                        raise SystemExit(
+                            f"house {name}: task-cap={v} must be a task "
+                            f"count that fits a uint32")
+                    if n == 0:
+                        raise SystemExit(
+                            f"house {name}: task-cap=0 is the byte an "
+                            f"unset field already holds, so the blob "
+                            f"cannot tell it from no task-cap= at all. "
+                            f"Omit task-cap= instead.")
+                    res["task_cap"] = n
+                elif k == "oom-score-adj":
+                    try:
+                        n = int(v)
+                    except ValueError:
+                        n = OOM_ADJ_MIN - 1
+                    if not OOM_ADJ_MIN <= n <= OOM_ADJ_MAX:
+                        raise SystemExit(
+                            f"house {name}: oom-score-adj={v} must be "
+                            f"{OOM_ADJ_MIN}..{OOM_ADJ_MAX}")
+                    # Same shape as nice=0: 0 sits inside the kernel's
+                    # real range (it is the kernel's own default) rather
+                    # than at a boundary, so it collides with unset.
+                    if n == 0:
+                        raise SystemExit(
+                            f"house {name}: oom-score-adj=0 is the byte "
+                            f"an unset field already holds, so the blob "
+                            f"cannot tell it from no oom-score-adj= at "
+                            f"all -- and the kernel's default IS 0. Omit "
+                            f"oom-score-adj= instead.")
+                    res["oom_score_adj"] = n
                 elif k == "layer-bytes":
                     res["layer_bytes"] = parse_bytes(v, "layer-bytes")
                 elif k == "sched":
@@ -775,7 +941,9 @@ def load_city(path: str, lab: bool = False):
                     f"house {name}: exec path must be absolute inside the "
                     "brick")
             houses.append(house(name, exe, kind, budget, lids,
-                                brick, binds, layer, res, sched_ext))
+                                brick, binds, layer, res, lock,
+                                stop_signal, grace_period, nofile,
+                                capabilities))
         else:
             raise SystemExit(f"bad city line: {line}")
     return houses, edges

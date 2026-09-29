@@ -74,15 +74,19 @@ sig Edge {}
    and for the narrower reason: the only thing the plan format asserts
    about the number is that declaring one requires a layer to bound
    (NW_E_CAPNOLAYER), and that is a question about PRESENCE, not about the
-   value. Of the rest of struct nw_res, three fields are range checks
+   value. Of the rest of struct nw_res, four fields are range checks
    against the kernel's own bounds -- arithmetic against constants this
    file does not carry and cannot check -- two have an ordering rule and
-   no range, and three are unchecked because every 64-bit value of a
-   mask, a byte count or a rate is a legal declaration. All of it is
+   no range, and two are unchecked because every 64-bit value of a
+   mask or a declared count is a legal declaration. All of it is
    pinned by test_checker_rejects_crafted_resources, in both directions.
    (This said "the other eight fields are range checks" and named
    test_checker_rejects_crafted_fields, which crafts nothing in the
-   block. `claims`.)
+   block. `claims`. docs/options/31 deleted io_rbps/io_wbps -- formerly
+   two of the "unchecked" three -- and added task_cap (unchecked,
+   joining cpu_mask) and oom_score_adj (range-checked, joining
+   cpu_weight/sched_policy/nice), which is why the counts moved from
+   three/two/three to four/two/two.)
 
    So `capacity` is the resource block's ONE structural rule and the rest
    of the block is deliberately unmodelled. Written down because a sig

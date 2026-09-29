@@ -695,27 +695,37 @@ validates one independently for the whole struct.
 
 **`nwsup.c` never spells `res.` at all, unlike `nwspawn.c` — say the
 check the right way round.** `grep -n "res\."` finds nothing in
-`nwsup.c` and 7 hits in `nwspawn.c` (`u[i].res.layer_bytes`,
+`nwsup.c` and, since Phase 4 folded `task_cap`/`oom_score_adj` into
+`struct nw_res`, 9 hits in `nwspawn.c` (`u[i].res.layer_bytes`,
 `.cpu_mask`, `.mem_high`, `.mem_max`, `.cpu_weight`, `.nice`,
-`.sched_policy`), because `nwspawn.c` is what reads the sealed unit's
-`struct nw_res` and forwards each field as a plain-decimal `NW_*` env
-var — the same convention `NW_BRICK`/`NW_LAYER` already use.
-`nwsup.c` reads those six env vars with `getenv()` into local C
-variables (`mem_high`, `mem_max`, `cpu_weight`, `cpu_mask`, `nice_val`,
-`sched_policy`; `grep -nE "getenv\(\"NW_(MEM_HIGH|MEM_MAX|CPU_WEIGHT|
-CPU_MASK|NICE|SCHED_POLICY)\"\)" nwsup.c` finds all six), never through
-a `res.` struct access — the gap this section used to describe is
-closed, and the checkable grep for it names the env vars, not a
-substring that was never going to be in this file. `mem_high`/
-`mem_max`/`cpu_weight` are applied via a per-house-GENERATION cgroup
-(`memory.high`/`memory.max`/`cpu.weight`, written and kernel-read-back);
-`cpu_mask`/`sched_policy`/`nice` are plain syscalls
+`.sched_policy`, `.task_cap`, `.oom_score_adj`), because `nwspawn.c` is
+what reads the sealed unit's `struct nw_res` and forwards each field as
+a plain-decimal `NW_*` env var — the same convention `NW_BRICK`/
+`NW_LAYER` already use. `nwsup.c` reads those env vars with `getenv()`
+into local C variables (`mem_high`, `mem_max`, `cpu_weight`, `cpu_mask`,
+`nice_val`, `sched_policy`, plus Phase 4's `task_cap`, `oom_score_adj`;
+`grep -nE "getenv\(\"NW_(MEM_HIGH|MEM_MAX|CPU_WEIGHT|
+CPU_MASK|NICE|SCHED_POLICY|TASK_CAP|OOM_SCORE_ADJ)\"\)" nwsup.c` finds
+all eight), never through a `res.` struct access — the gap this section
+used to describe is closed, and the checkable grep for it names the env
+vars, not a substring that was never going to be in this file.
+`mem_high`/`mem_max`/`cpu_weight`/`task_cap` are applied via a
+per-house-GENERATION cgroup (`memory.high`/`memory.max`/`cpu.weight`/
+`pids.max`, written and kernel-read-back where the controller is
+delegated); `cpu_mask`/`sched_policy`/`nice` are plain syscalls
 (`sched_setaffinity`/`sched_setscheduler`/`setpriority`) in the child,
-before `execv`. **Still nothing writes `io_rbps`/`io_wbps`** — neither
-`nwsup.c` nor `nwspawn.c` forwards or reads either one — because io was
-cut from Phase 3's own scope (docs/OPERATOR-BRIEF.md Section 1.6: "no
-io, no groups, no pause"). Those two, and only those two, are still kind 3
-here.
+before `execv`; `oom_score_adj` is a direct `/proc/self/oom_score_adj`
+write, no cgroup involved. **`io_rbps`/`io_wbps` are gone, not kind
+3** — Phase 4 (`docs/options/31`, the current `NW_MAGIC` in `blob.h`)
+deleted both from `struct nw_res` entirely rather than leaving them
+unenforced:
+neither has a struct member, a baker parser key, or an `NW_E_*` code
+any more (`grep -n "io_rbps\|io_wbps" blob.h nwcheck.c bakery/nw-cc.py
+nwsup.c` returns only historical comments recording the removal). This
+paragraph said "kind 3 here" for as long as the fields were merely
+unenforced; that description stopped being true the moment they left
+the format, and `claims` caught the paragraph not having moved with
+them.
 
 **"Not advisory" is no longer proposed; it is what
 `house_cgroup_open_generation()` and the syscall block in `nwsup.c`'s
@@ -786,6 +796,19 @@ writes them to a kernel that ignores them. No test in this suite
 exercises those three on the unavailable branch, matching
 `lid-landlock`'s own rule: `skip()` with a named reason rather than a
 green line that means nothing.
+
+**`task_cap` (Phase 4, `pids.max` on the same per-generation leaf) is
+in the identical position, for the identical reason, and is not yet
+covered by any `die()` reproduction on this machine.** This machine's
+cgroup v2 mount carries no `pids` controller either (same
+`cgroup.controllers` listing above, `hugetlb` only), so a house
+declaring `task-cap=` cannot be exercised booting here — `nwsup.c`
+follows the same named-`die()` pattern as `mem_high`/`mem_max`/
+`cpu_weight` when `pids` delegation is attempted and fails, but nobody
+has yet had a machine with real `pids` delegation to confirm the
+`die()` fires for the right reason rather than merely the right
+absence. `tools/HANDOFF-resources.md` carries this fixture too, as the
+one field in that file's table that is still genuinely open.
 
 ## Known open in this territory
 

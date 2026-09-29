@@ -4976,6 +4976,331 @@ def test_ctl_start_relaunch_and_spent():
     print("ok ctl-start-relaunch-and-spent")
 
 
+def test_lock_unlocked_house_never_restarts():
+    """docs/options/22-lock-unlock.md, docs/options/31 Section 4.
+    Driven directly against nw-sup, the same shape
+    test_ctl_start_relaunch_and_spent already uses.
+
+    An unlocked house (NW_LOCK=1, NW_LOCK_UNLOCKED) declared `longrun`
+    (any exit is unexpected) with a budget of 3: locked, this would
+    restart on every crash up to the budget and then go SPENT. Unlocked,
+    nw_decide()'s own proof (proofs/caller_decide.c) says it must never
+    consume budget or restart -- this drives that through the real
+    wiring, not just the pure function. First: no fork at all until
+    START (the `stopped = !locked` idle-state change docs/options/22
+    Section 6 asks for -- without it an unlocked house still forks
+    immediately at boot, which would make the field lie about what it
+    does). Then: crash it once via START, and confirm it goes back to
+    idle rather than restarting -- a second START must fork a THIRD,
+    genuinely new process, not the crash being silently retried."""
+    os.makedirs("/nw/ctl", exist_ok=True)
+    env = os.environ.copy()
+    env["NW_KIND"] = "1"          # longrun: any exit is unexpected
+    env["NW_BUDGET"] = "3"
+    env["NW_LIDS"] = "0"
+    env["NW_LOCK"] = "1"          # NW_LOCK_UNLOCKED
+    proc = subprocess.Popen(
+        [f"{BIN}/nw-sup", f"{BIN}/unit-boom", "lockcheck"],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
+    time.sleep(0.2)
+    expect(_find_by_comm(proc.pid, "unit-boom") is None,
+           "an unlocked house forked at boot -- the idle-state change "
+           "(stopped = !locked) is missing or not taking effect")
+    # boom exits within microseconds of starting (no sleep at all), so
+    # catching it alive between two START calls would be a race against
+    # the test itself rather than a property of the mechanism. Instead:
+    # two START cycles, then read the WHOLE captured output and count
+    # "boom" lines -- exactly two means two genuine forks and nothing
+    # silently retried or skipped.
+    expect(_ctl("lockcheck", b"START\n") == "OK\n", "start while idle")
+    time.sleep(0.3)
+    expect(_ctl("lockcheck", b"START\n") == "OK\n",
+           "a second START after the crash did not even get OK back -- "
+           "the supervisor is not answering, let alone idle")
+    time.sleep(0.3)
+    proc.kill()
+    out, err = proc.communicate()
+    out = (out or "") + (err or "")
+    expect(out.count("boom\n") == 2,
+           f"expected exactly 2 crashes (one per START), got "
+           f"{out.count('boom')} -- either a START did not fork, or "
+           f"something restarted the house without being asked\n{out}")
+    expect("restart lockcheck" not in out and "spent lockcheck" not in out,
+           f"an unlocked house consumed budget or restarted on its own "
+           f"-- nw_decide()'s own proof says UNLOCKED can never reach "
+           f"either\n{out}")
+    print("ok lock-unlocked-house-never-restarts (no fork until START, "
+          "two START cycles produce exactly two crashes with no "
+          "restart in between, budget untouched)")
+
+
+def test_stop_signal_custom_signal_delivered():
+    """docs/options/31 Section 5. Driven directly against nw-sup.
+
+    Declares NW_STOP_SIGNAL=NW_STOPSIG_HUP and STOPs the house; the
+    fixture (unit-anysig, which traps TERM/INT/HUP/QUIT and reports
+    which one arrived) must report HUP, and must NOT report TERM --
+    the pairing that turns this into a claim about which signal was
+    actually sent rather than merely that some signal arrived. The
+    control (UNSET, today's default) is the existing term-signal test,
+    which already pins SIGTERM for the unset case; this test pins the
+    other direction the field adds."""
+    os.makedirs("/nw/ctl", exist_ok=True)
+    env = os.environ.copy()
+    env["NW_KIND"] = "1"
+    env["NW_BUDGET"] = "0"
+    env["NW_LIDS"] = "0"
+    stopsig_hup = blob_const("NW_STOPSIG_HUP")
+    env["NW_STOP_SIGNAL"] = str(stopsig_hup)
+    proc = subprocess.Popen(
+        [f"{BIN}/nw-sup", f"{BIN}/unit-anysig", "stopsighup"],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
+    time.sleep(0.2)
+    house_pid = _find_by_comm(proc.pid, "unit-anysig")
+    expect(house_pid is not None, "unit-anysig never reached exec")
+    expect(_ctl("stopsighup", b"STOP\n") == "OK\n", "stop")
+    time.sleep(0.3)
+    # STOP returns nw-sup to its idle poll() loop, not to exit -- it
+    # waits for START forever, the same reason test_ctl_stop_does_not_
+    # count kills the supervisor itself before reading its output.
+    proc.send_signal(9)
+    try:
+        out, err = proc.communicate(timeout=1)
+    except subprocess.TimeoutExpired:
+        os.kill(proc.pid, 9)
+        out, err = proc.communicate()
+    out = (out or "") + (err or "")
+    sighup = signal.SIGHUP
+    sigterm = signal.SIGTERM
+    expect(f"got={sighup}" in out,
+           f"the house did not report receiving SIGHUP ({sighup})\n{out}")
+    expect(f"got={sigterm}" not in out,
+           f"the house was sent SIGTERM instead of the declared HUP -- "
+           f"NW_STOP_SIGNAL is not taking effect\n{out}")
+    print("ok stop-signal-custom-signal-delivered "
+          "(NW_STOP_SIGNAL=hup, the house reported SIGHUP and not TERM)")
+
+
+def test_capabilities_readback():
+    """docs/options/31 Section 7, amendment item A.1. Read-back matches
+    the plan, per the amendment's own stated mechanism.
+
+    Reads /proc/<pid>/status's CapEff while unit-probe (a ~750ms
+    fixture) is alive, for a house declaring exactly one capability --
+    CAP_SYS_NICE, bit 23, so CapEff must read the single-bit mask
+    0x800000 and nothing else. Paired with the UNSET control: no
+    capabilities= at all must read CapEff=0, the "drop everything"
+    default docs/options/31 Section 10 item 2 names as deliberate. A
+    single test asserting only the declared case would be satisfied by
+    a supervisor that never drops anything at all."""
+    def cap_eff(pid):
+        for line in open(f"/proc/{pid}/status"):
+            if line.startswith("CapEff:"):
+                return int(line.split()[1], 16)
+        return None
+
+    os.makedirs("/nw/ctl", exist_ok=True)
+    sys_nice_bit = blob_const("NW_CAP_SYS_NICE")
+    for tag, cap_env, want in (
+            ("capreadback-nice", str(1 << sys_nice_bit), 1 << sys_nice_bit),
+            ("capreadback-unset", None, 0)):
+        env = os.environ.copy()
+        env["NW_KIND"] = "0"
+        env["NW_BUDGET"] = "0"
+        env["NW_LIDS"] = "0"
+        if cap_env is not None:
+            env["NW_CAPABILITIES"] = cap_env
+        proc = subprocess.Popen(
+            [f"{BIN}/nw-sup", f"{BIN}/unit-probe", tag],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            env=env)
+        time.sleep(0.2)
+        pid = _find_by_comm(proc.pid, "unit-probe")
+        expect(pid is not None, f"{tag}: unit-probe never reached exec")
+        got = cap_eff(pid)
+        got_str = f"{got:#x}" if got is not None else repr(got)
+        expect(got == want,
+               f"{tag}: CapEff read {got_str}, wanted {want:#x}")
+        proc.wait(timeout=5)
+    print("ok capabilities-readback (a single declared capability reads "
+          "back as exactly that bit; UNSET reads back as zero)")
+
+
+def test_oom_score_adj_readback():
+    """docs/options/31 Section 8, amendment item A.3. Read-back matches
+    the plan -- /proc/<pid>/oom_score_adj is the kernel's own state,
+    not something nw-sup echoes back, so this is a real check that the
+    write reached the kernel and was not silently clamped or ignored.
+
+    POSITIVE, not negative: this container's own process lacks
+    CAP_SYS_RESOURCE entirely (`grep CapEff /proc/self/status` here
+    reads a mask with bit 24 clear -- measured directly, the same
+    environment fact docs/options/31 Section 10 item 3 found by fault
+    injection when confirming the field ordering). The kernel's own
+    gate (fs/proc/base.c's __set_oom_adj) only requires that capability
+    to move BELOW the process's current floor (0 for a fresh process);
+    a value at or above it needs no privilege at all and this container
+    can exercise it. The negative direction is real and documented, not
+    silently dropped -- see docs/ENVIRONMENT.md.
+
+    WHAT THIS DOES NOT PIN, found by `control` running the actual
+    negative control (moving the write to after apply_capabilities()):
+    a POSITIVE value needs no capability either before or after the
+    drop, so this test cannot see the ordering regression it was
+    written to guard against -- it stayed green under that exact
+    mutation. The ordering decision (oom_score_adj before capabilities)
+    is verified once, by hand, with real command output, in
+    docs/options/31 Section 10 item 3's fault-injection measurement;
+    it is not a regression this suite would catch if broken again.
+    This container cannot supply the negative value that would make it
+    one -- CAP_SYS_RESOURCE is absent from the container's own ambient
+    capabilities, not only from what nw-sup grants, so no declared
+    `capabilities=` set could restore it for the test to exploit
+    either. Read-back-only, per this file's own convention for a field
+    this environment cannot fully exercise (mem_high/mem_max/
+    cpu_weight/task_cap)."""
+    os.makedirs("/nw/ctl", exist_ok=True)
+    env = os.environ.copy()
+    env["NW_KIND"] = "0"
+    env["NW_BUDGET"] = "0"
+    env["NW_LIDS"] = "0"
+    env["NW_OOM_SCORE_ADJ"] = "500"
+    proc = subprocess.Popen(
+        [f"{BIN}/nw-sup", f"{BIN}/unit-probe", "oomreadback"],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
+    time.sleep(0.2)
+    pid = _find_by_comm(proc.pid, "unit-probe")
+    expect(pid is not None, "unit-probe never reached exec")
+    got = open(f"/proc/{pid}/oom_score_adj").read().strip()
+    expect(got == "500",
+           f"oom_score_adj read back {got!r}, wanted '500'")
+    proc.wait(timeout=5)
+    print("ok oom-score-adj-readback (500 read back from the kernel's "
+          "own state; this does NOT pin the write-before-capabilities "
+          "ordering -- a positive value needs no capability either "
+          "side of the drop, and this container cannot supply a "
+          "negative one -- see this test's own docstring)")
+
+
+def test_nofile_readback():
+    """docs/options/31 Section 9. Read-back matches the plan --
+    /proc/<pid>/limits is the kernel's own accounting of the soft
+    limit actually in effect after setrlimit(2), not a value nw-sup
+    merely remembers asking for."""
+    def soft_nofile(pid):
+        for line in open(f"/proc/{pid}/limits"):
+            if line.startswith("Max open files"):
+                return line.split()[3]  # Limit  Soft  Hard  Units -> Soft
+        return None
+
+    os.makedirs("/nw/ctl", exist_ok=True)
+    env = os.environ.copy()
+    env["NW_KIND"] = "0"
+    env["NW_BUDGET"] = "0"
+    env["NW_LIDS"] = "0"
+    env["NW_NOFILE"] = "4096"
+    proc = subprocess.Popen(
+        [f"{BIN}/nw-sup", f"{BIN}/unit-probe", "nofilereadback"],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
+    time.sleep(0.2)
+    pid = _find_by_comm(proc.pid, "unit-probe")
+    expect(pid is not None, "unit-probe never reached exec")
+    got = soft_nofile(pid)
+    expect(got == "4096", f"nofile soft limit read back {got!r}, wanted '4096'")
+    proc.wait(timeout=5)
+    print("ok nofile-readback (soft RLIMIT_NOFILE=4096 read back from "
+          "/proc/<pid>/limits, the kernel's own accounting)")
+
+
+def test_tight_nofile_does_not_starve_the_brick_pivot():
+    """`fd-auditor` found this shipping: the original `nofile` applier
+    was a single unconditional `rl.rlim_cur = nofile`, which can LOWER
+    the limit just as easily as raise it, and it ran BEFORE
+    `lid_brick()`/`lid_landlock()` -- both of which still need to open
+    several more descriptors after that point (a loop-control fd and a
+    loop-device fd, the brick image fd, a Landlock ruleset fd plus one
+    O_PATH fd per bind). A baker-accepted `nofile=5` (nothing bounds it
+    against a house's own kit size or its lids' needs) reproduced
+    `FAIL open loop-control errno=24` on every run, misdiagnosed as a
+    loop-device defect, burning the whole restart budget.
+
+    The fix splits the applier: only a RAISE runs early (while
+    `CAP_SYS_RESOURCE` is still held, same reasoning as `oom_score_adj`);
+    a LOWER is deferred past every lid that still needs headroom, to
+    immediately before `execv`. `nofile=5` is the exact value from the
+    original report -- tight enough to starve the pre-fix ordering
+    (5 < the loop-control fd plus the kit's own 3), roomy enough that
+    the fixed ordering (which needs no extra headroom for a lower) boots
+    clean."""
+    why = erofs_available()
+    if why:
+        skip("tight-nofile-does-not-starve-the-brick-pivot", why)
+        return
+    brick = make_brick("tightnofile")
+    city = f"{WORK}/tightnofile.city"
+    open(city, "w").write(
+        "house tnf /bin/brick kind=oneshot lids=newns,seccomp "
+        f"brick={brick} layer=l-tightnofile nofile=5\n")
+    blob = f"{WORK}/tightnofile.blob"
+    b = run(["python3", CC, "--city", city, "--out", blob, "--lab"])
+    expect(b.returncode == 0, f"bake\n{b.out}{b.err}")
+    rc, out = boot(plan=blob, hold=1200)
+    expect(city_closed(rc, out), f"tight-nofile brick house rc={rc}\n{out}")
+    # Paired: the positive (the house's own /id line, proving it reached
+    # exec and ran) alongside the absence of every failure mode the
+    # pre-fix ordering produced -- an absence alone would be satisfied
+    # by the house never running at all.
+    expect("id=tightnofile" in out,
+           f"the brick house's own /id line never printed -- it did not "
+           f"reach exec, so the absence checks below would prove nothing"
+           f"\n{out}")
+    expect("restart tnf" not in out and "spent tnf" not in out,
+           f"a tight but legal nofile burned the restart budget\n{out}")
+    for bad in ("FAIL open loop-control", "FAIL open brick image",
+                "FAIL landlock", "FAIL exec house"):
+        expect(bad not in out,
+               f"{bad!r} -- nofile=5 starved a lid's own descriptor "
+               f"need; the raise/lower split regressed\n{out}")
+    print("ok tight-nofile-does-not-starve-the-brick-pivot "
+          "(nofile=5 on a brick+seccomp house boots clean and is "
+          "reaped with no restart -- fd-auditor's original repro "
+          "produced FAIL open loop-control errno=24 here)")
+
+
+def test_grace_period_declared_refuses_at_the_supervisor():
+    """docs/options/31 Section 5, Section 10 item 1. No applier exists
+    yet -- refused at nw-sup startup, by name, the same shape
+    test_layer_bytes_without_layer_dies_at_the_supervisor already
+    drives: real environment variables, no boot needed."""
+    r = run([f"{BIN}/nw-sup", f"{BIN}/unit-probe", "probe"],
+            env=dict(os.environ, NW_GRACE_PERIOD="1500", NW_LIDS="0",
+                      NW_KIND="0"))
+    out = r.out + r.err
+    expect("grace-period: declared but not yet applied" in out,
+           f"nw-sup did not refuse a declared, nonzero grace-period\n{out}")
+    print("ok grace-period-declared-refuses-at-the-supervisor "
+          "(NW_GRACE_PERIOD=1500, refused by name until the escalation "
+          "applier lands)")
+
+
+def test_supervisor_death_policy_declared_refuses_at_the_supervisor():
+    """docs/options/31 Section 6. Reserved: no plan syntax exists yet
+    for this byte at all, so this drives it directly, the same way a
+    forged NW_LAYER_BYTES-without-NW_LAYER is driven in the layer
+    tests -- no plan can produce this state, so the guard is exercised
+    against a value no plan produces."""
+    r = run([f"{BIN}/nw-sup", f"{BIN}/unit-probe", "probe"],
+            env=dict(os.environ, NW_SUPERVISOR_DEATH_POLICY="1",
+                      NW_LIDS="0", NW_KIND="0"))
+    out = r.out + r.err
+    expect("supervisor-death-policy: reserved" in out,
+           f"nw-sup did not refuse a declared, nonzero "
+           f"supervisor-death-policy\n{out}")
+    print("ok supervisor-death-policy-declared-refuses-at-the-supervisor "
+          "(NW_SUPERVISOR_DEATH_POLICY=1, refused by name -- no plan "
+          "syntax exists for this byte yet)")
+
+
 def test_ctl_malformed_refused():
     os.makedirs("/nw/ctl", exist_ok=True)
     env = os.environ.copy()
@@ -6605,130 +6930,35 @@ def test_layer_bytes_without_layer_dies_at_the_supervisor():
           "(NW_LAYER_BYTES set, NW_LAYER unset, refused by name)")
 
 
-def test_baker_refuses_unknown_sched_ext():
-    """docs/options/15-per-house-scheduling.md. `sched-ext=` is a closed
-    set of names -- this round exactly one, `default` -- the same shape
-    `lids=` and `layer=` already are, and the reason is asserted rather
-    than just the exit code, per test_baker_refuses_bad_layers's own
-    template."""
-    city = f"{WORK}/badschedext.city"
-    open(city, "w").write(
-        "house a /bin/true kind=oneshot lids=none sched-ext=turbo\n")
-    p = run(["python3", CC, "--city", city, "--out", f"{WORK}/bse.blob", "--lab"])
-    expect(p.returncode != 0,
-           f"baker accepted an unknown sched-ext name\n{p.out}{p.err}")
-    expect("sched-ext=" in (p.out + p.err),
-           f"wrong reason for an unknown sched-ext name\n{p.out}{p.err}")
-    # The pairing: the one legal name must still bake.
-    open(city, "w").write(
-        "house a /bin/true kind=oneshot lids=none sched-ext=default\n")
-    p = run(["python3", CC, "--city", city, "--out", f"{WORK}/bse.blob", "--lab"])
-    expect(p.returncode == 0,
-           f"the baker refused the one legal sched-ext name\n{p.out}{p.err}")
-    print("ok baker-refuses-unknown-sched-ext (an unknown name refused by "
-          "reason; the one legal name still accepted)")
+def test_capabilities_cap_last_cap_check_survives_the_brick_pivot():
+    """Same class of bug tcb-review found once for sched_ext_supported()
+    (now-deleted, docs/options/31 Section 3), caught this round before
+    it shipped rather than after: nw_cap_last_cap() reads
+    /proc/sys/kernel/cap_last_cap, a MACHINE property, and a brick
+    house's lid_brick() pivots into the brick's own root -- nothing
+    mounts a /proc inside a brick, so a read after the pivot would
+    resolve against whatever the brick's own (empty) /proc holds,
+    which is nothing.
 
-
-def test_sched_ext_unsupported_refuses_at_the_supervisor():
-    """docs/options/15-per-house-scheduling.md. This machine measurably
-    lacks sched_ext -- docs/ENVIRONMENT.md's own measurement, four
-    independent ways -- so a house declaring `sched-ext=default` must
-    refuse to start rather than run as if it were scheduled, the same
-    "declared lid the kernel can't provide" refusal every other lid
-    already has (invariant 6: "Lids are not advisory").
-
-    Driven directly against nw-sup, the same shape
-    test_layer_bytes_without_layer_dies_at_the_supervisor already uses:
-    real environment variables, no full boot needed, because the
-    behavior under test is entirely inside nw-sup's own fork/exec
-    sequence and does not depend on a sealed blob existing."""
-    r = run([f"{BIN}/nw-sup", f"{BIN}/unit-probe", "probe"],
-            env=dict(os.environ, NW_SCHED_EXT="1", NW_LIDS="0", NW_KIND="0"))
-    out = r.out + r.err
-    expect("sched-ext unsupported" in out,
-           f"nw-sup did not refuse a declared sched-ext policy on a kernel "
-           f"that measurably lacks sched_ext (docs/ENVIRONMENT.md)\n{out}")
-    print("ok sched-ext-unsupported-refuses-at-the-supervisor "
-          "(NW_SCHED_EXT=1 on a kernel with no CONFIG_SCHED_CLASS_EXT, "
-          "refused by name)")
-
-
-def test_sched_ext_out_of_range_dies_at_the_supervisor():
-    """`control`'s finding: nothing exercised the out-of-range
-    re-validation nw-sup's main() does on `NW_SCHED_EXT` (the same
-    "nw-sup reads its unit from the environment, not the sealed blob"
-    argument the NW_BRICK/NW_LAYER/NW_LAYER_BYTES re-checks already
-    have). On this kernel EVERY nonzero value, legal or illegal, dies
-    with "sched-ext unsupported" from apply_sched_ext() before the
-    re-validation would matter, so the two guards were indistinguishable
-    by any existing test -- masked exactly the way `CLAUDE.md`'s
-    "a recovery mechanism turns a defect into a delay" section warns a
-    fallback path can hide what is behind it.
-
-    The re-validation runs at nw-sup startup, before the per-house fork
-    loop apply_sched_ext() lives in, so an out-of-range value must be
-    refused by name (`"sched-ext value"`) -- a DIFFERENT reason string
-    than the capability refusal -- proving this is really the startup
-    guard and not the same capability check answering for it."""
-    r = run([f"{BIN}/nw-sup", f"{BIN}/unit-probe", "probe"],
-            env=dict(os.environ, NW_SCHED_EXT="5", NW_LIDS="0", NW_KIND="0"))
-    out = r.out + r.err
-    expect("sched-ext value" in out,
-           f"nw-sup did not refuse an out-of-range NW_SCHED_EXT by its own "
-           f"reason\n{out}")
-    expect("sched-ext unsupported" not in out,
-           f"an out-of-range value was refused by the CAPABILITY check "
-           f"instead of the startup re-validation -- the two guards are "
-           f"not actually distinguishable\n{out}")
-    print("ok sched-ext-out-of-range-dies-at-the-supervisor "
-          "(NW_SCHED_EXT=5, refused by its own reason at startup, before "
-          "the per-house capability check)")
-
-
-def test_sched_ext_check_survives_the_brick_pivot():
-    """tcb-review's HIGH finding, driven for real rather than by reading
-    the fix: apply_sched_ext() must ask the MACHINE's kernel whether
-    sched_ext exists, not the house's own root -- and a brick house
-    pivots into its own root before the check used to run, so the
-    check's real target depends on ORDER, not on the check's own logic.
-
-    Plants FAKE, convincing marker files inside the brick at the exact
-    paths sched_ext_supported() reads (/sys/kernel/sched_ext as a
-    directory, /sys/kernel/btf/vmlinux containing the literal bytes
-    "sched_ext_ops") -- so a check running AFTER the pivot would see a
-    kernel that (falsely) claims to support sched_ext, reach the "no
-    policy artifact" branch, and die with a DIFFERENT reason than the
-    real, capability-absent one. The correct behavior -- checking
-    BEFORE the pivot, against the real host -- dies with the ordinary
-    "sched-ext unsupported" message regardless of what the brick plants,
-    because the real host genuinely lacks sched_ext
-    (docs/ENVIRONMENT.md). Red under the ordering this fixes: moving
-    apply_sched_ext() back to after lid_brick() makes this pass under
-    the planted files' claim instead of the host's real answer."""
+    Plants a FAKE, convincing /proc/sys/kernel/cap_last_cap inside the
+    brick with a value low enough that a normal `capabilities=` set
+    would exceed it -- so a check running AFTER the pivot would see the
+    fake, low ceiling and refuse a legal declaration; the correct
+    behavior (checking BEFORE the pivot, against the real host) ignores
+    the brick's planted file entirely and boots clean."""
     why = erofs_available()
     if why:
-        skip("sched-ext-check-survives-the-brick-pivot", why)
+        skip("capabilities-cap-last-cap-check-survives-the-brick-pivot", why)
         return
-    tree = tempfile.mkdtemp(prefix="nw-schedext-brick-", dir=WORK)
+    tree = tempfile.mkdtemp(prefix="nw-caplastcap-brick-", dir=WORK)
     os.makedirs(f"{tree}/bin")
-    os.makedirs(f"{tree}/sys/kernel/sched_ext")
-    os.makedirs(f"{tree}/sys/kernel/btf")
+    os.makedirs(f"{tree}/proc/sys/kernel")
     shutil.copy(f"{BIN}/unit-probe", f"{tree}/bin/brick")
     os.chmod(f"{tree}/bin/brick", 0o755)
-    # The literal string sched_ext_supported() scans for -- planted so a
-    # POST-pivot check would see this kernel as claiming sched_ext, not
-    # the real host's genuinely-absent one.
-    open(f"{tree}/sys/kernel/btf/vmlinux", "wb").write(
-        b"FAKE BTF BLOB, NOT A REAL KERNEL EXPORT -- sched_ext_ops -- "
-        b"padding so this looks like a plausible file size" + b"\0" * 64)
+    # A ceiling of 0 (only CAP_CHOWN legal) inside the brick -- a check
+    # running AFTER the pivot would refuse `sys_nice` (bit 23) by name.
+    open(f"{tree}/proc/sys/kernel/cap_last_cap", "w").write("0\n")
 
-    # mkbrick.py names the image by the sha256 of the BUILT IMAGE FILE
-    # (hash-after-build), not of the tree -- unlike make_brick()'s own
-    # pre-computed tree hash, which it can get away with only because it
-    # both chooses that name AND writes the mkfs.erofs output under it
-    # itself. Calling the real packer directly here (so the fake marker
-    # files land in a real, sealed brick) means reading ITS printed
-    # digest rather than predicting one.
     brick_dir = _brick_dir()
     os.makedirs(brick_dir, exist_ok=True)
     p = run(["python3", os.path.join(ROOT, "bakery/mkbrick.py"), tree,
@@ -6738,28 +6968,23 @@ def test_sched_ext_check_survives_the_brick_pivot():
     brick_path = f"{brick_dir}/{hexd}{_brick_suffix()}"
     expect(os.path.exists(brick_path), f"mkbrick did not write {brick_path}")
 
-    city = f"{WORK}/schedext-brick.city"
+    city = f"{WORK}/caplastcap-brick.city"
     open(city, "w").write(
         f"house solo /bin/brick kind=oneshot lids=newns,seccomp "
-        f"brick={hexd} layer=l-schedext-brick sched-ext=default\n")
-    blob = f"{WORK}/schedext-brick.blob"
+        f"brick={hexd} layer=l-caplastcap-brick capabilities=sys_nice\n")
+    blob = f"{WORK}/caplastcap-brick.blob"
     b = run(["python3", CC, "--city", city, "--out", blob, "--lab"])
     expect(b.returncode == 0, f"bake\n{b.out}{b.err}")
 
     rc, out = boot(plan=blob, hold=800)
-    expect("sched-ext unsupported" in out,
-           f"the sched-ext check did not refuse the REAL host's absent "
-           f"capability -- either it saw the brick's planted marker "
-           f"files instead (ordering regressed) or something else "
-           f"changed\n{out}")
-    expect("sched-ext no policy artifact" not in out,
-           f"the check answered as though this kernel supports sched_ext "
-           f"-- it read the brick's planted files, not the machine's "
-           f"real /sys, meaning apply_sched_ext() is running AFTER the "
-           f"pivot again\n{out}")
-    print("ok sched-ext-check-survives-the-brick-pivot (planted "
-          "convincing marker files inside the brick; the real host's "
-          "absence still wins)")
+    expect("capabilities: a declared bit names a capability past this "
+           "kernel's own cap_last_cap" not in out,
+           f"the cap_last_cap check read the brick's planted, fake "
+           f"ceiling instead of the real host's -- ordering regressed, "
+           f"nw_cap_last_cap() is running after lid_brick()'s pivot\n{out}")
+    print("ok capabilities-cap-last-cap-check-survives-the-brick-pivot "
+          "(planted a fake, low ceiling inside the brick; the real "
+          "host's answer still wins)")
 
 
 def test_leading_zero_hash_is_a_brick():
@@ -6961,7 +7186,14 @@ def test_checker_rejects_crafted_edges():
     self-edge (in range, but a == b) are both `edge endpoint index`,
     checked by a single rule in nwcheck.c -- so both crafted cases
     exercise it, not just one. The duplicate case is checked unordered,
-    matching the baker's own semantics."""
+    matching the baker's own semantics.
+
+    docs/options/31 Section 4 added a fourth rule: an edge naming a
+    unit declared `lock=unlocked` is refused independently of whatever
+    the baker refuses, per plan.md's "any rule the runtime relies on
+    must be in nwcheck.c too" -- both endpoints are checked by the same
+    `if`, so both crafted cases (endpoint a unlocked, endpoint b
+    unlocked) exercise it."""
     NAME, PATH, BRICK = (int(blob_h(x)) for x in
                          ("NW_NAME_LEN", "NW_PATH_LEN", "NW_BRICK_HASH"))
     HDR, USZ = hdr_size(), unit_layout()["_size"]
@@ -6992,11 +7224,25 @@ def test_checker_rejects_crafted_edges():
         open(path, "wb").write(bytes(d))
         return path
 
+    LOCK_UNLOCKED = blob_const("NW_LOCK_UNLOCKED")
+    LOCK0_OFF = HDR + 0 * USZ + unit_layout()["lock"]
+    LOCK1_OFF = HDR + 1 * USZ + unit_layout()["lock"]
     cases = [
         ("oob", [(EDGE0, 0xFF), (EDGE0 + 1, 0xFF)],
          "an out-of-range endpoint", "edge endpoint index"),
         ("self", [(EDGE0 + 2, 0), (EDGE0 + 3, 0)],
          "a self-edge (a == b == 0)", "edge endpoint index"),
+        # docs/options/31 Section 4: an edge names two units nw-spawn
+        # wires a socketpair into before either forks; an unlocked unit
+        # may never fork, so the plan cannot keep that promise. Both
+        # endpoints are checked independently by the same rule, so both
+        # crafted cases (unit a unlocked, unit b unlocked) exercise it.
+        ("lock0", [(LOCK0_OFF, LOCK_UNLOCKED)],
+         "edge endpoint a declared lock=unlocked",
+         "an unlocked unit is named by a declared edge"),
+        ("lock1", [(LOCK1_OFF, LOCK_UNLOCKED)],
+         "edge endpoint b declared lock=unlocked",
+         "an unlocked unit is named by a declared edge"),
     ]
     for why, edits, what, reason in cases:
         r = run([f"{BIN}/nw-check", craft(why, edits)])
@@ -7031,8 +7277,9 @@ def test_checker_rejects_crafted_edges():
     expect(r.returncode == 0,
            f"nw-check rejected a legal plan with an edge\n{r.out}{r.err}")
     print("ok checker-rejects-crafted-edges (an out-of-range endpoint, a "
-          "self-edge and a duplicate pair, each refused by its own reason; "
-          "the legal plan with an edge still accepted)")
+          "self-edge, a duplicate pair, and an edge naming an unlocked "
+          "unit on each end, each refused by its own reason; the legal "
+          "plan with an edge still accepted)")
 
 
 def test_baker_constants_match_the_header():
@@ -7185,6 +7432,8 @@ def test_baker_refuses_bad_resources():
     W_MIN, W_MAX = (blob_const(x) for x in
                     ("NW_CPU_WEIGHT_MIN", "NW_CPU_WEIGHT_MAX"))
     N_MIN, N_MAX = (blob_const(x) for x in ("NW_NICE_MIN", "NW_NICE_MAX"))
+    OOM_MIN, OOM_MAX = (blob_const(x) for x in
+                        ("NW_OOM_ADJ_MIN", "NW_OOM_ADJ_MAX"))
     city = f"{WORK}/badres.city"
     bare = "house a /bin/true kind=oneshot lids=none"
     bricked = (f"house a /bin/brick kind=oneshot lids=newns "
@@ -7209,6 +7458,19 @@ def test_baker_refuses_bad_resources():
          "a nice that is not a number"),
         (f"{bare} sched=fifo", "must be one of",
          "a scheduler policy outside the closed set"),
+        # docs/options/31 Section 8. Same shape as nice, above.
+        (f"{bare} oom-score-adj={OOM_MAX + 1}",
+         f"must be {OOM_MIN}..{OOM_MAX}",
+         "an oom-score-adj above the kernel's range"),
+        (f"{bare} oom-score-adj={OOM_MIN - 1}",
+         f"must be {OOM_MIN}..{OOM_MAX}",
+         "an oom-score-adj below the kernel's range"),
+        (f"{bare} oom-score-adj=heavy", f"must be {OOM_MIN}..{OOM_MAX}",
+         "an oom-score-adj that is not a number"),
+        (f"{bare} task-cap=lots", "must be a task count",
+         "a task-cap that is not a number"),
+        (f"{bare} task-cap=-1", "must be a task count",
+         "a negative task-cap"),
         # THE ZEROES, one per key that takes a size. NOT because the
         # refusal is per-key -- it is ONE guard in parse_bytes,
         # parameterised by the key name, which is what makes the
@@ -7229,9 +7491,11 @@ def test_baker_refuses_bad_resources():
         # is genuinely separate.
         (f"{bare} mem-high=0", "Omit mem-high=", "mem-high=0"),
         (f"{bare} mem-max=0", "Omit mem-max=", "mem-max=0"),
-        (f"{bare} io-rbps=0", "Omit io-rbps=", "io-rbps=0"),
-        (f"{bare} io-wbps=0", "Omit io-wbps=", "io-wbps=0"),
         (f"{bricked} layer-bytes=0", "Omit layer-bytes=", "layer-bytes=0"),
+        # docs/options/31 Section 8. Same declared-zero-collides-with-
+        # unset shape as mem-high=0/mem-max=0 above.
+        (f"{bare} task-cap=0", "Omit task-cap=", "task-cap=0"),
+        (f"{bare} oom-score-adj=0", "Omit oom-score-adj=", "oom-score-adj=0"),
         # Sizes that are not sizes.
         (f"{bare} mem-high=2X", "suffixed K, M, G or T",
          "a size with an unknown suffix"),
@@ -7248,7 +7512,7 @@ def test_baker_refuses_bad_resources():
         # every non-ASCII byte.
         (f"{bare} mem-high=\u00b2", "suffixed K, M, G or T",
          "a size that isdigit() accepts and int() does not"),
-        (f"{bare} io-rbps=\u00bd", "suffixed K, M, G or T",
+        (f"{bare} layer-bytes=\u00bd", "suffixed K, M, G or T",
          "a size that isdigit() already rejected"),
         (f"{bare} cpu-weight=\u00b2", "cgroup v2's own range",
          "a cpu weight that isdigit() accepts and int() does not"),
@@ -7257,7 +7521,7 @@ def test_baker_refuses_bad_resources():
         # should have named the key.
         (f"{bare} mem-high=18446744073709551616",
          "does not fit the 64-bit field", "a size above uint64"),
-        (f"{bare} io-rbps=16777216T", "does not fit the 64-bit field",
+        (f"{bare} layer-bytes=16777216T", "does not fit the 64-bit field",
          "a suffixed size above uint64"),
         # cpus= is a list of indices, and the bound is the mask's width.
         (f"{bare} cpus=64", "outside 0..63", "a CPU index past the mask"),
@@ -7354,13 +7618,16 @@ def test_baker_refuses_bad_resources():
         f"{bare} mem-high=2M mem-max=4M",
         f"{bare} mem-high=1",            # one byte, no suffix
         f"{bare} mem-high=1K mem-max=1M",
-        f"{bare} io-rbps=4M io-wbps=8M",
+        f"{bare} task-cap=100",
+        f"{bare} oom-score-adj=-50",
+        f"{bare} oom-score-adj=50",
         f"{bare} cpus=0",
         f"{bare} cpus=0,2-3",
         f"{bare} cpus=63",
         f"{bricked} layer-bytes=1G",
         f"{bricked} cpus=0-63 cpu-weight=500 mem-high=1G mem-max=2G "
-        f"io-rbps=1M io-wbps=1M layer-bytes=4G sched=other nice=-1",
+        f"layer-bytes=4G sched=other nice=-1 task-cap=200 "
+        f"oom-score-adj=-100",
     ]
     for line in ok:
         open(city, "w").write(line + "\n")
@@ -8628,7 +8895,7 @@ def test_checker_rejects_crafted_fields():
     NAME, PATH, BRICK = (int(blob_h(x)) for x in
                          ("NW_NAME_LEN", "NW_PATH_LEN", "NW_BRICK_HASH"))
     HDR = hdr_size()
-    KIND_OFF = HDR + unit_layout()["kind"]  # kind, then budget, lids, sched_ext
+    KIND_OFF = HDR + unit_layout()["kind"]  # kind, then budget, lids, lock
     LIDS_OFF = KIND_OFF + 2                   # lids is the third byte of the trailer
 
     city = f"{WORK}/crafted.city"
@@ -8685,8 +8952,9 @@ def test_checker_rejects_crafted_fields():
     # blob is rebuilt either way -- and it is the difference between pinning
     # a closed set and pinning one member of it.
     LEGAL_LIDS = 1 | 2 | 4 | 8          # seccomp landlock newns newnet
-    SCHED_EXT_OFF = LIDS_OFF + 1         # sched_ext is the fourth trailer byte
-    SCHED_EXT_MAX = blob_const("NW_SCHED_EXT_MAX")  # an ALIAS; see blob_const
+    LOCK_OFF = LIDS_OFF + 1              # lock is the fourth trailer byte
+                                          # (was sched_ext, docs/options/31)
+    LOCK_MAX = blob_const("NW_LOCK_MAX")  # an ALIAS; see blob_const
     BRICK_OFF = HDR + VICTIM * USZ + unit_layout()["brick"]
     LAYER_OFF = HDR + VICTIM * USZ + unit_layout()["layer"]
     LAYERW = int(blob_h("NW_NAME_LEN"))
@@ -8783,15 +9051,15 @@ def test_checker_rejects_crafted_fields():
          f"lid bit {bit:#04x}, outside the closed set")
         for bit in (0x10, 0x20, 0x40, 0x80)
     ] + [
-        # docs/options/15-per-house-scheduling.md. The spare byte's first
-        # closed set: every value above NW_SCHED_EXT_MAX refused, not one
-        # representative -- the same reasoning as `kind` and `lids` above,
-        # since a single crafted value would be satisfied by
-        # `if (v == 2) return ...` and leave every other illegal value
-        # accepted.
-        (f"schedext{v}", [(SCHED_EXT_OFF, v)], "sched-ext",
-         f"sched_ext={v}, outside the closed set")
-        for v in (SCHED_EXT_MAX + 1, SCHED_EXT_MAX + 2, 127, 255)
+        # docs/options/22-lock-unlock.md, docs/options/31. The spare
+        # byte's closed set, now `lock`: every value above NW_LOCK_MAX
+        # refused, not one representative -- the same reasoning as
+        # `kind` and `lids` above, since a single crafted value would be
+        # satisfied by `if (v == 2) return ...` and leave every other
+        # illegal value accepted.
+        (f"lock{v}", [(LOCK_OFF, v)], "lock",
+         f"lock={v}, outside the closed set")
+        for v in (LOCK_MAX + 1, LOCK_MAX + 2, 127, 255)
     ] + [
         # Landlock grants read and execute beneath the house's root, which
         # restricts nothing when the root is the machine's. Clear the brick
@@ -8823,8 +9091,8 @@ def test_checker_rejects_crafted_fields():
     ok_cases += [(f"lids={bit:#04x}", [(LIDS_OFF, bit | 4)])
                  for bit in (1, 2, 4, 8)]
     ok_cases += [("lids=all-legal", [(LIDS_OFF, LEGAL_LIDS)])]
-    ok_cases += [(f"sched_ext={v}", [(SCHED_EXT_OFF, v)])
-                 for v in range(SCHED_EXT_MAX + 1)]
+    ok_cases += [(f"lock={v}", [(LOCK_OFF, v)])
+                 for v in range(LOCK_MAX + 1)]
     for why, edits in ok_cases:
         path = craft("ok-" + why.replace("=", ""), edits) if edits else good
         r = run([f"{BIN}/nw-check", path])
@@ -8833,7 +9101,7 @@ def test_checker_rejects_crafted_fields():
                f"the TCB is narrower than the one the baker emits"
                f"\n{r.out}{r.err}")
     print(f"ok checker-rejects-crafted (every illegal kind, lid bit and "
-          f"sched-ext value refused on unit {VICTIM} of {NUNITS}, every "
+          f"lock value refused on unit {VICTIM} of {NUNITS}, every "
           f"legal one accepted)")
 
 
@@ -9010,6 +9278,8 @@ def test_checker_rejects_crafted_resources():
     W_MIN, W_MAX = (blob_const(x) for x in
                     ("NW_CPU_WEIGHT_MIN", "NW_CPU_WEIGHT_MAX"))
     N_MIN, N_MAX = (blob_const(x) for x in ("NW_NICE_MIN", "NW_NICE_MAX"))
+    OOM_MIN, OOM_MAX = (blob_const(x) for x in
+                        ("NW_OOM_ADJ_MIN", "NW_OOM_ADJ_MAX"))
     S_OTHER, S_BATCH, S_IDLE, S_MAX = (
         blob_const(x) for x in
         ("NW_SCHED_OTHER", "NW_SCHED_BATCH", "NW_SCHED_IDLE", "NW_SCHED_MAX"))
@@ -9031,8 +9301,9 @@ def test_checker_rejects_crafted_resources():
         value the checker still accepts while reading as a crafted
         rejection that failed."""
         fmt = {"cpu_mask": "<Q", "mem_high": "<Q", "mem_max": "<Q",
-               "io_rbps": "<Q", "io_wbps": "<Q", "layer_bytes": "<Q",
-               "cpu_weight": "<H", "nice": "<b", "sched_policy": "<B"}[name]
+               "layer_bytes": "<Q",
+               "cpu_weight": "<H", "nice": "<b", "sched_policy": "<B",
+               "task_cap": "<I", "oom_score_adj": "<h"}[name]
         raw = struct.pack(fmt, val)
         return [(RES + rl[name] + k, b) for k, b in enumerate(raw)]
 
@@ -9089,6 +9360,13 @@ def test_checker_rejects_crafted_resources():
          "nice out of range",
          f"nice={v}, outside the kernel's own range")
         for v in (N_MIN - 1, N_MAX + 1, -128, 127)
+    ] + [
+        # docs/options/31 Section 8. Same shape as nice: signed, both
+        # ends need their own case.
+        (f"oom{v}", fld("oom_score_adj", v),
+         "oom-score-adj out of range",
+         f"oom-score-adj={v}, outside the kernel's own range")
+        for v in (OOM_MIN - 1, OOM_MAX + 1, -32768, 32767)
     ] + [
         # THE THROTTLE AT OR ABOVE THE BACKSTOP. Equal is the case a `>`
         # instead of `>=` lets through, and it is the one that matters:
@@ -9156,8 +9434,10 @@ def test_checker_rejects_crafted_resources():
     ok_cases += [("mem-high-alone", fld("mem_high", 1 << 20))]
     ok_cases += [("mem-max-alone", fld("mem_max", 1 << 20))]
     ok_cases += [("cap-with-layer", fld("layer_bytes", 1 << 30))]
-    ok_cases += [("io-both", fld("io_rbps", 1 << 20) + fld("io_wbps", 1 << 20))]
     ok_cases += [("cpu-mask-full", fld("cpu_mask", (1 << 64) - 1))]
+    ok_cases += [(f"oom={v}", fld("oom_score_adj", v))
+                 for v in (OOM_MIN, -1, 1, OOM_MAX)]
+    ok_cases += [("task-cap-full", fld("task_cap", (1 << 32) - 1))]
     for why, edits in ok_cases:
         # `-` KEPT, and `=`/`@` mapped rather than dropped: a bare
         # \W-strip sends `nice=-1@other` and `nice=1@other` to one
@@ -9238,8 +9518,9 @@ def res_layout():
     at = {m.group(1): int(m.group(2))
           for m in RES_AT.finditer(
               open(os.path.join(STAGE, "src", "blob.h")).read())}
-    for want in ("cpu_mask", "mem_high", "mem_max", "io_rbps", "io_wbps",
-                 "layer_bytes", "cpu_weight", "nice", "sched_policy"):
+    for want in ("cpu_mask", "mem_high", "mem_max",
+                 "layer_bytes", "cpu_weight", "nice", "sched_policy",
+                 "task_cap", "oom_score_adj"):
         expect(want in at,
                f"blob.h declares no NW_AT(nw_res, {want}, ...) -- the "
                f"resource layout parse has stopped matching and the "
@@ -9292,7 +9573,7 @@ def unit_layout():
     at = {m.group(1): int(m.group(2))
           for m in UNIT_AT.finditer(
               open(os.path.join(STAGE, "src", "blob.h")).read())}
-    for want in ("name", "exec_path", "brick", "layer", "kind", "sched_ext"):
+    for want in ("name", "exec_path", "brick", "layer", "kind", "lock"):
         expect(want in at,
                f"blob.h declares no NW_AT(nw_unit, {want}, ...) -- the "
                f"layout parse has stopped matching and every crafted-blob "
@@ -10770,15 +11051,18 @@ def test_baker_writes_the_declared_layout():
     # THE RESOURCE BLOCK IS A SECOND, INDEPENDENT struct.pack, so it is
     # the same exposure one level down and nothing else looks at it: the
     # C asserts pin nw_res's members for the READER, and `pack_res` is
-    # what lands on disk. Swapping `io_rbps` and `io_wbps` there is legal
-    # in every direction -- both are u64, both unconstrained, no
-    # cross-field rule involves either -- so a plan capping reads at one
-    # rate and writes at another gets them the wrong way round, bakes
-    # clean, validates clean, and nothing but a byte position can see it.
-    # (mem_high/mem_max is the pair the checker would also catch, because
-    # one must be below the other. cpu_mask, io_rbps, io_wbps,
-    # layer_bytes, cpu_weight, nice and sched_policy have no such
-    # backstop: any permutation among same-width fields validates.)
+    # what lands on disk. Swapping two same-width, cross-field-rule-free
+    # members there is legal in every direction -- cpu_mask and task_cap
+    # are both u64/u32-shaped with no cross-field rule involving either,
+    # so a plan capping one and a house whose OTHER field gets capped
+    # instead bakes clean, validates clean, and nothing but a byte
+    # position can see it. (io_rbps/io_wbps were this test's original
+    # example of the class and are deleted, docs/options/31; task_cap
+    # and oom_score_adj are the current ones. mem_high/mem_max is the
+    # pair the checker would also catch, because one must be below the
+    # other. cpu_mask, layer_bytes, cpu_weight, nice, sched_policy,
+    # task_cap and oom_score_adj have no such backstop: any permutation
+    # among same-width fields validates.)
     #
     # A DISTINCT VALUE FOR EVERY FIELD, so every permutation is
     # separated rather than one representative swap. The first version wrote
@@ -10798,19 +11082,20 @@ def test_baker_writes_the_declared_layout():
         # this house carries all three.
         f"house lay3 /bin/true kind=oneshot lids=newns "
         f"brick={'ab' * BRICK} layer=l-lay3 "
-        f"cpus=0,4 mem-high=1K mem-max=2K io-rbps=3K io-wbps=4K "
-        f"layer-bytes=5K cpu-weight=7 sched=other nice=8\n")
+        f"cpus=0,4 mem-high=1K mem-max=2K "
+        f"layer-bytes=5K cpu-weight=7 sched=other nice=8 "
+        f"task-cap=9 oom-score-adj=-10\n")
     blob = f"{WORK}/layout.blob"
     b = run(["python3", CC, "--city", city, "--out", blob, "--lab"])
     expect(b.returncode == 0, f"bake\n{b.out}{b.err}")
 
     d = open(blob, "rb").read()
     for i, (nm, want) in enumerate((
-            ("lay",  {"kind": 1, "budget": 2, "lids": 4, "sched_ext": 0}),
-            ("lay2", {"kind": 1, "budget": 0, "lids": 1, "sched_ext": 0}))):
+            ("lay",  {"kind": 1, "budget": 2, "lids": 4, "lock": 0}),
+            ("lay2", {"kind": 1, "budget": 0, "lids": 1, "lock": 0}))):
         base = HDR + i * USZ + unit_layout()["kind"]
         got = {"kind": d[base], "budget": d[base + 1],
-               "lids": d[base + 2], "sched_ext": d[base + 3]}
+               "lids": d[base + 2], "lock": d[base + 3]}
         expect(got == want,
                f"the baker did not write {nm}'s trailer where blob.h "
                f"declares it.\n  blob.h says: {want}\n  baker wrote:  {got}\n"
@@ -10844,11 +11129,13 @@ def test_baker_writes_the_declared_layout():
     R = HDR + 2 * USZ + L["res"]
     rl = res_layout()
     fmt = {"cpu_mask": "<Q", "mem_high": "<Q", "mem_max": "<Q",
-           "io_rbps": "<Q", "io_wbps": "<Q", "layer_bytes": "<Q",
-           "cpu_weight": "<H", "nice": "<b", "sched_policy": "<B"}
+           "layer_bytes": "<Q",
+           "cpu_weight": "<H", "nice": "<b", "sched_policy": "<B",
+           "task_cap": "<I", "oom_score_adj": "<h"}
     want_res = {"cpu_mask": 0b10001, "mem_high": 1024, "mem_max": 2048,
-                "io_rbps": 3072, "io_wbps": 4096, "layer_bytes": 5120,
-                "cpu_weight": 7, "nice": 8, "sched_policy": 1}
+                "layer_bytes": 5120,
+                "cpu_weight": 7, "nice": 8, "sched_policy": 1,
+                "task_cap": 9, "oom_score_adj": -10}
     expect(len(set(want_res.values())) == len(want_res),
            f"two fields in this fixture carry the same value "
            f"({want_res}), so a swap between them is invisible here and "
@@ -12208,6 +12495,14 @@ def main():
         test_ctl_stop_requested_clears_across_a_relaunch,
         test_ctl_exec_resets_sigchld_mask,
         test_ctl_start_relaunch_and_spent,
+        test_lock_unlocked_house_never_restarts,
+        test_stop_signal_custom_signal_delivered,
+        test_capabilities_readback,
+        test_oom_score_adj_readback,
+        test_nofile_readback,
+        test_tight_nofile_does_not_starve_the_brick_pivot,
+        test_grace_period_declared_refuses_at_the_supervisor,
+        test_supervisor_death_policy_declared_refuses_at_the_supervisor,
         test_ctl_malformed_refused, test_ctl_socket_and_death_together,
         test_ctl_pidfd_fallback_with_socket,
         test_ctl_tier3_fallback_with_socket,
@@ -12230,10 +12525,7 @@ def main():
         test_leading_zero_hash_is_a_brick,
         test_brick_hash_revalidated_at_the_supervisor,
         test_layer_bytes_without_layer_dies_at_the_supervisor,
-        test_baker_refuses_unknown_sched_ext,
-        test_sched_ext_unsupported_refuses_at_the_supervisor,
-        test_sched_ext_out_of_range_dies_at_the_supervisor,
-        test_sched_ext_check_survives_the_brick_pivot,
+        test_capabilities_cap_last_cap_check_survives_the_brick_pivot,
         test_path_traversal_refused, test_dupname_refused,
         test_blob_size_ceiling,
         test_checker_rejects_crafted_fields,

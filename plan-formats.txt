@@ -77,3 +77,13 @@ NWPLAN10 e15563449416e13d290b296fc3a0327a5dc1ca0cf7e2cbd8eb1453bc567c876f
 # crc32's own offset). A field added and an offset moved are both
 # layout changes this ledger's signature hashes directly.
 NWPLAN11 44051f89224b00944d7530d94085286ce29e1eb5da1a2f19cf0c265eb73076cb
+# NWPLAN12: docs/options/31-phase4-plan-bump.md. struct nw_res lost
+# io_rbps/io_wbps and gained task_cap/oom_score_adj; struct nw_unit lost
+# sched_ext (its byte reused for `lock`, docs/options/22) and gained
+# stop_signal, grace_period, nofile, capabilities and
+# supervisor_death_policy, all appended after `res`. Fields added,
+# removed, resized and reordered -- every one of those is a layout
+# change this ledger's signature hashes directly. Computed from the
+# current tree via tests/run.py's own _layout_signature(), not
+# hand-derived.
+NWPLAN12 44a07246df077b47862ed0834723308c72e69a5efc3447aa37b9c85b02a0dfad

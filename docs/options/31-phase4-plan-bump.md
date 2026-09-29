@@ -51,11 +51,12 @@ against the new `blob.h`, append the row, do not touch the others.
 independently of the baker" rule from `plan.md`'s Hard rules applies to
 every cross-field refusal below.
 
-Current `NW_E_*` tail is `NW_E_EDGEDUP = 27` (`blob.h:769`), terminator
-`NW_E__COUNT` (`blob.h:790`). New codes start at 28, in the order they
-appear below — renumbering on retirement is this project's own
-precedent (`blob.h:738`'s comment on the retired `NW_E_BRICK`), not
-something this note needs to invent.
+Current `NW_E_*` tail is `NW_E_EDGEDUP = 26` (after `NW_E_SCHEDEXT`'s own
+retirement shifts everything below it down by one, the same precedent
+`blob.h`'s comment on the retired `NW_E_BRICK` already sets — this
+note's own arithmetic missed applying that shift to itself for one
+round, caught by `drift`). New codes start at 27, in the order they
+appear below.
 
 ## 2. The struct layout
 
@@ -406,19 +407,34 @@ deferred "rootless houses" item, exactly as §6's own decision states.
   position — refuses at nw-sup startup with a named reason, because
   that's a kernel-vs-plan mismatch the checker running at bake time on
   a *different* machine cannot see).
-- **Drop order relative to other setup steps.** The amendment already
-  specifies it: after mounts, cgroup placement and lids, before exec.
-  This note confirms that ordering is consistent with `runtime.md`'s
-  fixed lid order (NEWNET → NEWNS → brick pivot → Landlock → seccomp) —
-  capability drop slots in *after* seccomp, immediately before `execv`,
-  because seccomp's own allow-list is itself capability-gated in one
-  place worth naming explicitly: `mount`/`unshare`/`pivot_root` are
-  already absent from `strict_allow[]` regardless of capabilities
-  (`runtime.md`'s "Lid order is fixed" bullet), so dropping
-  `CAP_SYS_ADMIN` after seccomp is already applied is redundant-but-
-  harmless belt-and-suspenders, not load-bearing — the seccomp filter is
-  what's actually load-bearing there, exactly as invariant 6 already
-  states of the lid order generally.
+- **Drop order relative to other setup steps — corrected against the
+  implementation, not the amendment's own guess.** The amendment said
+  "after mounts, cgroup placement and lids, before exec" and this note
+  first repeated that as *after seccomp, immediately before execv*. That
+  is wrong, and it was found by running the suite rather than by
+  reading: `apply_capabilities()`'s own mechanism (`prctl`,
+  `capget`, `capset`) is not in `lids.c`'s `strict_allow[]`, so placing
+  it after seccomp installation makes every house with `lids=seccomp`
+  SIGSYS itself the instant it tries to drop its own bounding set —
+  reproduced directly, every default-city house killed with
+  `signal=31`, including houses that declare no `capabilities=` at all
+  (UNSET still runs the drop-everything path). The actual order in
+  `nwsup.c` is NEWNET → NEWNS → brick pivot → Landlock →
+  **capability drop** → seccomp → `execv`: after every lid that can
+  change what `/` or the network namespace look like, but *before*
+  seccomp, because seccomp is the one lid whose own allow-list the drop
+  mechanism's syscalls would otherwise have to be added to. Widening
+  `strict_allow[]` to cover `prctl`/`capget`/`capset` was rejected
+  rather than attempted: that would be a real widening of what the
+  confined *house's own exec'd program* can do, not merely an nw-sup
+  implementation convenience, and `runtime.md`'s "adding a syscall to
+  the allow-list requires naming the unit that needs it and why" rule
+  argues against granting it to every seccomp house just so nw-sup can
+  drop capabilities after installing the filter. Dropping before
+  seccomp costs nothing seccomp itself needs: `mount`/`unshare`/
+  `pivot_root` are already absent from `strict_allow[]` regardless of
+  capabilities, so capability enforcement and seccomp enforcement remain
+  independent axes; only their *ordering* relative to each other moved.
 - **Interplay with Landlock, seccomp, user namespaces.** No user
   namespaces exist in this tree (every house is real uid 0, invariant 5)
   so there is no `CAP_*`-in-a-userns subtlety to design around yet — that
@@ -426,15 +442,25 @@ deferred "rootless houses" item, exactly as §6's own decision states.
   answer, and this note explicitly does not pre-empt it. Landlock and
   seccomp are orthogonal axes (what paths/syscalls, not what
   capabilities), so no interaction beyond ordering.
-- **Mechanism.** In the forked child, after lids and before `execv`:
+- **Mechanism.** `claims` found this bullet still said "after lids",
+  unedited by the "Drop order" correction two bullets up which says
+  the opposite and is what the code does: seccomp is one of the four
+  `lids` bits, and the drop runs BEFORE it, after every OTHER lid
+  (newnet, newns, the brick pivot, Landlock). In the forked child, in
+  that position, before `execv`:
   `capset(2)` (or the `libcap` equivalent hand-rolled the way this TCB
   hand-rolls everything else — no libcap dependency, matching this
   project's own no-external-library discipline for the TCB) to drop the
   bounding set via repeated `PR_CAPBSET_DROP` for every bit not in the
-  plan's declared set, then clear permitted/effective/inheritable/ambient
+  plan's declared set, then clear permitted/effective/inheritable
   for anything dropped, keeping `PR_SET_NO_NEW_PRIVS` as already set.
-  Read back from `/proc/<pid>/status`'s `CapBnd`/`CapEff`/`CapPrm`/
-  `CapAmb` hex fields, matching the amendment's own stated read-back
+  **Not ambient** — `claims` found that word here too, and
+  `apply_capabilities()` never calls `prctl(PR_CAP_AMBIENT_RAISE...)`;
+  nothing in this TCB ever raises the ambient set at all, so there is
+  no ambient bit for this drop to clear. Read back from
+  `/proc/<pid>/status`'s `CapBnd`/`CapEff`/`CapPrm` hex fields (not
+  `CapAmb` — `test_capabilities_readback` reads `CapEff` only), matching
+  the amendment's own stated read-back
   mechanism exactly.
 - **Defaults, from primary sources, marked as required by the
   amendment.** Wine/Proton's own documented need: `CAP_SYS_NICE`, for
@@ -610,12 +636,49 @@ with the actual `errno` rather than silently clamping, matching
 `pid1.c`'s own "named shortfall, never start fewer than named" pattern
 for the city-wide case).
 
+**Built differently than proposed above, and said here rather than
+left for a reader to find by diffing against the code.** `NW_E_NOFILECAP`
+was never built — `drift` confirmed it in neither `blob.h` nor
+`nwcheck.c`. The interaction is handled by *ordering* instead: `nofile`'s
+setrlimit runs before `capabilities`'s drop (same reasoning as
+`oom_score_adj`, §10 item 3), so a plan combining the two gets whatever
+raise its still-full capability set allows at the moment of the write,
+rather than a bake-time or boot-time refusal of the combination. That is
+a real, working difference from what this paragraph proposed, not a gap:
+the ordering makes the structural refusal unnecessary rather than
+merely deferring it, the same way `oom_score_adj` running first means no
+plan is refused for combining a negative value with a capability drop
+either — provided the write happens, as designed, before the drop.
+
+**A second ordering defect, found by `fd-auditor` and fixed, not merely
+proposed-around: `nofile` cannot be a single unconditional
+`rl.rlim_cur = nofile` at that one early point, because it can LOWER
+the limit as easily as raise it, and `lid_brick()`/`lid_landlock()`
+run immediately after and still need to open several more descriptors
+(a loop-control fd and a loop-device fd, the brick image fd, a
+Landlock ruleset fd plus one `O_PATH` fd per bind).** A baker-accepted
+`nofile=5` on a brick house reproduced `FAIL open loop-control
+errno=24` on every boot, misdiagnosed as a loop-device defect,
+permanently burning the restart budget. The applier is split: a RAISE
+runs at the position described above (still holding `CAP_SYS_RESOURCE`,
+before `lid_brick`/`lid_landlock` open anything); a LOWER is deferred
+past every lid that needs headroom, to immediately before `execv`
+(after `apply_capabilities()`, before `seccomp` is installed, so no
+seccomp allow-list question even arises for it). `nofile=5` in the same
+plan now boots clean. `test_tight_nofile_does_not_starve_the_brick_pivot`
+pins it, and is shown failing against the pre-fix single-point applier,
+reproducing the exact `errno=24` line above.
+
 **Read-back**: `/proc/<pid>/limits`, parsing the `Max open files` row's
 soft value — a text-format read, unlike the other three fields'
 numeric `/proc` reads, so the test needs its own small parser; worth
-noting as a minor asymmetry rather than a problem.
+noting as a minor asymmetry rather than a problem. **Built as read-back
+only** — the EMFILE-pairing probe below was not built; see "Tests,
+summarized".
 
-**Control**: a house declaring `nofile=16` that then successfully opens
+**Control** (not built; the paragraph below records the design intent,
+per this note's own discipline of keeping a proposal legible even where
+the code took a narrower path): a house declaring `nofile=16` that then successfully opens
 a 17th file descriptor and is NOT killed/blocked is the over-acceptance
 direction (mirrors `plan.md`'s "missing direction" lesson about
 bind-loop over-rejection — a limit test satisfied only by the
@@ -671,7 +734,15 @@ as a diff against the question.
    (`nofile`'s setrlimit, `oom_score_adj`'s `/proc` write,
    `capabilities`'s drop) relative to each other, all three already
    ordered *after* mounts/cgroup/lids and *before* exec per the
-   amendment. **Decided: keep the original recommended order —
+   amendment. **This item is about their order relative to EACH
+   OTHER, not their position in the full lid sequence** — `claims`
+   found the imprecise "after mounts/cgroup/lids" phrasing repeated
+   here from the amendment without noting that the real code runs
+   `oom_score_adj`/`nofile` before the brick pivot, Landlock and
+   seccomp, only after `NEWNET`/`NEWNS` and cgroup placement (`clone3`
+   time); the exact sequence is in §7's "Drop order" bullet and §9's
+   "Mechanism"/correction paragraphs, which this item does not repeat.
+   **Decided: keep the original recommended order —
    `oom_score_adj` first, `nofile` second, `capabilities` last —
    confirmed by fault injection rather than assumed, per the operator's
    explicit instruction.** The operator recalled an earlier measurement
@@ -741,13 +812,38 @@ as a diff against the question.
 `lock`: zero-restart-when-unlocked integration test, idle `STATUS`,
 edge-on-unlocked bake+boot refusal pair. `stop_signal`: a fixture that
 traps its declared signal and a control that traps the *wrong* one and
-must NOT catch it. `capabilities`: three isolated-mechanism probes
-(`mknod`/`mount`/raw-socket, capability-only, no other lid) plus a
-`CAP_SYS_PTRACE` control scoped to the negative finding (§7), plus
-read-back string match. `task_cap`: fork-bomb-capped-while-neighbor-
-advances. `oom_score_adj`: read-back only, ordering explicitly marked
-untestable. `nofile`: open-to-the-declared-limit-then-EMFILE-on-the-next
-pair, plus the `capabilities`-drops-`CAP_SYS_RESOURCE` cross-refusal.
+must NOT catch it. `capabilities`: read-back only in this environment — the isolated-mechanism
+probes this section originally proposed (`mknod`/`mount`/raw-socket,
+capability-only) need a house that actually reaches `execv()` with the
+declared set applied, which this container can exercise, so a single-
+declared-bit readback test exists instead of the three probes; the probes
+themselves are not built. `task_cap`: **environment-blocked, matching
+`mem_high`/`mem_max`/`cpu_weight`'s own precedent exactly** — this
+container's cgroup v2 mount offers only the `hugetlb` controller
+(`cat /sys/fs/cgroup/unified/cgroup.controllers`), so `pids` delegation
+is unavailable here and no boot can exercise `pids.max` enforcement.
+No `make test` assertion exists for it; the fixture (city, syscall,
+probe) is handed to `tools/HANDOFF-resources.md` for a machine with real
+`pids` delegation, same as the three existing cgroup-blocked fields.
+`oom_score_adj`: read-back only, and **the read-back test does not pin
+the write-before-capabilities ordering** — `control` ran the actual
+negative control (moving the write to after the capability drop) and
+the test stayed green, because a positive value needs no capability
+either side of the drop. This container's own process lacks
+`CAP_SYS_RESOURCE` (measured, §8, `CapEff` bit 24 clear) even before
+nw-sup's own drop runs, so no declared `capabilities=` set could
+restore it for a test to exploit; the ordering decision itself rests
+on the one-time fault-injection measurement in §10 item 3, not on a
+regression test. `nofile`: read-back only in the suite as built — the
+EMFILE-pairing probe this section originally proposed (open to the
+declared limit, then assert the next open fails `EMFILE`) was not
+built, matching every other field in this bump that ships with less
+than its own design intent. There is also no `capabilities`-drops-
+`CAP_SYS_RESOURCE` cross-refusal: `drift` confirmed `NW_E_NOFILECAP`
+was never built in either `blob.h` or `nwcheck.c` — the interaction
+this bullet originally described a structural check for is handled by
+ordering alone (`nofile`'s setrlimit runs before the capability drop,
+same reasoning as `oom_score_adj`), not by a refusal.
 `grace_period`/`supervisor_death_policy`: a crafted blob with a nonzero
 value in the reserved-but-unapplied field, refused by name, matching
 `plan.md`'s Definition of done convention for every new check.

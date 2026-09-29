@@ -128,16 +128,19 @@ BindsNeedBrick ==
 
    THE ONLY FIELD OF struct nw_res MODELLED HERE, and the rest of the
    block is deliberately absent rather than accidentally missing. Of the
-   fields not modelled, cpu_weight, sched_policy and nice are range
-   checks against the kernel's own bounds -- arithmetic against
-   constants this file does not carry, so adding them means a second
-   copy of each bound, which is invariant 3's drift class for the sake
-   of a conjunct nothing exercises. mem_high and mem_max have an
-   ORDERING rule and no range; cpu_mask, io_rbps and io_wbps are
-   unchecked entirely, because every 64-bit value of a mask, a byte
-   count or a rate is a legal declaration and there is no bound to
-   quote. (This said "the other eight fields are range checks", which
-   is true of three of them. `claims`.) All of it is pinned in both
+   fields not modelled, cpu_weight, sched_policy, nice and oom_score_adj
+   are range checks against the kernel's own bounds -- arithmetic
+   against constants this file does not carry, so adding them means a
+   second copy of each bound, which is invariant 3's drift class for
+   the sake of a conjunct nothing exercises. mem_high and mem_max have
+   an ORDERING rule and no range; cpu_mask and task_cap are unchecked
+   entirely, because every 64-bit value of a mask or a declared count
+   is a legal declaration and there is no bound to quote. (This said
+   "the other eight fields are range checks", which is true of three
+   of them. `claims`. docs/options/31 deleted io_rbps/io_wbps --
+   formerly two of the unchecked fields -- and added task_cap
+   [unchecked] and oom_score_adj [range-checked], moving the counts
+   from three/two/three to four/two/two.) All of it is pinned in both
    directions by test_checker_rejects_crafted_resources -- NOT by
    test_checker_rejects_crafted_fields, which this comment named for a
    round and which crafts nothing in the block.

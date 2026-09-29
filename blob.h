@@ -24,7 +24,18 @@
  * diagnosis on a stale blob lies. plan-formats.txt has the row, re-derived
  * by tests/run.py's own test_magic_moves_with_the_layout, never hand-
  * computed. */
-#define NW_MAGIC        "NWPLAN11"
+/* Bumped 11 -> 12 on 2026-09-29: docs/options/31-phase4-plan-bump.md.
+ * struct nw_res loses io_rbps/io_wbps and gains task_cap/oom_score_adj;
+ * struct nw_unit loses sched_ext (its byte is reused for `lock`, which
+ * is size-neutral -- one field deleted, one added, in the same bump,
+ * per docs/options/22's own encoding argument) and gains stop_signal,
+ * grace_period, nofile, capabilities and supervisor_death_policy, all
+ * appended after `res`. Every one of those is a layout change under the
+ * same rule the two bumps above state: the magic and the layout move
+ * together or the diagnosis on a stale blob lies. plan-formats.txt has
+ * the row, re-derived by test_magic_moves_with_the_layout, never
+ * hand-computed. */
+#define NW_MAGIC        "NWPLAN12"
 #define NW_NAME_LEN     32
 #define NW_PATH_LEN     128
 /* PHASE 3: THE PLAN CARRIES A HASH, NOT A PATH. `brick` is 32 raw bytes of
@@ -352,22 +363,100 @@ _Static_assert((NW_DUP_SLOTS & (NW_DUP_SLOTS - 1)) == 0,
 #define NW_SCHED_IDLE    3u
 #define NW_SCHED_MAX     NW_SCHED_IDLE
 
-/* docs/options/15-per-house-scheduling.md. A DIFFERENT mechanism from
- * NW_SCHED_* above -- that is sched_setscheduler(2)'s classic policy
- * (SCHED_OTHER/BATCH/IDLE), this is sched_ext: a scheduling policy
- * loaded as a kernel-verified BPF program (mainline since Linux 6.12,
- * gated on CONFIG_SCHED_CLASS_EXT). Spelled NW_SCHED_EXT_* throughout,
- * never NW_SCHED_*, and keyed in the plan as `sched-ext=`, never
- * `sched=` -- reusing that name would collide two mechanisms onto one
- * key, found and refused before any code was written for it.
+/* docs/options/15-per-house-scheduling.md's sched_ext mechanism (a
+ * scheduling policy loaded as a kernel-verified BPF program) was
+ * DELETED in the same bump that adds `lock` below -- docs/options/31,
+ * Section 3. No working, loadable artifact exists on this project's own
+ * test kernel (measured three times; the newest, docs/options/15's
+ * "Attempt 3", got a real packaged binary to an actual load attempt and
+ * it failed on a kernel-specific BTF mismatch), so the field's only
+ * real behavior was ever a refusal, by one of two names, for a plan
+ * that declared it -- a two-line refusal at a call site, not a byte in
+ * every blob. `NW_SCHED_EXT_*` and `sched_ext_supported()`/
+ * `apply_sched_ext()` in nwsup.c are gone with it. `NW_SCHED_*` above,
+ * `sched_setscheduler(2)`'s classic policy, is UNTOUCHED -- a genuinely
+ * different mechanism that was never at risk of confusion with this one
+ * except by name, which is why `sched-ext=` and `sched=` were always
+ * two keys. */
+
+/* docs/options/22-lock-unlock.md. Reuses the byte sched_ext freed,
+ * above -- one field deleted and one added in the same bump costs
+ * nothing beyond what the bump already spends (NW_UNIT_SIZE's `4`
+ * single-byte-field term is unchanged). LOCKED MUST BE 0: not for
+ * cross-magic compatibility (the magic bump already invalidates every
+ * older blob), but so that a city file that does not declare `lock=`
+ * at all bakes to locked, matching every existing plan's actual
+ * behavior today -- the alternative would force every plan to be
+ * rewritten at the exact moment of the bump merely to keep its present
+ * behavior. `nw_decide()`'s own `lock` PARAMETER (decide.h) uses the
+ * opposite convention, 1 = LOCKED: that function was built and proven
+ * before this field existed, matching the sense an English reader
+ * expects ("locked" is true), and the blob byte's sense is chosen for
+ * the reason above instead. nwsup.c inverts one into the other at the
+ * one point it reads the byte; nowhere else needs to know both
+ * conventions exist. */
+#define NW_LOCK_LOCKED    0u
+#define NW_LOCK_UNLOCKED  1u
+#define NW_LOCK_MAX       NW_LOCK_UNLOCKED
+
+/* docs/options/31-phase4-plan-bump.md Section 5 and Section 10 item 5.
+ * The signal `nw-sup` sends a house to ask it to stop -- at every kill()
+ * site that currently hardcodes SIGTERM (nwsup.c's on_term() handler
+ * and the two ordinary-control-flow TERM_CHILD sites nw_decide()
+ * governs). UNSET (0) behaves exactly like TERM (today's only
+ * behavior); the explicit TERM value exists so a plan can RECORD the
+ * choice rather than only inherit it, the same shape NW_SCHED_UNSET
+ * vs. NW_SCHED_OTHER already uses. A closed, named set rather than a
+ * raw signal number: a house declaring KILL would be asking this init
+ * to do something indistinguishable from not stopping it gracefully at
+ * all, and a house declaring SEGV is asking for something this init
+ * has no business sending. */
+#define NW_STOPSIG_UNSET  0u
+#define NW_STOPSIG_TERM   1u
+#define NW_STOPSIG_INT    2u
+#define NW_STOPSIG_HUP    3u
+#define NW_STOPSIG_QUIT   4u
+#define NW_STOPSIG_MAX    NW_STOPSIG_QUIT
+
+/* docs/options/31-phase4-plan-bump.md Section 7, amendment item A.1. Bit
+ * positions for `struct nw_unit.capabilities`. THESE ARE THE KERNEL'S OWN
+ * NUMBERING (<linux/capability.h>), not a scheme this project invented --
+ * a read-back from /proc/<pid>/status's CapBnd/CapEff/CapPrm/CapAmb hex
+ * fields then needs no translation in either direction. Declared here,
+ * once, so the baker (which spells plan-language names like
+ * `capabilities=sys_nice`) and nw-sup (which drops everything outside the
+ * declared set via PR_CAPBSET_DROP + capset) read one source rather than
+ * each hand-typing the kernel's bit assignments -- invariant 3's drift
+ * class, one level down, the same argument NW_SCHED_* already makes for
+ * a smaller table.
  *
- * This round's closed set is exactly one name: DEFAULT, the no-op
- * policy that proves the plumbing without needing a working BPF
- * artifact this round's environment cannot build (see the design note
- * for the measurement). UNSET (0) means "no sched-ext declared." */
-#define NW_SCHED_EXT_UNSET   0u
-#define NW_SCHED_EXT_DEFAULT 1u
-#define NW_SCHED_EXT_MAX     NW_SCHED_EXT_DEFAULT
+ * A STARTER VOCABULARY, not the full 41 the kernel defines today.
+ * Widening it later needs no magic bump -- the storage is already a
+ * uint64_t bitmask sized for CAP_LAST_CAP, and adding a name is a baker
+ * and nw-sup change only, the same way sched_ext's own closed set could
+ * have grown without one. Chosen for what this project's own research
+ * has actually named a need for (docs/options/31 Section 7: CAP_SYS_NICE,
+ * sourced from Proton's own GitHub issue #7031; CAP_SYS_RESOURCE and
+ * CAP_SYS_PTRACE, both discussed at length against primary sources in
+ * docs/options/20 Section 6) plus a handful of ordinary, commonly-needed
+ * classes -- not an attempt at a complete or principled subset of 41. */
+#define NW_CAP_CHOWN            0u
+#define NW_CAP_DAC_OVERRIDE     1u
+#define NW_CAP_FOWNER           3u
+#define NW_CAP_KILL             5u
+#define NW_CAP_SETGID           6u
+#define NW_CAP_SETUID           7u
+#define NW_CAP_NET_BIND_SERVICE 10u
+#define NW_CAP_NET_ADMIN        12u
+#define NW_CAP_NET_RAW          13u
+#define NW_CAP_SYS_CHROOT       18u
+#define NW_CAP_SYS_PTRACE       19u
+#define NW_CAP_SYS_ADMIN        21u
+#define NW_CAP_SYS_NICE         23u
+#define NW_CAP_SYS_RESOURCE     24u
+#define NW_CAP_SYS_TTY_CONFIG   26u
+#define NW_CAP_MKNOD            27u
+#define NW_CAP_BPF              39u
 
 /* cgroup v2's own range for cpu.weight and the kernel's for nice. Named
  * here so the checker and the baker are quoting the same bound rather
@@ -385,6 +474,14 @@ _Static_assert((NW_DUP_SLOTS & (NW_DUP_SLOTS - 1)) == 0,
 #define NW_CPU_WEIGHT_MAX 10000
 #define NW_NICE_MIN      (-20)
 #define NW_NICE_MAX      19
+/* The kernel's own range for /proc/<pid>/oom_score_adj
+ * (Documentation/filesystems/proc.rst, OOM_SCORE_ADJ_MIN/MAX). Like
+ * `nice`, 0 sits inside this range rather than at a boundary, so 0
+ * being the unset byte collides with 0 being a real, meaningful
+ * declared value (the kernel's own default) -- the baker refuses a
+ * declared oom-score-adj=0 for the same reason it refuses nice=0. */
+#define NW_OOM_ADJ_MIN   (-1000)
+#define NW_OOM_ADJ_MAX   1000
 
 /* THE RESOURCE BLOCK. One per house, flat, and every field UNSET by
  * default -- 0 means "no limit declared", never a limit of zero. A
@@ -427,8 +524,12 @@ struct nw_res {
     uint64_t cpu_mask;     /* bit i = CPU i; 0 = unset, meaning all */
     uint64_t mem_high;     /* memory.high, bytes: throttle; 0 = unset */
     uint64_t mem_max;      /* memory.max,  bytes: backstop; 0 = unset */
-    uint64_t io_rbps;      /* read  bytes/sec; 0 = unset */
-    uint64_t io_wbps;      /* write bytes/sec; 0 = unset */
+    /* io_rbps/io_wbps DELETED, docs/options/31 Section 3: nothing in
+     * nwsup.c has ever written io.max (this machine's cgroup v2 mount
+     * carries no io controller at all -- .claude/rules/runtime.md), and
+     * a declared, unenforced io limit is the nw_res defect this project
+     * already paid for once. Their slot is not reused; layer_bytes
+     * simply moves up, the same as any other deleted field. */
     uint64_t layer_bytes;  /* capacity of the writable layer; 0 = unset */
     uint16_t cpu_weight;   /* cgroup v2 cpu.weight, 1..10000; 0 = unset */
     int8_t   nice;         /* -20..19; 0 = unset, and only under
@@ -439,6 +540,20 @@ struct nw_res {
                             * `nice=0` came to be the one declared zero
                             * the baker accepted. `control`. */
     uint8_t  sched_policy; /* NW_SCHED_*; NW_SCHED_UNSET = unset */
+    /* docs/options/31 Section 8, amendment item A.2. pids.max on the
+     * house's own cgroup (Phase 3's per-generation directory); 0 =
+     * unset = no cap. No range check: unlike cpu_weight or nice, this
+     * is not bounded by a kernel constant worth quoting -- it is
+     * declared policy, the same reasoning invariant 3's neighbour
+     * paragraph gives for cpu_mask. */
+    uint32_t task_cap;
+    /* docs/options/31 Section 8, amendment item A.3. Written before
+     * capabilities are dropped (Section 10 item 3, confirmed by fault
+     * injection: a negative value below the process's current floor
+     * needs CAP_SYS_RESOURCE). 0 = unset; the baker refuses a declared
+     * oom-score-adj=0 the same way it refuses nice=0, see NW_OOM_ADJ_MIN
+     * above. */
+    int16_t  oom_score_adj;
 } __attribute__((packed));
 
 struct nw_unit {
@@ -466,23 +581,57 @@ struct nw_unit {
     uint8_t  kind;       /* NW_KIND_* — was 'critical' until 2026-09-10 */
     uint8_t  budget;     /* deaths for the life of nw-sup; 0 = no restart */
     uint8_t  lids;
-    /* WAS `_pad`, "must stay zero; nwcheck rejects a dirty spare," until
-     * docs/options/15-per-house-scheduling.md gave the reserved spare its
-     * first meaning: NW_SCHED_EXT_*, 0 (UNSET) = no sched-ext declared.
-     *
-     * An old blob is still correctly "no sched-ext declared" under the
-     * new meaning -- the byte's OLD invariant (every sealed blob has it
-     * at 0) and the new field's UNSET value coincide, so no existing
-     * blob is reinterpreted. That was argued here as a reason a magic
-     * bump was not NEEDED for safety, and it is still true; it is not,
-     * on its own, a reason not to bump. `test_magic_moves_with_the_
-     * layout` hashes this declaration's own text (name included, not
-     * only offset/extent/type), found the rename, and required one
-     * regardless -- correctly: the ledger's job is to notice this file
-     * changed, not to adjudicate whether the change was safe. NW_MAGIC
-     * moved NWPLAN09 -> NWPLAN10, `plan-formats.txt` has the row. */
-    uint8_t  sched_ext;  /* NW_SCHED_EXT_*; NW_SCHED_EXT_UNSET = unset */
-    struct nw_res res;   /* every field unset = unlimited; see nw_res */
+    /* WAS `_pad`, then `sched_ext` (docs/options/15) until
+     * docs/options/31 deleted sched_ext in the same bump that gives the
+     * byte its third meaning: `lock`, docs/options/22. NW_LOCK_LOCKED
+     * (0) is the default -- an old blob's byte was always 0 under every
+     * name this position has held, and 0 continues to mean "the
+     * ordinary, always-forking behavior" under this meaning too, the
+     * same way NW_SCHED_EXT_UNSET's 0 once did. That is not a reason to
+     * skip the magic bump; NW_MAGIC moves regardless, because the
+     * ledger's job is to notice this declaration's text changed, not to
+     * adjudicate whether the reuse was safe -- test_magic_moves_with_
+     * the_layout hashes the text, not the value. NW_MAGIC moved
+     * NWPLAN11 -> NWPLAN12, `plan-formats.txt` has the row. */
+    uint8_t  lock;        /* NW_LOCK_*; NW_LOCK_LOCKED = default */
+    struct nw_res res;    /* every field unset = unlimited; see nw_res */
+    /* Everything below is NEW in this bump, appended after `res` rather
+     * than interleaved with it or with the fields above -- so every
+     * existing NW_AT offset up to and including `res` is unchanged, and
+     * only the fields that did not exist before have new ones to pin. */
+    uint8_t  stop_signal;         /* NW_STOPSIG_*; UNSET behaves as TERM */
+    uint32_t grace_period;        /* ms; 0 = unset. Declaring nonzero is
+                                    * refused at nw-sup startup until the
+                                    * escalation applier lands -- the
+                                    * plan-format bump adds the byte, not
+                                    * the mechanism (docs/options/31
+                                    * Section 5). */
+    uint32_t nofile;               /* RLIMIT_NOFILE soft target; 0 = unset,
+                                    * meaning the city-wide default PID 1
+                                    * already computes (pid1.c,
+                                    * NW_BOOT_NEED). */
+    uint64_t capabilities;         /* bit i = Linux capability i (the
+                                    * kernel's own CAP_* numbering, so a
+                                    * read-back from /proc/<pid>/status
+                                    * needs no translation); 0 = unset =
+                                    * drop everything, a DELIBERATE,
+                                    * encoded choice under this magic --
+                                    * see docs/options/31 Section 10 item
+                                    * 2. */
+    uint8_t  supervisor_death_policy; /* RESERVED: must be 0. No plan
+                                    * syntax exists for this byte yet --
+                                    * the applier and the policy
+                                    * vocabulary are their own later
+                                    * design-note round (docs/options/31
+                                    * Section 6) -- so unlike
+                                    * grace_period, which has real,
+                                    * definable numeric syntax with no
+                                    * mechanism yet, this byte has no
+                                    * legal declared value at all today.
+                                    * nwcheck.c refuses it nonzero the
+                                    * same way a stray `_pad` byte always
+                                    * was refused, and the baker never
+                                    * offers a key for it. */
 } __attribute__((packed));
 
 /* A path made visible inside a house's brick before it pivots. Bind mounts of
@@ -619,9 +768,10 @@ struct nw_hdr {
                    "bump NW_MAGIC")
 /* Hand-written from the field widths, NOT sizeof(struct nw_res) -- that
  * would fold the proof into an identity, which is the shape HISTORY 53
- * records a fix doing to a CBMC harness. Six 64-bit fields, one 16-bit
- * and two 8-bit. */
-#define NW_RES_SIZE  (6 * 8 + 2 + 1 + 1)
+ * records a fix doing to a CBMC harness. Four 64-bit fields (io_rbps/
+ * io_wbps deleted, docs/options/31), one 16-bit, two 8-bit, one 32-bit
+ * (task_cap) and one 16-bit (oom_score_adj). */
+#define NW_RES_SIZE  (4 * 8 + 2 + 1 + 1 + 4 + 2)
 _Static_assert(sizeof(struct nw_res) == NW_RES_SIZE,
                "resource block size drifted: a field was added, removed "
                "or resized, bump NW_MAGIC");
@@ -629,8 +779,12 @@ _Static_assert(sizeof(struct nw_res) == NW_RES_SIZE,
  * this define as a parenthesised expression and evaluating it, which a
  * backslash continuation defeats -- and it degraded as "blob.h has no
  * NW_UNIT_SIZE as a parenthesised expression", which is at least the
- * error naming its own cause. */
-#define NW_UNIT_SIZE (NW_NAME_LEN + NW_PATH_LEN + NW_BRICK_HASH + NW_NAME_LEN + 4 + NW_RES_SIZE)
+ * error naming its own cause. Every trailing literal (4, 1, 4, 4, 8, 1)
+ * is hand-written from the fields' own widths, the same as the
+ * original trailing 4 always was -- one per field appended since
+ * docs/options/31: stop_signal, grace_period, nofile, capabilities,
+ * supervisor_death_policy, in that order. */
+#define NW_UNIT_SIZE (NW_NAME_LEN + NW_PATH_LEN + NW_BRICK_HASH + NW_NAME_LEN + 4 + NW_RES_SIZE + 1 + 4 + 4 + 8 + 1)
 _Static_assert(sizeof(struct nw_unit) == NW_UNIT_SIZE,
                "unit size drifted: a field was added, removed or resized");
 NW_AT(nw_unit, name,      0);    NW_EXTENT(nw_unit, name,      NW_NAME_LEN);
@@ -640,8 +794,14 @@ NW_AT(nw_unit, layer,     192);  NW_EXTENT(nw_unit, layer,     NW_NAME_LEN);
 NW_AT(nw_unit, kind,      224);  NW_TYPE(nw_unit, kind,   uint8_t);
 NW_AT(nw_unit, budget,    225);  NW_TYPE(nw_unit, budget, uint8_t);
 NW_AT(nw_unit, lids,      226);  NW_TYPE(nw_unit, lids,   uint8_t);
-NW_AT(nw_unit, sched_ext, 227);  NW_TYPE(nw_unit, sched_ext, uint8_t);
+NW_AT(nw_unit, lock,      227);  NW_TYPE(nw_unit, lock,   uint8_t);
 NW_AT(nw_unit, res,       228);  NW_EXTENT(nw_unit, res,  NW_RES_SIZE);
+NW_AT(nw_unit, stop_signal, 270);       NW_TYPE(nw_unit, stop_signal, uint8_t);
+NW_AT(nw_unit, grace_period, 271);      NW_TYPE(nw_unit, grace_period, uint32_t);
+NW_AT(nw_unit, nofile,     275);        NW_TYPE(nw_unit, nofile, uint32_t);
+NW_AT(nw_unit, capabilities, 279);      NW_TYPE(nw_unit, capabilities, uint64_t);
+NW_AT(nw_unit, supervisor_death_policy, 287);
+NW_TYPE(nw_unit, supervisor_death_policy, uint8_t);
 
 /* The block's own members, for the same reason the unit's are here: an
  * offset pins where a member STARTS and what the struct TOTALS, and a
@@ -653,12 +813,12 @@ NW_AT(nw_unit, res,       228);  NW_EXTENT(nw_unit, res,  NW_RES_SIZE);
 NW_AT(nw_res, cpu_mask,     0);  NW_TYPE(nw_res, cpu_mask,     uint64_t);
 NW_AT(nw_res, mem_high,     8);  NW_TYPE(nw_res, mem_high,     uint64_t);
 NW_AT(nw_res, mem_max,     16);  NW_TYPE(nw_res, mem_max,      uint64_t);
-NW_AT(nw_res, io_rbps,     24);  NW_TYPE(nw_res, io_rbps,      uint64_t);
-NW_AT(nw_res, io_wbps,     32);  NW_TYPE(nw_res, io_wbps,      uint64_t);
-NW_AT(nw_res, layer_bytes, 40);  NW_TYPE(nw_res, layer_bytes,  uint64_t);
-NW_AT(nw_res, cpu_weight,  48);  NW_TYPE(nw_res, cpu_weight,   uint16_t);
-NW_AT(nw_res, nice,        50);  NW_TYPE(nw_res, nice,         int8_t);
-NW_AT(nw_res, sched_policy, 51); NW_TYPE(nw_res, sched_policy, uint8_t);
+NW_AT(nw_res, layer_bytes, 24);  NW_TYPE(nw_res, layer_bytes,  uint64_t);
+NW_AT(nw_res, cpu_weight,  32);  NW_TYPE(nw_res, cpu_weight,   uint16_t);
+NW_AT(nw_res, nice,        34);  NW_TYPE(nw_res, nice,         int8_t);
+NW_AT(nw_res, sched_policy, 35); NW_TYPE(nw_res, sched_policy, uint8_t);
+NW_AT(nw_res, task_cap,     36); NW_TYPE(nw_res, task_cap,     uint32_t);
+NW_AT(nw_res, oom_score_adj, 40); NW_TYPE(nw_res, oom_score_adj, int16_t);
 /* name and exec_path are char: nwcheck.c hands them to path_ok_len and
  * name_ok as char *. `brick` is uint8_t BECAUSE IT IS NO LONGER TEXT -- 32
  * raw bytes, never printed, never parsed, never passed to a string
@@ -728,26 +888,29 @@ enum {
     NW_E_DUPNAME = 6,
     NW_E_PATH = 7,
     /* NW_E_RSV was "reserved byte nonzero" -- the spare's old, sole
-     * meaning. Renamed in place (same numeric code, same slot in
-     * errs[]) rather than retired and re-added at the end, when the
-     * spare gained its first real meaning: docs/options/15-per-house-
-     * scheduling.md. */
-    NW_E_SCHEDEXT = 8,
-    NW_E_LIDS = 9,
-    NW_E_KIND = 10,
+     * meaning -- then NW_E_SCHEDEXT, renamed in place when the spare
+     * gained its first real meaning (docs/options/15-per-house-
+     * scheduling.md). NW_E_SCHEDEXT is NOW RETIRED, docs/options/31:
+     * sched_ext is deleted, not reassigned, so unlike the RSV -> SCHEDEXT
+     * rename there is no successor to keep the slot for. The codes below
+     * shifted down by one -- the same precedent NW_E_BRICK's own
+     * retirement already set two bullets down: never assume a numeric
+     * value, read the enum. */
+    NW_E_LIDS = 8,
+    NW_E_KIND = 9,
     /* NW_E_BRICK was 11 and is RETIRED, not renumbered around: phase 3 made
        `brick` 32 raw bytes of hash, and there is no invalid value of those
        bytes to report. The codes below shifted down by one, which is the
        precedent this enum already set -- never assume a numeric value, read
        the enum. */
-    NW_E_BRICKNS = 11,
-    NW_E_BINDS = 12,
-    NW_E_BINDIDX = 13,
-    NW_E_BINDPATH = 14,
-    NW_E_LLBRICK = 15,
-    NW_E_LAYER = 16,
-    NW_E_LAYERPAIR = 17,
-    NW_E_LAYERDUP = 18,
+    NW_E_BRICKNS = 10,
+    NW_E_BINDS = 11,
+    NW_E_BINDIDX = 12,
+    NW_E_BINDPATH = 13,
+    NW_E_LLBRICK = 14,
+    NW_E_LAYER = 15,
+    NW_E_LAYERPAIR = 16,
+    NW_E_LAYERDUP = 17,
     /* The resource block. Range faults and the cross-field pairs, each
      * with its own code: "resource block" as one code would make the
      * refusal name the block and not the field, and an operator reading
@@ -756,24 +919,40 @@ enum {
      * THAT SENTENCE HAD ONE CODE UNDER IT FOR THE THREE RANGE FAULTS
      * for a round -- a rationale next to code doing its opposite, which
      * is what this project is named after. `tcb-review`. */
-    NW_E_RESWEIGHT = 19,  /* cpu-weight outside cgroup v2's range */
-    NW_E_RESSCHED = 20,   /* sched policy outside the closed set */
-    NW_E_RESNICE = 21,    /* nice outside the kernel's range */
-    NW_E_MEMORDER = 22,   /* throttle at or above the backstop */
-    NW_E_NICEPOL = 23,    /* nice without a declared sched=other */
-    NW_E_CAPNOLAYER = 24, /* layer capacity with no layer to bound */
+    NW_E_RESWEIGHT = 18,  /* cpu-weight outside cgroup v2's range */
+    NW_E_RESSCHED = 19,   /* sched policy outside the closed set */
+    NW_E_RESNICE = 20,    /* nice outside the kernel's range */
+    NW_E_MEMORDER = 21,   /* throttle at or above the backstop */
+    NW_E_NICEPOL = 22,    /* nice without a declared sched=other */
+    NW_E_CAPNOLAYER = 23, /* layer capacity with no layer to bound */
     /* docs/options/17-edges.md. Three codes, one per distinct refusal
      * reason, the same "an operator reading it would have to guess"
      * argument the resource block's own codes are commented with above. */
-    NW_E_EDGES = 25,      /* edge count exceeds NW_MAX_EDGES */
-    NW_E_EDGEIDX = 26,    /* an endpoint out of range, or a self-edge */
-    NW_E_EDGEDUP = 27,    /* the same unordered pair declared twice */
+    NW_E_EDGES = 24,      /* edge count exceeds NW_MAX_EDGES */
+    NW_E_EDGEIDX = 25,    /* an endpoint out of range, or a self-edge */
+    NW_E_EDGEDUP = 26,    /* the same unordered pair declared twice */
     /* THERE IS NO CODE FOR A DECLARED ZERO. `cpu-weight=0` and an
      * omitted cpu-weight are the same byte, so this checker cannot tell
      * them apart and a code for it would be unreachable -- the shape
      * CLAUDE.md's characteristic failure is about, in an enum. The baker
      * refuses it, at bake time only, for the same structural reason
-     * `lids=` is bake-time only. .claude/rules/plan.md records both. */
+     * `lids=` is bake-time only. .claude/rules/plan.md records both.
+     * `task-cap=0` and `oom-score-adj=0` are the same shape and get the
+     * same treatment, docs/options/31. */
+    /* docs/options/31-phase4-plan-bump.md. Five new codes, each pinning
+     * exactly one new field's closed set or range -- the same "an
+     * operator reading it would have to guess" argument every code
+     * above is commented with. */
+    NW_E_LOCK = 27,       /* lock byte outside NW_LOCK_LOCKED/UNLOCKED */
+    NW_E_LOCKEDGE = 28,   /* an unlocked unit named by a declared edge --
+                           * an edge is a promise the plan can't keep for
+                           * a unit nothing ever forks */
+    NW_E_STOPSIG = 29,    /* stop_signal outside the closed NW_STOPSIG_* set */
+    NW_E_SUPDEATH = 30,   /* supervisor_death_policy nonzero: no plan
+                           * syntax exists for this byte yet, so any
+                           * value but the reserved 0 is a corrupt or
+                           * forward-baked blob */
+    NW_E_OOMRANGE = 31,   /* oom_score_adj outside the kernel's -1000..1000 */
     /* Terminator, not a code. nw_errstr's bound and the length of errs[] in
      * nwcheck.c are both derived from it, so the three things that must
      * agree -- last code, array length, bound -- become one number.

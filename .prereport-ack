@@ -1026,26 +1026,11 @@ prose-count	store.c	* so the result is always one complete file with these exact
 # idiom: describes the CLI's own output shape, not a count of anything.
 prose-count	tests/store_probe.c	* Prints one line: RESULT rc=<rc> hex=<hex>
 
-# item #15 (per-house scheduling / sched_ext reject path): false
-# positives, checked individually.
 # "09" is a filename reference (docs/options/09), not a count.
 prose-count	blob.h	* (docs/options/09 was the file-ownership question and was
-# genuine, stable count of the function's own two checks, described
-# immediately beside them -- not a count that can drift silently.
-prose-count	nwsup.c	* Two checks, cheapest first. /sys/kernel/sched_ext is the kobject the
 # describes a single, specific CBMC assertion (there is only one), not
 # a count that could grow or shrink independent of the sentence.
 prose-count	proofs/README.md	`nwcheck.c` moves exactly one assertion in `caller_nw_check` from SUCCESS
-# PAIRED, just not with the identical string: each of these two tests
-# asserts the REAL reason string IS present a few lines above (line
-# 5955 / 6029: "sched-ext value" / "sched-ext unsupported", both `in
-# out`), then asserts the OTHER possible reason is absent -- proving
-# the two guards produce distinguishable outcomes, not that the
-# mechanism ran at all. The heuristic's pairing check looks for the
-# same string's presence nearby; these pair two DIFFERENT strings on
-# purpose, which is why it reads as unpaired.
-unpaired-absence	tests/run.py	expect("sched-ext unsupported" not in out,
-unpaired-absence	tests/run.py	expect("sched-ext no policy artifact" not in out,
 # invariant 3's own fixed structural fact -- four places is the count of files invariant 3 names, not a growable instance count
 prose-count	.claude/rules/plan.md	in four places" says. (This used to quote the literal expressions —
 # historical: describes a past mistake in a dated exchange, not a live claim
@@ -1081,8 +1066,9 @@ prose-count	decide.h	*   live child and we are shutting down", which is the one 
 # naming a single specific input combination just described, not counting a growable set
 prose-count	decide.h	*   the two OTHER places nw-sup sends a child SIGTERM on the main
 # both places are named in the very next clause (the post-fork check and handle_ctl_live()); checkable against the enumeration, per CLAUDE.md's own "name them and the number is redundant but checkable" allowance
-prose-count	nwsup.c	* anything here being able to select them -- this is the one place
-# naming the single call site being described, not counting a growable set
+# reworded when `lock` landed (docs/options/31) -- same claim, new text:
+# naming the single translation site being described, not counting a growable set
+prose-count	nwsup.c	* (1=LOCKED/0=UNLOCKED, decide.h) -- the one place that translation
 prose-count	nwsup.c	* two places nw_decide()'s NW_DECIDE_TERM_CHILD governs a kill
 # same claim as decide.h's "the two OTHER places", both named in the surrounding comment
 prose-count	nwsup.c	/* Covers both of the two cases the code before this
@@ -1215,3 +1201,109 @@ prose-count	docs/QUEUE.md	only the last one actually does — the other two only
 # "the six enforced fields" is the same already-acked enumeration named in
 # full elsewhere in this same document.
 prose-count	docs/QUEUE.md	nwsup.c` finds real reads for the six enforced fields — checked
+
+# docs/options/31 Phase 4 bump (2026-09-29). The findings below are all
+# from that round; each is checked against the tree rather than assumed.
+
+# "one field deleted, one added" describes a specific, already-completed
+# edit (sched_ext's byte reused for lock) named in the same sentence, not
+# a growable instance count. The same shape repeats at blob.h:383 and
+# blob.h:784 (the latter also names the appended fields in full,
+# CLAUDE.md's own "named list immediately following" allowance) and is
+# acked once per site below rather than merged, since prereport keys on
+# the line's own text.
+prose-count	blob.h	* is size-neutral -- one field deleted, one added, in the same bump,
+prose-count	blob.h	* above -- one field deleted and one added in the same bump costs
+prose-count	blob.h	* original trailing 4 always was -- one per field appended since
+# "exactly one new field's closed set or range" is a structural fact
+# about the code-per-field pattern every NW_E_* comment above it already
+# states, not a count of how many codes exist (that count -- five -- is
+# the sentence's own subject two lines up and is not what's flagged here).
+prose-count	blob.h	* exactly one new field's closed set or range -- the same "an
+
+# "Section 10 item N" and "Section N" are citations to a fixed section in
+# docs/options/31-phase4-plan-bump.md, identifying which decision or
+# field a comment is about -- the same already-established pattern as
+# the "Section 1.3" acks elsewhere in this file, not a growable count.
+# One ack per site, since prereport keys on the line's own text.
+prose-count	blob.h	/* docs/options/31-phase4-plan-bump.md Section 5 and Section 10 item 5.
+prose-count	blob.h	* capabilities are dropped (Section 10 item 3, confirmed by fault
+prose-count	blob.h	* see docs/options/31 Section 10 item
+prose-count	docs/ENVIRONMENT.md	specifically to confirm it (docs/options/31 Section 10 item 3,
+prose-count	nwsup.c	* inherited default (docs/options/31 Section 10 item 2) -- so this
+prose-count	nwsup.c	* injection (Section 10 item 3) that a negative value below
+prose-count	tests/run.py	"""docs/options/31 Section 5, Section 10 item 1. No applier exists
+
+# "capget/capset are two syscalls" names the two syscalls in the same
+# clause (capget, capset), a fixed pair this mechanism is built from
+# rather than a count that could silently grow.
+prose-count	nwsup.c	* everything else in the TCB, and capget/capset are two syscalls with a
+
+# "the one field" identifies which single field (task_cap) the rest of
+# the paragraph is about, matching this file's own "singular the one
+# place" idiom used elsewhere in this same round.
+prose-count	tools/HANDOFF-resources.md	the same rule and is the one field where nobody has yet had the machine
+
+# same "Section 10 item N" citation pattern already acked above, added
+# during the control-review fixup to the nofile/oom_score_adj sections.
+prose-count	docs/options/31-phase4-plan-bump.md	`oom_score_adj`, §10 item 3), so a plan combining the two gets whatever
+prose-count	docs/options/31-phase4-plan-bump.md	on the one-time fault-injection measurement in §10 item 3, not on a
+
+# The matcher's documented "which"-matches-English false positive
+# (CLAUDE.md's prereport calibration paragraph), recurring on ordinary
+# prose rather than on a capability-from-tool inference:
+# - nwsup.c:1086 "is installed" is a signal HANDLER being installed via
+#   sigaction, not a machine capability inferred from a tool's presence.
+# - tests/run.py:5042/5046 "which" is the relative pronoun in "the
+#   fixture ... reports which one arrived" / "the existing term-signal
+#   test, which already pins SIGTERM" -- ordinary English, not a tool
+#   check.
+tool-presence	nwsup.c	* BEFORE on_term() below is installed as a handler and never written
+tool-presence	tests/run.py	which one arrived) must report HUP, and must NOT report TERM --
+tool-presence	tests/run.py	which already pins SIGTERM for the unset case; this test pins the
+
+# same false-positive class as the three above: "is installed" is the
+# seccomp FILTER being installed (a step in a fixed code sequence:
+# capability drop then seccomp), not a tool's presence implying a
+# machine capability.
+tool-presence	docs/options/31-phase4-plan-bump.md	(after `apply_capabilities()`, before `seccomp` is installed, so no
+
+# "one field" names task_cap specifically (the paragraph's whole
+# subject), not a count of how many fields remain open -- the same
+# singular idiom this file's own runtime.md acks use elsewhere.
+prose-count	.claude/rules/runtime.md	one field in that file's table that is still genuinely open.
+
+# PAIRED, just not with the identical string -- the same shape as the
+# (now-retired) sched-ext acks this round replaced: each of these three
+# asserts the mechanism actually ran, then asserts the wrong outcome is
+# absent, proving the two outcomes are distinguishable rather than that
+# nothing happened.
+# - test_lock_unlocked_house_never_restarts: `is None` here is paired by
+#   the two START/two-crash assertions a few lines below, which prove a
+#   fork (and a crash) DOES happen when asked -- so "no fork before
+#   START" is a claim about the idle state, not about a mechanism that
+#   never ran. The restart/spent absence is paired by the immediately
+#   preceding `out.count("boom\n") == 2` assertion, which proves two
+#   real crashes occurred -- so "no restart line" is a claim that
+#   nw_decide() saw those crashes and still didn't restart, not that
+#   nothing crashed.
+# - test_stop_signal_custom_signal_delivered: `got={sigterm}` absent is
+#   paired by `got={sighup}` present on the line immediately above --
+#   the house is shown reaching its handler and reporting the signal it
+#   actually got, then shown NOT reporting the other one, which is what
+#   makes this a claim about which signal was sent.
+unpaired-absence	tests/run.py	expect(_find_by_comm(proc.pid, "unit-boom") is None,
+unpaired-absence	tests/run.py	expect("restart lockcheck" not in out and "spent lockcheck" not in out,
+unpaired-absence	tests/run.py	expect(f"got={sigterm}" not in out,
+
+# test_tight_nofile_does_not_starve_the_brick_pivot (fd-auditor finding,
+# nofile raise/lower split): both absences are paired by the `"id=
+# tightnofile" in out` assertion immediately above them in the same
+# function, which proves the house reached exec and ran to completion --
+# without that positive, "no restart line" or "no FAIL line" would be
+# satisfied by the house never running at all. Verified directly: this
+# test was shown FAILING (not merely passing) against the pre-fix
+# unconditional applier, reproducing the exact `FAIL open loop-control
+# errno=24` / `restart tnf` lines these absences check for.
+unpaired-absence	tests/run.py	expect("restart tnf" not in out and "spent tnf" not in out,
+unpaired-absence	tests/run.py	expect(bad not in out,
