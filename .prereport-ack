@@ -1119,7 +1119,3 @@ prose-count	docs/QUEUE.md	made worse. Worth a follow-up paired check on that one
 # named earlier in the same paragraph: test_ctl_exec_resets_sigchld_mask
 prose-count	docs/options/28-hardware-watchdog.md	decide what its death means — which is new logic in the one file this
 # "the one file" is an idiomatic reference to pid1.c, named in the immediately preceding sentence -- not a claim about how many files exist
-prose-count	docs/options/29-rescue-interface.md	is an alternate PID 1 command line that the shipped boot chain
-# false positive: the digit is "PID 1" (the process), not a count word before "command line"
-prose-count	docs/options/29-rescue-interface.md	one place this tool's design touches a rule with a name.
-# idiomatic "the one place" (singular, already-identified point in the preceding paragraph), not an instance-count claim

@@ -490,20 +490,31 @@ Dispatched alongside the tooling fixes above. Two-commit shape per note
   no module directory for the running kernel) — handed to the operator
   as a fixture per `.claude/rules/harness.md`'s existing pattern for a
   claim needing a real boot.
-- **29 — rescue interface.** **GATED — design only, no code.** The
-  operator's own stated foundation ("the console house's existing
-  rescue-slot mechanism") does not exist in the tree as described —
-  checked and reported in the note itself: `slots/rescue` is a sketch
-  in an early, unresolved doc (`docs/options/06`) with nothing wired to
-  it, PID 1's separate `--rescue` mode is unreachable from any real
-  boot, and the console house has no slot relationship at all. The
-  genuinely open question this note flags for the operator is which of
-  these (or a fourth, newly-built rescue slot) this tool is meant to
-  sit inside. Answered independently of note 27's tunnel decision, per
-  instruction: local/serial reachability is the recommended default
-  here, since a rescue boot may have no normal networking up at all;
-  the tunnel is a bonus if it happens to still be reachable, never a
-  dependency. `docs/options/29-rescue-interface.md`.
+- **29 — rescue interface.** **Foundation resolved by the operator,
+  design otherwise unblocked; no code this round.** First draft
+  reported "the console house's existing rescue-slot mechanism" as not
+  existing in the tree; the operator corrected this by reading
+  `rescue.c`/`run_rescue()` directly — `nw-rescue` is real, wired, and
+  tested today (`test_rescue`), just a deliberate placeholder, and this
+  note is its real design, not a fourth mechanism. Reading
+  `run_rescue()`'s own control flow closely in response also reversed
+  an earlier recommendation: rescue mode boots no plan and starts no
+  houses at all (`pid1.c`'s dispatch returns before the normal
+  plan-loading path runs), so there is no live `nw-sup` to query and no
+  case for "extend `nwctl`" — the design is now a separate, small
+  companion tool sharing `nwctl`'s conventions and `tools/unit-info.c`'s
+  blob-reading code, not `nwctl` itself, and no longer gated on Phase
+  4's `nwctl` at all. Local/serial reachability stays the recommended
+  transport, now for a stronger reason than first drafted (no plan
+  means no house could be running a tunnel daemon in this mode even in
+  principle). **One genuinely new, narrower question is open**: growing
+  `rescue.c`'s own body would violate `.claude/rules/runtime.md`'s
+  already-enforced TCB-minimality rule for that exact file; this note
+  recommends the smallest fix that keeps the rule true — `rescue.c`
+  gains exactly one `execv()` of a non-TCB companion binary, nothing
+  else — and flags that landing it needs that rule amended (with
+  `tcb-review`) before code, which is the operator's call, not this
+  note's to make silently. `docs/options/29-rescue-interface.md`.
 - **30 — backup tool.** **No gate — proceeds independently.** Builds on
   the shared content-addressed store (landed). `docs/options/30-backup-tool.md`.
   Distinguishes the store (genuinely content-addressed, "diff hash
@@ -522,6 +533,23 @@ underlying claim, `nwctl` genuinely absent, by a fresh grep) and one LOW
 4-line output; fixed to quote it in full and explain each line). No
 other findings across all four notes; the reviewer's own coverage
 summary lists every checkable claim it verified.
+
+Note 29 re-reviewed after the operator's rescue-foundation correction
+(above): one HIGH (the note's argument for why the proposed companion
+binary would be non-TCB leaned on "no boot-time caller links it in,"
+which does not hold for its own cited precedent, `tools/initrd-init.c`
+— the kernel calls it automatically and it itself execs into `dawn`;
+fixed by re-grounding the argument in `CLAUDE.md`'s TCB table being a
+closed, explicit enumeration rather than a caller-derived rule, and
+flagging that `tcb-review` should re-examine specifically this point),
+one MEDIUM (`--rescue DIR` is not literally required to be the sole
+argument — the dispatch only checks `--plan`/`--slot`/`--slots` are
+absent, confirmed by actually running `nw-root --rescue <dir>
+--hold-ms 400` and reaching rescue mode anyway; fixed), and one
+LOW/MEDIUM (a quoted `sed` line range that stopped short of the
+`_exit(...)` line and closing brace the note's own code block showed;
+fixed to the range that actually reproduces it). `make prereport` and `install-agents.sh
+--check` clean after fixes.
 
 ## Phase 3 — per-house cgroups. Depends on Phase 2.
 
