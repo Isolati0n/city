@@ -950,9 +950,40 @@ What the map does not settle, because it is not a map question:
   `Plan.tla`; `plan.md`'s scope names all four, and any split puts a
   required-atomic change across a boundary.
 
-**Who owns what, this week.** Grok owns `pid1.c`, `dawn.c` and the
-restart loop in `nwsup.c`. Claude owns the baker and the mount path in
-`nwsup.c`. Nobody else touches `plan.als` or `Plan.tla` **without the
+**Who owns what, this week.** Grok owns `pid1.c`, untouched by anything
+below. `dawn.c` is Grok's too, with one qualifier worth stating rather
+than glossing: Phase 3 edited it once, comment-only — rewriting a
+stale comment about cgroup2 being "mounted here and used by nothing
+yet" to describe what actually reads it now — with no change to
+`dawn.c`'s own mount logic. **The restart/wait loop in `nwsup.c` is no
+longer a fixed Grok assignment; it is operator-delegated to whichever
+agent the master brief has working the active phase.** The prior
+sentence ("Grok owns... the restart loop in `nwsup.c`") had already
+stopped describing the repository by the time it was corrected: Phase
+2's pure-core rewrite of the supervision decision (`decide.c`/
+`decide.h`, wired into `nwsup.c`'s main loop and `handle_ctl_live()`)
+and Phase 3's cgroup placement (`clone_into_cgroup()` at the fork call
+site, `cg_kill_sweep()` and the death autopsy immediately after
+`wait_house()` returns) are both squarely parent-side, fork/wait/decide
+code — the restart loop by any reading. Phase 4's `nofile`/`oom_score_adj`/
+capabilities appliers are a softer case, and are named here as
+supporting evidence rather than the central one: they run in the same
+`for(;;)` construct, in the per-house child branch, interleaved
+statement-by-statement with `lid_brick()`/`lid_landlock()` — which
+stays "the mount path," unnarrowed — so "built in that loop" is true of
+the C construct and imprecise about which workstream within it. All
+three were landed and reviewed on the same day this correction was
+written, with no ownership objection raised at the time — a short
+history stated as what it is, not stretched into a longer one, because
+the point does not need stretching: the sentence had already stopped
+describing the repository, whether that took a day or a season. The
+operator corrected it rather than have the next agent inherit it
+unread, the same way `docs/options/17-edges.md` once inherited the
+`plan.als`/`Plan.tla` freeze below and asked rather than assumed.
+Claude still owns the baker and the mount path in `nwsup.c`, which the
+restart loop's own delegation does not narrow. Nobody else touches
+`plan.als` or
+`Plan.tla` **without the
 operator saying so directly** — docs/options/17-edges.md read this
 sentence as a freeze pending exactly that instruction, stopped short of
 editing either file, and named precisely what was left. The operator
