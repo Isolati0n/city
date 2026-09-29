@@ -551,6 +551,45 @@ LOW/MEDIUM (a quoted `sed` line range that stopped short of the
 fixed to the range that actually reproduces it). `make prereport` and `install-agents.sh
 --check` clean after fixes.
 
+Notes 27 and 30 amended by the operator (verified design analysis, not
+a plain instruction): **27**'s §3 Authentication is now a deliberate,
+named decision — the tunnel's own identity (Tailscale) is the sole
+authentication, no separate app-level token — citing Home Assistant's
+`trusted_networks` auth provider (home-assistant/core#15812) as
+precedent for "declare the tunnel identity AS the auth, explicitly,"
+plus an optional additional app-layer check using Tailscale Serve's
+identity-forwarding headers, verified against Tailscale's own current
+docs rather than assumed. **30** gained a quiesce step (STOP the house,
+back up, START it again, closing a mid-write-corruption problem a
+torn read cannot fix by re-running), a staged-path-plus-atomic-rename
+restore (never in-place, with a kill-mid-restore control and a
+pre-restore snapshot as the undo path), and `stat()`-not-`lstat()` when
+backing up a layer root (a symlinked root's target content, not the
+8-byte link). Reviewed by `claims` on just the changed sections: two
+HIGH (§3's residual-risk paragraph misattributed the `SO_PEERCRED`/
+no-token quote and its "One gap worth naming" heading to
+`docs/options/29-rescue-interface.md`, which has neither — the quote
+and heading are `docs/options/11-start-stop-channel.md`'s own
+Authorization section, fixed by re-citing the real source; and 30's
+quiesce step claimed the STOP/START channel was "the same mechanism"
+29's rollback question relies on, when 29's rollback actually depends
+on `tools/stage-candidate.py`'s slot-switching, which 29 itself says
+is *not yet built* — fixed by citing STOP/START on its own terms and
+naming what 29 actually depends on and its own unbuilt status) and one
+MEDIUM (30's descendants paragraph cited `.claude/rules/runtime.md`'s
+whole-machine-shutdown orphan material to support a claim about a
+single house surviving a per-unit STOP, which signals only the house's
+own top pid, never a process group — fixed to state plainly that a
+descendant can survive a STOP and that the cited material is about
+machine shutdown, not this case). Also corrected, found by the same
+pass: a stale `nwsup.c`/`blob.h` line-number citation in 30's opening
+paragraph, drifted since the note was written and now current. Both HA
+citation dates (the note's own explicit 2018-not-2017 correction to
+the operator's stated 2017) and the Tailscale Serve header names were
+independently verified against primary sources and confirmed accurate.
+`make prereport` (one `prose-count` false positive on 27's "the one
+place" idiom, acked) and `install-agents.sh --check` clean after fixes.
+
 ## Phase 3 — per-house cgroups. Depends on Phase 2.
 
 `clone3`+`CLONE_INTO_CGROUP` placement, `nw-sup` itself outside the

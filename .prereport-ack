@@ -1119,3 +1119,5 @@ prose-count	docs/QUEUE.md	made worse. Worth a follow-up paired check on that one
 # named earlier in the same paragraph: test_ctl_exec_resets_sigchld_mask
 prose-count	docs/options/28-hardware-watchdog.md	decide what its death means — which is new logic in the one file this
 # "the one file" is an idiomatic reference to pid1.c, named in the immediately preceding sentence -- not a claim about how many files exist
+# "the one place" is an idiomatic reference to the single Tailscale-header subsection immediately following -- not a claim about how many places exist
+prose-count	docs/options/27-control-app.md	faith, for the one place this note considered going further**: Tailscale

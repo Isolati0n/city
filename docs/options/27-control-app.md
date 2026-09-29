@@ -118,12 +118,12 @@ decision, not because the decision is still open:
   interface exactly as if it were on the LAN — "local network only"
   would make the whole feature useless the moment the phone leaves the
   house, which defeats the stated purpose (a *phone* control panel).
-- It composes with §3 rather than replacing it — the tunnel answers
-  "which devices can reach this app's port at all," and §3 separately
-  answers "does this specific request prove it's the operator." Neither
-  substitutes for the other; a device on the tunnel that isn't the
-  operator's own phone (a second device the operator authorized once
-  and forgot about) still needs the app-level token.
+- §3 answers what happens once a device IS on the tunnel — and, per
+  that section's own decision, the answer is that tunnel membership
+  is itself treated as sufficient, not that a second check follows.
+  A device the operator authorized once and forgot about is exactly
+  §3's own named residual risk, not a gap this bullet's reasoning
+  papers over.
 
 **Where the tunnel daemon runs: alongside the control app, in the same
 house — not as a separate plan unit.** This is a real fork with a
@@ -163,45 +163,81 @@ ships.
 
 ## 3. Authentication
 
-**Threat model, stated explicitly per the operator's own instruction**:
-anyone who can reach this app (i.e., anyone on the tunnel, per §2) and
-who also holds valid app-level credentials can start and stop any
-house and edit the plan. The tunnel bounds *who can attempt to
-authenticate*; the token bounds *who succeeds*. Both layers matter
-because a tunnel's device list can grow beyond "just the operator's
-phone" over the life of a machine (a shared family tunnel network, a
-second device authorized for something unrelated), and because losing
-the phone itself should not mean losing the ability to revoke it
-without re-keying the whole tunnel.
+**Decided, not left as the per-boot-token design this note's first
+draft recommended: the tunnel's own identity is the sole
+authentication.** No separate app-level token, password, or login
+screen — reaching this app at all already means the tunnel (§2)
+authenticated the calling device, and that authentication is what this
+note relies on rather than duplicating with a second credential.
 
-**Recommendation: a token generated per-boot, shown on the console at
-boot, over a token baked at bake time.**
+**This is a deliberate, named decision, not an omission, and the
+precedent is a real one, checked against its own primary source rather
+than assumed.** Home Assistant's authentication docs are explicit that
+login is required by default: "Home Assistant comes with a built-in
+authentication provider enabled by default," using a username and
+password, and the docs' own warning is that omitting the default
+provider "means anyone on your trusted network can log in by selecting
+a username" with no password at all
+(home-assistant.io/docs/authentication/providers/). That is
+`trusted_networks`, a **named, opt-in, second auth provider** —
+network membership treated as sufficient identity, exactly this note's
+own move — added to Home Assistant's core in
+home-assistant/core#15812, "Add trusted networks auth provider."
+**Checked, not assumed: that PR's own commits are dated July–August
+2018, and it merged in 2018, not 2017.** The date given for this
+precedent needs correcting rather than repeating uncorrected — the
+mechanism itself (a named, sanctioned exception where the operator
+explicitly opts a specific network into being sufficient identity, with
+the general default left requiring a password) is exactly what is
+cited here, and the shape holds regardless of which year it shipped.
 
-- A **baked** token is a secret that lives in the sealed plan blob or
-  brick — meaning it is on-disk, at rest, for the entire life of that
-  bake, readable by anything that can read the blob (which, per
-  invariant 8, is diagnostic-CRC-protected, not tamper-protected — the
-  blob was never designed to hold a secret safely). Rotating it means
-  re-baking and re-flashing a slot, which conflicts with invariant 7's
-  spirit even though it is not the plan's *running* state.
-- A **per-boot** token, shown on the physical console at boot time
-  (the same `console=ttyS0` this project already writes kernel output
-  to, per `tools/mkboot.sh`'s `APPEND=`), requires physical or
-  serial-console presence to ever learn it in the first place, is
-  naturally rotated every boot without any re-bake, and is never
-  persisted anywhere the way a baked secret would be. The cost is
-  operator friction — the token must be re-entered into the app after
-  every reboot — which is an acceptable, honestly-stated cost for a
-  feature whose entire premise is "start/stop houses and edit the
-  plan," not a low-stakes convenience.
+**The residual risk, stated plainly rather than left implicit**: this
+trusts every device already on the tunnel, and offers no protection at
+all if one of them is compromised — a stolen or malware-infected phone
+that was legitimately added to the tunnel months ago for something
+unrelated can start/stop any house and edit the plan, with nothing
+here to stop it. That is not a smaller risk than a token would close;
+it is the same risk `docs/options/11-start-stop-channel.md`'s own
+Authorization section already names for the control socket underneath
+this one layer down ("no `SO_PEERCRED` inspection, no token, no
+per-caller allow-list") — this note accepts the equivalent risk one layer up,
+explicitly, rather than adding a token that would only re-create the
+same trust boundary (whoever holds the token) under a different name,
+while costing the operator a second secret to manage and losing the
+"reachable at all" signal the tunnel already gives for free. Revoking a
+compromised device is a tunnel-admin action (removing it from the
+tailnet or equivalent), not an app-level one — worth stating since it
+means this app has no *revoke* feature of its own to design, because
+the tunnel already is that feature.
 
-**Storage on the app's own side**: the phone stores the token in
-whatever the platform's secure-storage primitive is (iOS/Android
-keychain-equivalent) rather than plain preferences, and the token is
-sent over the tunnel's own encrypted channel, never in a URL query
-string (which ends up in logs). None of this is new invention — it is
-ordinary mobile-app secret handling, named here because getting it
-wrong would undermine everything above it.
+**Verified against Tailscale's own current documentation, not taken on
+faith, for the one place this note considered going further**: Tailscale
+Serve adds three identity headers to proxied requests —
+`Tailscale-User-Login` (e.g. `alice@example.com`), `Tailscale-User-Name`
+and `Tailscale-User-Profile-Pic` — and Tailscale's own docs state the
+exact caveat that matters here: these headers are populated only for
+real tailnet users, **not for tagged devices**, and "it's best practice
+to only have the service listen on localhost" when trusting them,
+"otherwise, any user that can call your service directly... could
+trivially provide their own values for these HTTP headers" — Serve
+strips any client-supplied copies of these headers before adding its
+own, specifically to prevent that spoof
+(tailscale.com/docs/features/tailscale-serve). This is directly
+usable here as an *optional, additional* app-layer check — restricting
+this app to one named tailnet login, beyond "reachable on the tunnel at
+all" — but only if the control app is reached through `tailscale
+serve` specifically (a local reverse proxy tailscaled itself runs),
+not by binding directly to the tailscale interface's own address,
+which gets no header injection at all. Using Serve this way also means
+the app's own listener binds `localhost` only, matching Tailscale's own
+stated best practice, and composes cleanly with this note's existing
+decision (§1) that the tunnel daemon and the app share one house and
+one network namespace. Recommended as a real hardening step precisely
+because it was checked against the primary source rather than
+remembered — the header names, the tagged-device exclusion and the
+localhost caveat are the three things worth getting exactly right if
+this is built, not approximated from a general sense of how Tailscale
+identity works.
 
 ## 4. The exact flow
 

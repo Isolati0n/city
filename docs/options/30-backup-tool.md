@@ -21,8 +21,10 @@ before proposing a mechanism.
 written.** `store.h`'s own contract: `nw_store_put()` names a file
 `<dir>/<hex(sha256 of data)><suffix>` and only ever writes it once — "No
 policy: no cleanup, no eviction." `write_evidence()` in `nwsup.c` is the
-one live caller (`nwsup.c:1140`), naming files at
-`NW_EVIDENCE_DIR` (`/nw/evidence`, `blob.h:106`) as `<hex>.evt`. Because
+one live caller (`nwsup.c:2086` as of this note's last check — grep the
+cited line rather than trusting the number if it and the code ever
+disagree, since this exact number has already drifted once), naming
+files at `NW_EVIDENCE_DIR` (`/nw/evidence`, `blob.h:125`) as `<hex>.evt`. Because
 the **name is the hash**, deciding what is missing from a destination
 needs no hashing at all at diff time — `ls` both directories and set-
 subtract the filenames. Verifying a copy is correspondingly cheap: the
@@ -123,6 +125,45 @@ outside `/nw/*`.
 
 ## 3. Mechanism
 
+**Quiesce before backing up a layer, and this reverses this note's own
+first-draft refusal rather than merely adding a step — recorded so
+that reversal is visible, not silently absorbed.** The first draft
+refused "coordinating with a running house or `nw-sup`" outright,
+reasoning that a torn read was an accepted, stated cost. That reasoning
+understated what a torn read can do to this specific category: a file
+hashed while a house is actively writing it (a save file mid-write,
+not merely mid-flush) can be **internally corrupt** — not "reflects an
+older or newer state," which a re-run would fix, but bytes that never
+formed a valid file at any single instant — and the store then
+preserves that corruption forever, indistinguishable from a good
+backup until the operator tries to restore it. That is a stronger
+defect than "best-effort, accepted" covers, so quiescing is now real
+scope, not a refused enhancement:
+
+1. **STOP** the house via the existing control channel
+   (`docs/options/11-start-stop-channel.md`'s `STOP` verb) — real and
+   already built today, unlike `tools/stage-candidate.py`'s
+   slot-switching, which `docs/options/29-rescue-interface.md`'s own
+   rollback question relies on and which that note says plainly is
+   *not yet* built ("nothing in this tree flips which slot boots
+   next; it is a manual operator action outside any tool", quoting
+   that note's own "Trigger rollback to the other slot" bullet).
+2. **Back up** that house's layer, per the mechanism below.
+3. **START** the house again via the same channel.
+
+This is coordination, not a lock: it uses a verb the house's own
+supervisor already answers, does not hold anything open across the
+backup, and fails closed — if STOP does not reply `OK`, this tool does
+not back up that layer and says so, rather than proceeding against a
+house it could not confirm was stopped. A house already stopped
+(idle, per the lock/unlock design) needs no STOP/START pair at all —
+this tool checks state via the same channel before deciding whether to
+send one. **Still not a general locking mechanism**: only the one
+house whose layer is being backed up is quiesced, only for the
+duration of that one layer's copy, and nothing here coordinates two
+concurrent backups of the same layer with each other (a second
+invariant, unasked for and not designed here).
+
 **Read destination's existing hash list if any, diff against source,
 copy only what's missing — with the qualification §"Why compare hash
 lists" above requires per category:**
@@ -145,24 +186,55 @@ lists" above requires per category:**
   changes, which is the honest cost of choosing the fixed-size
   representation for capacity enforcement).
 
-**Read-only against source, never touches a running house or
-coordinates with nw-sup — stated as a design constraint, not
-merely a description, with the consequence spelled out:** this tool
-takes no lock, sends no signal, and does not check whether a house
-using a given layer is currently running. If it is, a layer's `upper/`
-tree (or `.img` file) can be mutated by the live house *during* the
-backup's own read pass, exactly the crash-consistency risk of copying
-any live, mounted filesystem image without a snapshot — the copy may be
-torn (some files reflect a state before the write, some after,
-internally inconsistent). This is an accepted, stated cost of the "never
-coordinates" constraint rather than an oversight: the alternative is
-either a live lock (which is coordination, explicitly out of scope) or
-a filesystem-level snapshot mechanism (LVM/btrfs/ZFS snapshots), which
-this note does not assume the target disk supports and does not
-propose building. **Recommendation: document this caveat for the
-operator plainly — running the tool while the target house is stopped
-(or the machine is between boots) is the only way this tool gives a
-guaranteed-consistent copy; running it live is best-effort.**
+  **The layer ROOT itself — `NW_LAYER_DIR/<id>` for a sized layer, or
+  `NW_LAYER_DIR/<id>/upper` for an unsized one — is opened with
+  `stat()`, not `lstat()`, before this walk begins.** If that path is
+  itself a symlink (an operator's own doing — pointing a layer at a
+  larger disk, say), `lstat()` would see only the link and back up its
+  eight-or-so bytes of target text instead of the real directory, which
+  silently backs up nothing of the data this tool exists to protect
+  while still reporting success. `stat()` follows the link once, at the
+  root, before any per-file signature comparison starts; nothing below
+  the root is affected by this choice, and an ordinary symlink a HOUSE
+  wrote as its own content, inside the layer, is still walked and
+  backed up as a symlink (an `lstat()`-shaped question, correctly,
+  since that one really is the data). **Control**: bake a layer whose
+  `NW_LAYER_DIR/<id>` entry is itself a symlink to a directory holding
+  known content elsewhere, run the backup, and confirm the destination
+  holds that real content rather than an 8-byte link file — the
+  regression this exists to catch is exactly a backup that reports
+  success while silently protecting nothing.
+
+**Read-only against source in every OTHER respect — this note's first
+draft said "never touches a running house or coordinates with nw-sup"
+as an absolute, and the quiesce step above narrows that to true where
+it still is true: this tool never coordinates with a house's OWN
+computation (no signal into its logic, no awareness of what it is
+doing beyond STOP/START), and never mounts, mutates, or reads-back
+into the live layer path itself — the whole backup is a copy OUT.** The
+STOP/START pair is the one exception, named as an exception rather
+than folded into "read-only" by silently redefining what that word
+covers here.
+
+What the quiesce step does NOT close, stated so the honest limit is
+visible rather than assumed away: a house's own **descendants** it
+forked outside nw-sup's supervision can very much survive a STOP —
+`nw-sup` signals only the house's own top pid (`kill(live, SIGTERM)` in
+`nwsup.c`, never a process-group kill), so an independently-forked
+child is simply reparented and keeps running, exactly as it would
+during ordinary operation; `.claude/rules/runtime.md`'s "orphans are
+not reaped" material is about the whole MACHINE shutting down
+(`reboot(RB_POWER_OFF)` or a pid-namespace teardown), not about a
+single house being stopped while the rest of the plan keeps running,
+so it does not apply here and is not cited as though it did. Such a
+descendant is not this tool's concern to hunt down, and a destination
+that is itself a live, actively-written filesystem (an NFS share also
+being written by something else) is the same operator's-mount problem
+§1 already names. And running this tool with the STOP/START pair
+skipped (an operator override, or a house that fails to reply within
+whatever bound this tool uses) reintroduces exactly the torn-read risk
+quiescing exists to close — worth a loud warning in the tool's own
+output when that happens, not a silent best-effort fallback.
 
 ## 4. Verification
 
@@ -219,28 +291,57 @@ solve:
    framing), the operator rebuilds it from the bakery source tree
    before the restored plan can boot — this is the direct cost of that
    priority call, stated rather than hidden.
-3. **Placement**: copy the backed-up `upper/`+`work/` (recreating an
-   empty `work/` if it was not itself backed up — it is overlayfs
-   scratch space, not data, so there is nothing to restore into it) or
-   the `.img` file into `NW_LAYER_DIR/<id>` on the fresh machine, then
-   let the existing staging path (`tools/stage-layers.py`, which
-   `.claude/rules/runtime.md` already names as "THE RECOVERY" for a
-   different failure class) take over from there rather than
-   reimplementing its directory-shape decisions in this tool.
+3. **Placement, and this is now a real mechanism rather than a sketch,
+   because "restore" writing directly into a live path was found to be
+   the wrong default rather than merely an unstated risk**: restore
+   NEVER writes in place over `NW_LAYER_DIR/<id>` (or `<id><suffix>`)
+   directly. It stages the recovered content at a sibling path —
+   `NW_LAYER_DIR/<id>.restoring` (a directory for an unsized layer, a
+   `.img` file for a sized one) — builds it completely there (the
+   backed-up `upper/`+`work/`, with `work/` recreated empty if it was
+   not itself backed up, since it is overlayfs scratch space and not
+   data), and only then does one atomic `rename(2)` from the staging
+   path onto `NW_LAYER_DIR/<id>`. `rename(2)` on the same filesystem is
+   atomic at the kernel level — there is no instant at which the target
+   name refers to a half-written result, which is exactly the property
+   a restore needs and a direct in-place write does not have. Before
+   the rename, keep whatever the target already held (if anything) as a
+   dated sibling (`NW_LAYER_DIR/<id>.pre-restore.<timestamp>`) rather
+   than deleting it — a bad restore then has an undo path (rename that
+   sibling back), and a good one leaves an ordinary reclaimable
+   directory the operator can remove once satisfied, not an
+   automatically-deleted one. **Control**: kill the restore process
+   partway through staging (before the rename), and confirm
+   `NW_LAYER_DIR/<id>` is byte-for-byte what it was before the restore
+   began — a killed restore must leave a `.restoring` partial and
+   nothing else, never a torn live layer. This is the same "assert the
+   intermediate, not just the outcome" discipline `CLAUDE.md`'s own
+   "recovery mechanism turns a defect into a delay" section asks for,
+   applied to a write path rather than a supervision decision. Only
+   after all of this does `tools/stage-layers.py` (`.claude/rules/
+   runtime.md`'s own "THE RECOVERY" for the unrelated durable-mask
+   failure class) get a chance to run against the now-restored layer,
+   rather than this tool reimplementing its own directory-shape
+   decisions.
 4. **What this tool does NOT sketch, deliberately**: reconciling a
    restore against a layer that already exists and has since diverged
    (the fresh machine is not actually fresh — a partial prior boot
-   already wrote something). That is a merge decision with no obvious
-   automatic answer and is out of scope for "at least sketch it."
+   already wrote something) beyond the pre-restore snapshot named
+   above. Keeping the old data as a sibling is not the same as merging
+   it with the new — that is a merge decision with no obvious automatic
+   answer and stays out of scope for "at least sketch it."
 
 ## Refused / out of scope for this round
 
 - **Any network transport built into the tool itself** — §1's directory
   abstraction is the whole answer; a network destination is the
   operator's mount, not this tool's protocol.
-- **Coordinating with a running house or `nw-sup`** — §3's accepted
-  cost; building coordination is a larger, separate design (locking,
-  quiescing a house before backup) not asked for this round.
+- **Coordinating with a running house or `nw-sup` beyond the STOP/START
+  pair §3 now specifies** — narrowed, not refused: §3's quiesce step
+  IS coordination, and is in scope. What remains refused is anything
+  past that one pair — a general lock, a way to ask a house to pause
+  mid-write rather than stop outright, or coordinating two concurrent
+  backups with each other.
 - **Encryption, compression, retention policy, scheduling** — none was
   asked for, and per this project's own rule against machinery without
   a stated need (`CLAUDE.md`'s "Do NOT build anything beyond these two"
