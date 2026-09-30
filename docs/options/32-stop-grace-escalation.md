@@ -13,7 +13,7 @@ note.** The mechanism lives in `nwsup.c`'s restart/wait loop
 (`wait_house()`, `handle_ctl_live()`), which `CLAUDE.md`'s "Who owns
 what, this week" now describes as operator-delegated per active phase
 rather than a fixed Grok assignment — corrected this round, on the
-operator's direct instruction, after four consecutive phases (Phase 2's
+operator's direct instruction, after three consecutive phases (Phase 2's
 `decide()` rewrite, Phase 3's cgroup placement, Phase 4's
 capabilities/`nofile`/`oom_score_adj` appliers) had already been built
 there without objection. `pid1.c` and `dawn.c` remain untouched Grok
@@ -26,11 +26,11 @@ it is the reason Section 6 below stops where it does.
 amendment's own framing ("unset = today's behavior"). Read directly
 rather than assumed:
 
-`wait_house()` (`nwsup.c:1253`) blocks in `poll()` with timeout `-1` —
+`wait_house()`'s ordinary loop blocks in `poll()` with timeout `-1` —
 forever — once a stop signal has been sent, whether that signal came
 from `on_term()`'s async handler (city-wide shutdown, `stopping` set)
-or from `handle_ctl_live()`'s `STOP` branch (`nwsup.c:1228-1246`,
-`stop_requested` set, gated through `nw_decide()`'s `NW_DECIDE_TERM_CHILD`).
+or from `handle_ctl_live()`'s `STOP` branch (`stop_requested` set,
+gated through `nw_decide()`'s `NW_DECIDE_TERM_CHILD`).
 Neither path bounds the wait. `runtime.md`'s Liveness section states
 this as deliberate: *"There is no field to put one in... every form of
 detection needs a guessed constant, and the rule has been attempted and
@@ -68,7 +68,7 @@ today's unconditional wait, which is unbounded whenever
 ## 2. Mechanism — no clock, because none is available and none is needed
 
 **`nwsup.c` may not gain a timing primitive, and this is a live,
-running test, not a style preference.** `test_budget_no_reset`
+running test, not a style preference.** `test_budget_is_hard_total`
 (`tests/run.py:3505-3513`) greps the whole file for
 `clock_gettime|now_ms|alarm|nanosleep|clock_nanosleep|usleep|
 setitimer|timerfd_create|timer_create|gettimeofday|times|clock|
@@ -80,7 +80,7 @@ review.
 
 **`poll(2)`'s own kernel-side timeout is not on that list, and the tree
 already relies on it** — the pidfd-open-failure fallback tier
-(`nwsup.c:1290`, `poll(&pf, 1, 50)`) already waits up to a fixed
+(`poll(&pf, 1, 50)`) already waits up to a fixed
 duration without `nwsup.c` itself reading a clock; the kernel does the
 timing, `nwsup.c` only supplies an integer. `grace_period` is the same
 shape: a plan-declared millisecond count handed straight to `poll()`'s
@@ -105,12 +105,166 @@ by getting a decrement-and-track-remaining-time scheme right without a
 clock to do it with** (there is no clock to compute "time remaining"
 against in the first place). A control-socket connection attempted
 during the grace window queues in the kernel's own accept backlog
-(`listen(lfd, 4)`, `nwsup.c:1899` — four deep already, unrelated to
+(`listen(lfd, 4)` — four deep already, unrelated to
 this note) and is serviced on the very next ordinary wait cycle, if
 there is one; `STOP` is already idempotent while a stop is pending
-(`handle_ctl_live`'s `!stop_requested` guard, `nwsup.c:1229`), so a
+(`handle_ctl_live`'s `!stop_requested` guard), so a
 retried `STOP` queued this way changes nothing when it is eventually
 serviced.
+
+**A second correctness question this design missed, found by review
+rather than worked through here, deserves the same treatment as the
+control-socket exclusion above.** The control socket is not the only
+thing that can interrupt the escalation `poll()`: `nw-sup` installs its
+own handler for `SIGTERM`/`SIGINT` (`on_term()`, pre-existing), and a
+plain `poll()` returns `EINTR` on *any* delivery of a signal being
+caught, independent of `SA_RESTART`. A second `SIGTERM`/`SIGINT` sent
+to the supervisor's own pid while the escalation wait is already in
+flight — an operator re-sending `kill -TERM`, a monitoring tool,
+anything with access to the pid namespace, which invariant 5 already
+grants uid 0 — hits the same `if (errno == EINTR) continue` this whole
+mechanism relies on elsewhere, and re-enters the branch to issue a
+*fresh, full-length* wait. Repeated indefinitely, this extends the
+"bounded" escalation past its declared window without limit, from
+outside the plan entirely — the exact failure the control-socket
+exclusion above was designed to prevent, arriving through a different
+channel it did not consider. `tcb-review` and `fd-auditor` found this
+independently against the implementation.
+
+**Fixed with `ppoll(2)` rather than `poll(2)` for this one call,
+blocking `SIGTERM`/`SIGINT` for its duration.** By the time this branch
+runs, `stopping`/`stop_requested` are already known true, so a repeat
+delivery of either signal carries no new information this wait needs
+to re-observe — the same reasoning the control-socket exclusion already
+uses, applied to a second channel. `ppoll` swaps the blocking mask in
+atomically with entering the wait, so neither signal can generate an
+`EINTR` here at all; it restores the prior (empty) mask on return, so a
+signal that arrived during the wait is simply delivered — `on_term()`
+runs, resending the stop signal to an already-stopping child — the
+instant the call exits, never before. Still no clock: the bound handed
+to the kernel is still a plain integer, unread and untouched by
+`nwsup.c` itself.
+
+**The fallback tier's cycle-counting approximation had the mirror-image
+defect for the identical reason** — `armed_cycles` was incremented once
+per pass through its `for(;;)` loop regardless of whether the
+preceding fixed-width `poll(&pf, 1, 50)` actually ran its full 50ms or
+returned early via `EINTR`, so the same signal flood that stalls the
+primary tier forever instead **inflates this tier's cycle count faster
+than real time**, escalating a house well before its declared
+`grace_period` has actually elapsed. Fixed by only counting a cycle
+when the preceding `poll()` returns `0` (a genuine, uninterrupted
+timeout) rather than unconditionally at the top of the loop — the
+tier's own read-not-run bound stays an approximation of the primary
+tier's exact one, but errs long under interruption rather than firing
+early.
+
+**The sigmask-replacement defect, found in the SAME `ppoll(2)` fix and
+by a second review round on it: the sigmask argument REPLACES the
+calling process's blocked set for the call's duration, it does not
+augment it.** The signalfd-fallback tier (engaged only when `pidfd_open`
+itself fails) permanently blocks `SIGCHLD` earlier in `wait_house()`
+specifically so its `signalfd` can see it. The escalation branch's
+first version built its `ppoll` mask from empty plus
+`SIGTERM`/`SIGINT`, which — in this tier only — unblocked `SIGCHLD` for
+the entire duration of the call. `SIGCHLD` has no handler installed
+(default disposition: Ignore), so a child dying during that exact
+window was delivered under that default action and silently discarded
+rather than remaining pending for `signalfd` to report — deterministic,
+not a race, because the mask replacement covers the whole blocking
+duration, not an instant. The escalation still eventually recovered the
+correct exit status (a plain blocking `waitpid` follows regardless of
+how this call returns), but only after running the FULL declared
+`grace_period`, even for a house that stopped instantly on its own.
+None of the tests added for the first two fixes could catch this: all
+of them run on the machine's normal path, where `pidfd_open` succeeds
+and this tier never engages. Fixed by reading the CURRENT blocked set
+first (`sigprocmask(SIG_BLOCK, NULL, &block_own_signals)`) and adding
+`SIGTERM`/`SIGINT` to it, rather than starting from empty — the pidfd
+tier's ambient mask is empty, so this is exactly the prior behavior
+there; the signalfd tier's ambient mask already has `SIGCHLD` in it,
+and that now stays blocked throughout the call too. Pinned by
+`test_grace_period_signalfd_tier_notices_a_prompt_death`
+(`tests/run.py`), shown failing against the pre-fix, empty-mask
+version.
+
+**The atoi-overflow defect, unrelated, surfaced by the same review
+round:** `nw_grace_period`'s own re-validation (`nw-sup` reads its unit from the
+environment, not the sealed blob, so nothing upstream stands behind
+this value) parsed `NW_GRACE_PERIOD` with `atoi()`, whose `(int)` cast
+truncates a value that overflows `int` — and `strtol`, which `atoi` is
+built on, does not itself overflow a 64-bit `long` until well past
+`UINT32_MAX`, so a value like `2**32` or `2**32 + 1500` sailed past the
+`> NW_GRACE_MAX_MS` check entirely, truncated on the cast to `0` or
+`1500` respectively — silently accepted as a *legal, in-bound* value
+from a string that plainly names an out-of-range one. Fixed with
+`strtoul` and its own `errno == ERANGE` and end-pointer checks, closing
+the class rather than only the one boundary (`GRACE_MAX_MS + 1`) the
+original test happened to cover.
+
+**The ctl-socket-flood defect, in the third (both-primitives-failed)
+tier, found by the same review round that found the sigmask-replacement
+defect above — and the same shape one level down.** That tier has no
+pidfd/signalfd to fall back to at all, so its only OTHER readiness
+source is the unit's own control socket. The signal-flood fix (only
+counting a cycle on a genuine `poll() == 0`) closed the route through
+repeated signals, but left this tier still polling the ctl socket
+alongside the timeout while armed — so any ctl traffic at all (an
+ordinary `START`, not even a malicious repeated `STOP`) keeps that
+`poll()` returning `>0` instead of the `0` the cycle count depends on,
+and `armed_cycles` never advances: the escalation can be extended
+indefinitely by ordinary control traffic, the identical "outside the
+plan" failure the whole feature exists to close, through a third
+channel. Fixed by excluding the ctl socket from the poll entirely once
+armed — `poll(NULL, 0, 50)` has no fd to become ready at all, so a
+non-`EINTR` return is unconditionally a genuine, elapsed ~50ms cycle
+regardless of ctl activity, the same exclusion principle the other two
+tiers already apply to the control socket, extended to the one tier
+that has nothing else to poll instead. A connection attempted while
+armed queues in the kernel's own accept backlog, same as the other
+tiers. Pinned by `test_grace_period_tier3_survives_a_control_socket_flood`,
+shown failing against the pre-fix version.
+
+**Two documentation-only findings from the same round, named because
+CLAUDE.md's own rule is that a stated derivation must stay checkable:
+`NW_GRACE_MAX_MS`'s comment in `blob.h` claimed the value was chosen
+because `nw-sup` "hands it straight to `poll(2)`'s `int` timeout
+parameter with no conversion in between" — which the primary tier's
+own `ppoll`/`struct timespec` conversion (division and modulo) had
+already made false in this same diff, and which `blob.h`'s **second**
+copy of the identical claim, in the `NW_E_GRACERANGE` enum comment
+written fresh in this same diff, still carried after the first copy
+was fixed — a third review round found the leftover.** The
+`NW_E_GRACERANGE` comment now points at the macro's own comment rather
+than restating it, closing the exact class of drift a restatement
+creates. The macro's own comment states both real reasons the bound is
+`INT_MAX`: keeping the `struct timespec` conversion inside a sane
+range, and keeping the double-failure tier's `armed_cycles * 50`
+accumulator from overflowing `unsigned` before its comparison can fire
+— **both generous, not tight**, which the same third round also
+corrected: an earlier version of this same correction called the
+second reason "tight," and it is not — the loop returns as soon as the
+comparison holds, so the multiplication never exceeds
+`nw_grace_period + 49`, nowhere near the overflow point. No code
+changed for either finding; both corrections are textual, in `blob.h`
+itself.
+
+**A third finding from the same round was not documentation-only: the
+tier-3 (double-failure) fallback's own ctl-flood fix, above, was itself
+incomplete — it closed the fd-readiness route and left the SIGNAL
+route open, the identical HIGH bug the primary tier's `ppoll` fix
+closed, relocated to the one tier that had never been given the same
+treatment.** `poll(NULL, 0, 50)` has no fd to become ready, but it is
+still a plain `poll()`, and `SIGTERM`/`SIGINT` are caught (`on_term()`)
+and unblocked in this tier — so a flood of either against the
+supervisor's own pid, spaced faster than 50ms, interrupts every single
+cycle with `EINTR` before it can return `0`, and `armed_cycles` never
+advances. Reproduced directly by `tcb-review`: a house with a declared
+900ms `grace_period` survived 3.92s under a SIGTERM flood and died
+within ~1s of the flood stopping. Fixed identically to the earlier two
+tiers: `ppoll(NULL, 0, &cycle_ts, &block_own_signals3)`, reading the
+current mask first and adding `SIGTERM`/`SIGINT` to it, rather than a
+plain `poll()`.
 
 **Sequence, once a stop signal has been sent for the current child**
 (`stopping` or `stop_requested` becomes true — both already tracked,
@@ -133,8 +287,7 @@ no new state needed to detect the transition) **and `grace_period !=
    fast, since the process is dying. **Nothing else is added here**:
    the caller's existing, unconditional `cg_kill_sweep(cgroup_path)`
    call, which already runs after every death regardless of cause
-   (`nwsup.c:2254`, "unconditional... not an escalation-after-a-timeout"
-   — a defensive sweep for whatever the dying process forked and did
+   (a defensive sweep for whatever the dying process forked and did
    not reap), cleans up any grandchildren the escalated house itself
    spawned, exactly as it already does for a natural death. This
    mechanism does not touch `cg_kill_sweep()` or extend what it is
@@ -239,20 +392,24 @@ change that introduces it" asks for.
   ignoring-fixture eventually gets killed, paired with unset showing it
   is NOT killed within an equivalent window (bounded by the test's own
   patience, not a claim about forever).
-- **`test_budget_no_reset`'s existing sweep must stay green** — this is
+- **`test_budget_is_hard_total`'s existing sweep must stay green** — this is
   the test that would refuse the whole approach if a clock primitive
   crept in anywhere in `nwsup.c`; no new exemption or narrowing of its
   regex is needed or proposed.
 - **`NW_E_GRACE`... no**, actually: this note builds the applier
   `docs/options/31` deferred; no new `NW_E_*` code is needed, since the
   boot-time refusal for a nonzero, unapplied `grace_period`
-  (`nwsup.c:1604`, `die("grace-period: declared but not yet applied")`)
+  (`die("grace-period: declared but not yet applied")`, as of this
+  note's base commit)
   simply stops firing once this mechanism lands — the value becomes
   legal to declare and act on, not newly refused a different way.
-  `test_grace_period_declared_refuses_at_the_supervisor` (the existing
-  test pinning the current refusal) becomes a test that a `grace_period`
-  now **boots successfully** instead, which is the correct
-  direction for the mechanism landing, not a regression to explain away.
+  the existing test pinning that refusal was renamed and rewritten
+  rather than deleted -- `test_grace_period_bounds_refuse_at_the_supervisor`
+  now asserts a legal, in-bound `grace_period` **boots successfully**,
+  and that only an out-of-range value is still refused (by
+  `NW_E_GRACERANGE`'s reason, not the old "declared but not yet
+  applied" one). Correct direction for the mechanism landing, not a
+  regression to explain away.
 
 ## 6. `supervisor_death_policy` — narrowed by ownership, not deferred by choice
 
@@ -303,8 +460,8 @@ this one as a side effect of also touching `nwsup.c`.
 **So: `supervisor_death_policy` stays exactly as `docs/options/31` left
 it.** The byte exists in the blob (unchanged), the baker validates it
 against the closed set `{0}` (unchanged), and `nwsup.c` continues to
-refuse any nonzero declared value at startup by name
-(`nwsup.c:1606-1609`, unchanged). Nothing in this note's code changes
+refuse any nonzero declared value at startup by name (unchanged by
+this note's code). Nothing in this note's code changes
 touches it. `docs/QUEUE.md`'s Phase 4 follow-up list should read this
 item as "waiting on a `pid1.c`-scoped round with its own authorization,"
 not as "next" — a kind-3 statement in `CLAUDE.md`'s own sense, not kind
@@ -314,7 +471,7 @@ not as "next" — a kind-3 statement in `CLAUDE.md`'s own sense, not kind
 
 `make test` passes, quoted from its own output, including the new
 grace-period behavioral tests and their paired controls (Section 5).
-`test_budget_no_reset` stays green with no exemption. The two open
+`test_budget_is_hard_total` stays green with no exemption. The two open
 questions (Section 3's `NW_GRACE_MS` interaction, recommendation (a))
 are decided before code, the same discipline `docs/options/31`'s
 Section 10 batch followed.

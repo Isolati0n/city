@@ -832,10 +832,152 @@ files, neither touched by this bump until the review found them).
 `make test` passes end-to-end (113 `ok` lines, `coverage-tcb.sh` at the
 99% floor); `make prereport` and `make checkbrief` are clean.
 
-`grace_period` and `supervisor_death_policy` still have no applier —
-refused by name at `nw-sup` startup, matching the `sched_ext`
-precedent — and are the next fields due their own design-note-plus-
-`claims` round, per the ordered list above.
+**`grace_period`'s mechanism has landed, not only its design note.**
+`174974a` corrects `CLAUDE.md`'s stale restart-loop ownership sentence
+(the mechanism lives in `nwsup.c`'s restart/wait loop, `claims`-reviewed
+separately); `a839e73` is `docs/options/32-stop-grace-escalation.md`
+itself. The operator approved the note's recommendation on the
+`NW_GRACE_MS` interaction (leave the asymmetry, document it plainly
+rather than touch `pid1.c`) and confirmed the note's own finding on
+`supervisor_death_policy` (see below). The applier landed as a
+follow-up commit: `struct nw_unit`'s `grace_period` field, `blob.h`'s
+`NW_GRACE_MAX_MS`/`NW_E_GRACERANGE`, the baker's `grace-period=` key,
+and the real escalation timer in `nwsup.c`'s `wait_house()` — a bounded
+`ppoll(2)` on the pidfd/signalfd alone (the control socket deliberately
+excluded, same reasoning as every other no-clock mechanism here), SIGKILL
+on timeout, `grace_period=0` reproducing today's unbounded wait exactly.
+`houses/ignoreterm.c` is the new fixture (traps and ignores its stop
+signal, so the escalation has something to fire against).
+
+Repeated review rounds ran against this diff (tcb-review, fd-auditor,
+control, drift, claims — then tcb-review/fd-auditor/control/claims
+again on each round's own fixes, until a round returned clean), per the
+master brief's TCB dispatch table, and found real bugs before landing
+rather than after, each round's fix becoming the next round's own
+unreviewed code exactly as `CLAUDE.md`'s "a fix is a change like any
+other" rule expects:
+
+- **HIGH (tcb-review, fd-auditor, independently):** the escalation wait
+  used a plain `poll()`, which re-arms the FULL `grace_period` on every
+  `EINTR` — and `nw-sup` installs its own `SIGTERM`/`SIGINT` handler on
+  its OWN pid, so a second such signal delivered to the supervisor while
+  escalation was already running restarted the whole window,
+  indefinitely, from outside the plan entirely. Fixed with `ppoll(2)`,
+  blocking `SIGTERM`/`SIGINT` for the duration of that one call only.
+  Pinned by `test_grace_period_survives_a_repeated_signal_to_the_supervisor`,
+  shown failing against the pre-fix `poll()`.
+- **HIGH (fd-auditor, second round, on the `ppoll()` fix itself):**
+  `ppoll(2)`'s sigmask argument REPLACES the process's blocked set for
+  the call, it does not augment it — and the signalfd-fallback tier
+  (only `pidfd_open` fails, more reachable than the double-failure tier
+  below) permanently blocks `SIGCHLD` earlier specifically so its
+  `signalfd` can see it. The first `ppoll` fix built its mask from
+  empty plus `SIGTERM`/`SIGINT`, which unblocked `SIGCHLD` for the
+  whole call in exactly this tier; with no handler installed, a child
+  dying during that window was discarded under its default disposition
+  rather than queued, so the escalation noticed only after the FULL
+  declared window regardless of how promptly the house actually
+  stopped. None of the tests written for the first two fixes could
+  catch this — all of them exercise the pidfd-succeeds path. Fixed by
+  reading the current blocked set first and adding to it rather than
+  building from empty. Pinned by
+  `test_grace_period_signalfd_tier_notices_a_prompt_death`, shown
+  failing against the pre-fix, empty-mask version.
+- **MEDIUM-HIGH (tcb-review):** `NW_GRACE_PERIOD`'s own env-var
+  re-validation used `atoi()`, whose `(int)` cast silently truncated an
+  out-of-range value (`2**32`, `2**32+1500`) to an in-range 0 or 1500 —
+  accepted rather than refused, defeating the whole overflow class
+  rather than the one boundary the original test happened to cover.
+  Fixed with `strtoul` plus explicit `errno==ERANGE` and end-pointer
+  checks. Pinned by `test_grace_period_bounds_refuse_an_overflowing_value`.
+- **MEDIUM (fd-auditor):** the pidfd-open-failure fallback tier's
+  cycle-counting approximation counted an `EINTR`-shortened 50ms poll
+  the same as a full one, so the identical signal flood that stalls the
+  primary tier instead escalates this tier early. Fixed by only
+  counting a cycle on a genuine `poll() == 0` timeout.
+- **MEDIUM (tcb-review, second round, same fix as the bullet above):**
+  the double-failure fallback tier has no pidfd/signalfd to fall back
+  to, so its only other readiness source is the unit's own control
+  socket — and the signal-flood fix above left that tier still polling
+  the ctl socket while armed, so any ctl traffic at all (an ordinary
+  `START`) kept `armed_cycles` from advancing, extending the escalation
+  indefinitely by ordinary control traffic. Fixed by excluding the ctl
+  socket from the poll entirely once armed (`poll(NULL, 0, 50)`, which
+  has no fd to become ready). Pinned by
+  `test_grace_period_tier3_survives_a_control_socket_flood`, shown
+  failing against the pre-fix version.
+- **HIGH (tcb-review, third round, same fix as the bullet above):**
+  the ctl-flood fix's `poll(NULL, 0, 50)` has no fd to become ready,
+  but it is still a plain `poll()` — interruptible by `EINTR` on any
+  caught signal, and `SIGTERM`/`SIGINT` are caught (`on_term()`) and
+  unblocked in this tier. A flood of either against the SUPERVISOR's
+  own pid, faster than 50ms, interrupted every cycle before it could
+  register as a timeout, reopening the round's own headline bug one
+  tier down — reproduced directly: a house with a declared 900ms
+  window survived 3.92s under the flood, dying only once it stopped.
+  Fixed identically to the earlier two tiers:
+  `ppoll(NULL, 0, &cycle_ts, &block_own_signals3)`, reading the
+  current mask first and adding `SIGTERM`/`SIGINT`. Pinned by
+  `test_grace_period_tier3_survives_a_repeated_signal_to_the_supervisor`,
+  shown failing against the pre-fix version. `control` separately
+  found this tier's own paired `!armed` servicing guard is not
+  independently pinned by `test_grace_period_tier3_survives_a_control_socket_flood`
+  (the `poll()` selection alone accounts for that test's result) —
+  documented in the test's own docstring rather than left unstated.
+- **Documentation-only (tcb-review, second AND third rounds):**
+  `NW_GRACE_MAX_MS`'s own derivation comment in `blob.h` had gone
+  stale within the same diff that wrote it, still claiming no
+  conversion happens between the declared value and `poll(2)`'s
+  timeout after the primary tier's own `ppoll`/`struct timespec`
+  conversion made that false — corrected to state both real reasons
+  (a sane bound on that conversion, and keeping the double-failure
+  tier's `armed_cycles * 50` from overflowing `unsigned`), **both
+  generous, not tight**, which the third round also had to correct
+  (a second-round version of this same fix called the second reason
+  "tight," and it is not — the loop returns as soon as the comparison
+  holds, so the multiplication never approaches the overflow point).
+  Separately, `blob.h`'s SECOND copy of the identical stale claim, in
+  the `NW_E_GRACERANGE` enum comment written fresh in this same diff,
+  was missed when the first copy was fixed in the second round — found
+  in the third. Now points at the macro's own comment instead of
+  restating it. No code changed for any of this.
+- **`drift`:** `NW_GRACE_MAX_MS` was absent from
+  `test_baker_constants_match_the_header`'s baker-vs-compiler pairing,
+  and nothing exercised the baker's own `grace-period=` bake-time
+  refusal at all. Both closed (`test_baker_refuses_bad_resources` gained
+  the range cases; the pairing test gained the constant).
+- **`control`:** `NW_E_GRACERANGE` in `nwcheck.c` had no crafted-blob
+  case anywhere in the suite — exactly the "a blob can arrive from
+  anywhere" arrangement `plan.md` forbids relying on, for a check this
+  same test file exists to close for NW_E_KIND, NW_E_LLBRICK and
+  NW_E_LIDS. Closed with a
+  case in `test_checker_rejects_crafted_fields`, shown rejecting and
+  the legal boundary shown accepting. `control` also found
+  `test_grace_period_does_not_kill_a_house_that_stops_promptly` cannot
+  distinguish a correctly-gated escalation from one firing
+  unconditionally (pidfd only becomes readable on genuine termination,
+  so an unconditional kill on an already-exited child is inert) — its
+  docstring now says so rather than implying coverage that is not
+  there, the same move Phase 4's `oom_score_adj` test made for the same
+  reason.
+
+`.claude/rules/runtime.md` gained a "Stop-grace escalation" section
+documenting the mechanism as enforced-now (kind 1), including the
+`NW_GRACE_MS` operator-visible limitation in the exact wording the
+operator asked for. `make test` passes end-to-end with all new tests
+included; `make prereport` and `make checkbrief` are clean.
+
+**`supervisor_death_policy` is not "next" — it is waiting on a
+`pid1.c`-scoped round with its own separate authorization, and this is a
+kind-3 statement, not a scheduling gap.** `docs/options/32` worked out why
+while drafting the `grace_period` mechanism: only PID 1 ever observes a
+supervisor's *unexpected* death (a crash cannot run its own cleanup code),
+so a real applier for this field is unavoidably a `pid1.c` change, and
+`pid1.c` stayed explicitly out of this round's delegation (`CLAUDE.md`'s
+corrected ownership sentence names it as untouched Grok territory,
+unlike the `nwsup.c` restart loop). It stays refused by name at `nw-sup`
+startup exactly as `docs/options/31` left it, until that separate round
+happens.
 
 **Amendment items outside the bump itself, tracked here so they don't
 get lost in Phase 4's list:**

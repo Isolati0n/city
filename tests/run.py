@@ -5267,20 +5267,629 @@ def test_tight_nofile_does_not_starve_the_brick_pivot():
           "produced FAIL open loop-control errno=24 here)")
 
 
-def test_grace_period_declared_refuses_at_the_supervisor():
-    """docs/options/31 Section 5, Section 10 item 1. No applier exists
-    yet -- refused at nw-sup startup, by name, the same shape
-    test_layer_bytes_without_layer_dies_at_the_supervisor already
-    drives: real environment variables, no boot needed."""
+def test_grace_period_bounds_refuse_at_the_supervisor():
+    """docs/options/32: the escalation applier is real now, so a
+    declared grace_period boots instead of being refused -- the
+    inverse of what this test pinned before the mechanism landed, and
+    the correct direction for the field's own applier arriving, not a
+    regression (the design note's own Section 5 says so explicitly).
+
+    What still refuses is a value past NW_GRACE_MAX_MS -- poll(2)'s own
+    `int` timeout width, not a policy choice. `nwsup.c` re-validates
+    because it reads its unit from the environment, not the sealed
+    blob, the same reason every other Phase 4 field re-checks."""
     r = run([f"{BIN}/nw-sup", f"{BIN}/unit-probe", "probe"],
             env=dict(os.environ, NW_GRACE_PERIOD="1500", NW_LIDS="0",
                       NW_KIND="0"))
     out = r.out + r.err
-    expect("grace-period: declared but not yet applied" in out,
-           f"nw-sup did not refuse a declared, nonzero grace-period\n{out}")
-    print("ok grace-period-declared-refuses-at-the-supervisor "
-          "(NW_GRACE_PERIOD=1500, refused by name until the escalation "
-          "applier lands)")
+    expect("grace-period exceeds" not in out,
+           f"a legal, in-bound grace-period was refused\n{out}")
+    expect(r.returncode == 0,
+           f"nw-sup did not boot a declared, legal grace-period\n{out}")
+
+    GRACE_MAX_MS = blob_const("NW_GRACE_MAX_MS")
+    r2 = run([f"{BIN}/nw-sup", f"{BIN}/unit-probe", "probe2"],
+             env=dict(os.environ, NW_GRACE_PERIOD=str(GRACE_MAX_MS + 1),
+                       NW_LIDS="0", NW_KIND="0"))
+    out2 = r2.out + r2.err
+    expect(r2.returncode != 0,
+           f"nw-sup accepted a grace-period past NW_GRACE_MAX_MS\n{out2}")
+    expect("grace-period exceeds what poll(2)'s timeout can hold" in out2,
+           f"wrong reason for an out-of-range grace-period\n{out2}")
+    print("ok grace-period-bounds-refuse-at-the-supervisor "
+          "(1500 boots clean; NW_GRACE_MAX_MS+1 refused by name)")
+
+
+def test_grace_period_bounds_refuse_an_overflowing_value():
+    """`tcb-review`'s finding: `atoi()` is `(int)strtol(...)`, and
+    `strtol` does not itself overflow a 64-bit `long` until well past
+    `UINT32_MAX` -- so a declared value like `2**32` or `2**32 + 1500`
+    sailed straight past the `> NW_GRACE_MAX_MS` comparison, truncated
+    on the `(int)` cast to 0 or 1500 respectively, and was silently
+    ACCEPTED as a legal, in-bound value. The bounds test above only
+    exercises the one boundary nearest the limit (`GRACE_MAX_MS + 1`,
+    which `atoi` happens to turn into `INT_MIN` and which therefore did
+    still fail the comparison) -- this is the class beyond it, which
+    that boundary cannot see. Fixed with `strtoul` and its own
+    `errno == ERANGE` and end-pointer checks."""
+    GRACE_MAX_MS = blob_const("NW_GRACE_MAX_MS")
+    two32 = 1 << 32
+    for bad, why in (
+        (two32, "2**32, which atoi's (int) cast truncates to 0"),
+        (two32 + 1500,
+         "2**32 + 1500, which atoi's (int) cast truncates to 1500"),
+        (-1, "a negative value"),
+        ("notanumber", "a non-numeric value"),
+    ):
+        r = run([f"{BIN}/nw-sup", f"{BIN}/unit-probe", "gpoverflow"],
+                env=dict(os.environ, NW_GRACE_PERIOD=str(bad),
+                          NW_LIDS="0", NW_KIND="0"))
+        out = r.out + r.err
+        expect(r.returncode != 0,
+               f"nw-sup silently accepted NW_GRACE_PERIOD={why}\n{out}")
+        expect("grace-period exceeds what poll(2)'s timeout can hold"
+               in out,
+               f"wrong reason refusing NW_GRACE_PERIOD={why}\n{out}")
+    # And the legal case near the same boundary still boots -- the
+    # pairing that says this refuses the CLASS, not every large number.
+    r = run([f"{BIN}/nw-sup", f"{BIN}/unit-probe", "gpoverflowok"],
+            env=dict(os.environ, NW_GRACE_PERIOD=str(GRACE_MAX_MS),
+                      NW_LIDS="0", NW_KIND="0"))
+    out = r.out + r.err
+    expect(r.returncode == 0,
+           f"nw-sup refused NW_GRACE_PERIOD=NW_GRACE_MAX_MS itself\n{out}")
+    print("ok grace-period-bounds-refuse-an-overflowing-value "
+          "(2**32 and 2**32+1500 both refused by name, not silently "
+          "truncated and accepted; a negative and a non-numeric value "
+          "refused too; NW_GRACE_MAX_MS itself still boots)")
+
+
+def test_grace_period_survives_a_repeated_signal_to_the_supervisor():
+    """`tcb-review` and `fd-auditor`'s HIGH finding, independently
+    reproduced: a plain `poll()` on the escalation wait re-armed the
+    FULL `grace_period` on every `EINTR`, and `nw-sup` installs a
+    handler for SIGTERM/SIGINT on its OWN pid (`on_term()`) -- so a
+    second such signal delivered to the supervisor itself while the
+    escalation is already running restarted the whole window, and
+    repeated indefinitely, could extend the "bounded" wait forever from
+    outside the plan entirely. Fixed with `ppoll(2)`, blocking
+    SIGTERM/SIGINT for the duration of that one call, so neither can
+    interrupt it at all.
+
+    This is the control the four other grace-period tests cannot be:
+    none of them signal the SUPERVISOR's own pid during an active
+    window, so all four would stay green under the defect this test
+    exists to catch -- confirmed by running them against the
+    pre-fix tree, per the reviewers' own reproductions."""
+    os.makedirs("/nw/ctl", exist_ok=True)
+    env = os.environ.copy()
+    env["NW_KIND"] = "1"
+    env["NW_BUDGET"] = "0"
+    env["NW_LIDS"] = "0"
+    env["NW_STOP_SIGNAL"] = str(blob_const("NW_STOPSIG_TERM"))
+    declared = 800
+    env["NW_GRACE_PERIOD"] = str(declared)
+    proc = subprocess.Popen(
+        [f"{BIN}/nw-sup", f"{BIN}/unit-ignoreterm", "gpsigflood"],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
+    house_pid = None
+    for _ in range(25):
+        house_pid = _find_by_comm(proc.pid, "unit-ignoreterm")
+        if house_pid is not None:
+            break
+        time.sleep(0.1)
+    expect(house_pid is not None, "unit-ignoreterm never reached exec")
+    t0 = time.time()
+    expect(_ctl("gpsigflood", b"STOP\n") == "OK\n", "stop")
+
+    # Every signal lands INSIDE the declared 800ms window, spaced close
+    # enough that a full re-arm on each one would never let the window
+    # complete: the buggy behavior's earliest possible death is (time of
+    # last signal) + declared, i.e. not before ~1.5s. The fixed
+    # behavior's death time is unaffected by any of this and stays near
+    # ~0.8s from t0.
+    for i in range(7):
+        time.sleep(0.1)
+        try:
+            os.kill(proc.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            break
+
+    deadline = t0 + (declared / 1000.0) + 0.5   # ~1.3s: above the fixed
+    # target, comfortably below the buggy floor of ~1.5s from the last
+    # signal at ~0.7s.
+    died = False
+    while time.time() < deadline:
+        if _find_by_comm(proc.pid, "unit-ignoreterm") is None:
+            died = True
+            break
+        time.sleep(0.05)
+    expect(died,
+           f"the house was still alive {time.time() - t0:.2f}s after STOP "
+           f"despite a declared grace_period of {declared}ms -- repeated "
+           f"SIGTERM to the supervisor's own pid re-armed the escalation "
+           f"window instead of being blocked for the wait's duration")
+
+    proc.send_signal(9)
+    out, err = proc.communicate(timeout=3)
+    out = (out or "") + (err or "")
+    expect("[ignoreterm-house] handler ran" in out,
+           f"the house's own TERM handler never ran\n{out}")
+    print("ok grace-period-survives-a-repeated-signal-to-the-supervisor "
+          f"(declared {declared}ms; dead within ~{deadline - t0:.1f}s "
+          f"despite 7 SIGTERMs to the supervisor's own pid during the "
+          f"window)")
+
+
+def test_grace_period_kills_a_house_that_ignores_its_stop_signal():
+    """docs/options/32's central claim: a house declaring `grace_period`
+    that traps and ignores its stop signal (unit-ignoreterm) is
+    SIGKILLed once the declared window elapses, not before.
+
+    Paired both directions, which is the whole point -- a read-back
+    that only checks "eventually dead" would be satisfied by killing
+    it immediately, and a read-back that only checks "still alive
+    briefly" would be satisfied by never escalating at all:
+    - still alive well inside the declared window (the escalation did
+      not fire early, e.g. on the STOP reply itself or on some other
+      spurious wakeup);
+    - dead shortly after the window elapses (the escalation fired
+      because the window elapsed, not for an unrelated reason)."""
+    os.makedirs("/nw/ctl", exist_ok=True)
+    env = os.environ.copy()
+    env["NW_KIND"] = "1"          # longrun: exit is not a clean finish
+    env["NW_BUDGET"] = "0"
+    env["NW_LIDS"] = "0"
+    env["NW_STOP_SIGNAL"] = str(blob_const("NW_STOPSIG_TERM"))
+    env["NW_GRACE_PERIOD"] = "900"
+    proc = subprocess.Popen(
+        [f"{BIN}/nw-sup", f"{BIN}/unit-ignoreterm", "gpkill"],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
+    house_pid = None
+    for _ in range(25):
+        house_pid = _find_by_comm(proc.pid, "unit-ignoreterm")
+        if house_pid is not None:
+            break
+        time.sleep(0.1)
+    expect(house_pid is not None, "unit-ignoreterm never reached exec")
+    expect(_ctl("gpkill", b"STOP\n") == "OK\n", "stop")
+
+    time.sleep(0.4)
+    expect(_find_by_comm(proc.pid, "unit-ignoreterm") is not None,
+           "the house was killed before its declared grace_period "
+           "(900ms) elapsed -- escalation fired too early")
+
+    time.sleep(0.8)
+    expect(_find_by_comm(proc.pid, "unit-ignoreterm") is None,
+           "the house was NOT killed after its declared grace_period "
+           "elapsed -- escalation never fired")
+
+    proc.send_signal(9)  # the supervisor is idle now (STOP satisfied); end it
+    out, err = proc.communicate(timeout=3)
+    out = (out or "") + (err or "")
+    expect("[ignoreterm-house] handler ran" in out,
+           f"the house's own TERM handler never ran -- the stop signal "
+           f"was not what killed it, so the timing above proves nothing "
+           f"about the escalation specifically\n{out}")
+    print("ok grace-period-kills-a-house-that-ignores-its-stop-signal "
+          "(alive at +0.4s inside a 900ms window, dead by +1.2s)")
+
+
+def test_grace_period_tier3_survives_a_repeated_signal_to_the_supervisor():
+    """`tcb-review`'s third-round finding: the ctl-flood fix for this
+    same tier (`poll(NULL, 0, 50)` in place of `poll(&pf, 1, 50)`) has
+    no fd to become ready, but it is still a plain `poll()` -- and a
+    plain `poll()` is still interrupted by `EINTR` on any caught
+    signal. `SIGTERM`/`SIGINT` are caught (`on_term()`) and unblocked
+    in this process, so a flood of either against the SUPERVISOR's own
+    pid, spaced faster than 50ms, interrupts every single cycle before
+    it can return the `0` `armed_cycles` depends on -- the identical
+    HIGH bug the primary tier's `ppoll` fix closed
+    (`test_grace_period_survives_a_repeated_signal_to_the_supervisor`),
+    relocated to the one tier that was never given the same treatment.
+
+    Fixed identically: `ppoll(NULL, 0, &cycle_ts, &block_own_signals3)`,
+    reading the current blocked-signal mask first and adding
+    `SIGTERM`/`SIGINT` to it, rather than a plain `poll()`."""
+    os.makedirs("/nw/ctl", exist_ok=True)
+    shim_src = os.path.join(ROOT, "tests", "fault_inject.so.c")
+    shim_so = f"{WORK}/fault_inject_gptier3sig.so"
+    c = subprocess.run(
+        ["gcc", "-shared", "-fPIC", "-O2", "-o", shim_so, shim_src, "-ldl"],
+        capture_output=True, text=True)
+    expect(c.returncode == 0, f"fault_inject.so\n{c.stderr}")
+    env = os.environ.copy()
+    env["NW_KIND"] = "1"
+    env["NW_BUDGET"] = "0"
+    env["NW_LIDS"] = "0"
+    env["NW_STOP_SIGNAL"] = str(blob_const("NW_STOPSIG_TERM"))
+    declared = 900
+    env["NW_GRACE_PERIOD"] = str(declared)
+    env["NW_FAULT_ENOSYS"] = "pidfd_open,signalfd"  # BOTH fail -> tier 3
+    env["LD_PRELOAD"] = shim_so
+    proc = subprocess.Popen(
+        [f"{BIN}/nw-sup", f"{BIN}/unit-ignoreterm", "gptier3sigflood"],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
+    house_pid = None
+    for _ in range(25):
+        house_pid = _find_by_comm(proc.pid, "unit-ignoreterm")
+        if house_pid is not None:
+            break
+        time.sleep(0.1)
+    expect(house_pid is not None, "unit-ignoreterm never reached exec")
+    t0 = time.time()
+    expect(_ctl("gptier3sigflood", b"STOP\n") == "OK\n", "stop")
+
+    # Flood the SUPERVISOR's own pid with SIGTERM, spaced well under
+    # 50ms, for well past the declared window -- if the bug is
+    # present, the house survives the whole flood and only dies once
+    # it stops; if fixed, the house dies around the declared window
+    # regardless of the ongoing flood.
+    flood_until = t0 + (declared / 1000.0) + 2.5
+    while time.time() < flood_until:
+        try:
+            os.kill(proc.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            break
+        time.sleep(0.02)
+    elapsed_after_flood = time.time() - t0
+    expect(_find_by_comm(proc.pid, "unit-ignoreterm") is None,
+           f"the house was still alive {elapsed_after_flood:.2f}s after "
+           f"STOP, THROUGHOUT a SIGTERM flood on the supervisor's own "
+           f"pid, against a declared grace_period of {declared}ms -- "
+           f"the flood interrupted every escalation cycle with EINTR "
+           f"before it could register as a genuine timeout")
+
+    proc.send_signal(9)
+    out, err = proc.communicate(timeout=3)
+    out = (out or "") + (err or "")
+    expect("[ignoreterm-house] handler ran" in out,
+           f"the house's own TERM handler never ran\n{out}")
+    print("ok grace-period-tier3-survives-a-repeated-signal-to-the-supervisor "
+          f"(declared {declared}ms; dead by {elapsed_after_flood:.2f}s "
+          f"despite a continuous SIGTERM flood on the supervisor's pid)")
+
+
+def test_grace_period_tier3_survives_a_control_socket_flood():
+    """`tcb-review`'s second-round finding: the fix for the
+    signal-flood bug in the double-failure fallback tier (only
+    counting a cycle on a genuine, uninterrupted `poll() == 0`) traded
+    one external-actor vulnerability for another. This tier has no
+    pidfd/signalfd to fall back to, so its ONLY other readiness source
+    is the unit's own control socket -- and once armed, any traffic on
+    it at all (an ordinary `START`, not even a `STOP`) keeps
+    `poll(&pf, 1, 50)` returning `>0` instead of the `0` the cycle
+    count depends on, so `armed_cycles` never advances and the
+    escalation can be extended indefinitely by ordinary control
+    traffic -- the identical "outside the plan" failure the round's
+    headline bug was about, through a different channel.
+
+    Fixed by excluding the ctl socket from the poll entirely once
+    armed (`poll(NULL, 0, 50)`, which has no fd to become ready and so
+    can only return via a genuine 50ms timeout or `EINTR`) -- the same
+    exclusion principle the primary/signalfd tiers already apply to
+    `extra_fd`, extended to the one tier that cannot poll anything
+    else instead. A connection attempted during the armed wait queues
+    in the kernel's own accept backlog, same as the other tiers.
+
+    WHAT THIS TEST DOES NOT INDEPENDENTLY PIN, found by `control`:
+    the paired `if (!armed && (pf.revents & ...))` guard (added
+    alongside the `poll()` change so the ctl socket is not serviced
+    while armed) can be reverted ALONE -- back to an unconditional
+    `if (pf.revents & ...)` -- and this test stays green, because
+    `poll(NULL, 0, 50)` never touches `pf` at all while armed, so
+    `pf.revents` simply stays at the `0` it was reset to before
+    arming; the guard's own condition is never true regardless of how
+    it is written. The `poll()` selection alone is what this test is
+    load-bearing for (reverting only that, keeping the fixed guard,
+    reproduces the identical failure `control` measured for the full
+    revert). The guard is still defensively correct -- it stops a
+    future change that starts touching `pf` again from silently
+    servicing ctl traffic while armed -- but nothing here proves that;
+    saying so is `CLAUDE.md`'s "refuse a proposed check that cannot
+    fail for the reason it names" applied to the honest half of a
+    claim rather than the whole of it."""
+    import threading
+    os.makedirs("/nw/ctl", exist_ok=True)
+    shim_src = os.path.join(ROOT, "tests", "fault_inject.so.c")
+    shim_so = f"{WORK}/fault_inject_gptier3flood.so"
+    c = subprocess.run(
+        ["gcc", "-shared", "-fPIC", "-O2", "-o", shim_so, shim_src, "-ldl"],
+        capture_output=True, text=True)
+    expect(c.returncode == 0, f"fault_inject.so\n{c.stderr}")
+    env = os.environ.copy()
+    env["NW_KIND"] = "1"
+    env["NW_BUDGET"] = "0"
+    env["NW_LIDS"] = "0"
+    env["NW_STOP_SIGNAL"] = str(blob_const("NW_STOPSIG_TERM"))
+    declared = 900
+    env["NW_GRACE_PERIOD"] = str(declared)
+    env["NW_FAULT_ENOSYS"] = "pidfd_open,signalfd"  # BOTH fail -> tier 3
+    env["LD_PRELOAD"] = shim_so
+    proc = subprocess.Popen(
+        [f"{BIN}/nw-sup", f"{BIN}/unit-ignoreterm", "gptier3flood"],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
+    house_pid = None
+    for _ in range(25):
+        house_pid = _find_by_comm(proc.pid, "unit-ignoreterm")
+        if house_pid is not None:
+            break
+        time.sleep(0.1)
+    expect(house_pid is not None, "unit-ignoreterm never reached exec")
+    t0 = time.time()
+    expect(_ctl("gptier3flood", b"STOP\n") == "OK\n", "stop")
+
+    # Flood the SAME control socket with ordinary START pings for the
+    # whole window -- not the supervisor's pid (that is the primary
+    # tier's own repeated-signal test) and not STOP (already idempotent
+    # while pending) -- to isolate this tier's own vulnerability.
+    stop_flood = threading.Event()
+
+    def _flood():
+        import socket as _socket
+        while not stop_flood.is_set():
+            try:
+                s = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
+                s.settimeout(0.2)
+                s.connect("/nw/ctl/gptier3flood.sock")
+                s.sendall(b"START\n")
+                s.shutdown(_socket.SHUT_WR)
+                s.recv(64)
+                s.close()
+            except OSError:
+                pass
+            time.sleep(0.01)
+
+    th = threading.Thread(target=_flood, daemon=True)
+    th.start()
+    try:
+        deadline = t0 + (declared / 1000.0) + 0.6
+        died = False
+        while time.time() < deadline:
+            if _find_by_comm(proc.pid, "unit-ignoreterm") is None:
+                died = True
+                break
+            time.sleep(0.05)
+    finally:
+        stop_flood.set()
+        th.join(timeout=2)
+    elapsed = time.time() - t0
+    expect(died,
+           f"the house was still alive {elapsed:.2f}s after STOP against "
+           f"a declared grace_period of {declared}ms, under continuous "
+           f"control-socket traffic -- the escalation was extended by "
+           f"ordinary ctl activity instead of being blocked to it")
+
+    proc.send_signal(9)
+    out, err = proc.communicate(timeout=3)
+    out = (out or "") + (err or "")
+    expect("[ignoreterm-house] handler ran" in out,
+           f"the house's own TERM handler never ran\n{out}")
+    print("ok grace-period-tier3-survives-a-control-socket-flood "
+          f"(declared {declared}ms; dead within ~{elapsed:.2f}s under "
+          f"continuous START pings on its own control socket)")
+
+
+def test_grace_period_signalfd_tier_notices_a_prompt_death():
+    """`fd-auditor`'s second-round HIGH finding, reproduced and closed:
+    `ppoll(2)`'s sigmask argument REPLACES the calling thread's blocked
+    set for the call's duration, it does not augment it. The
+    signalfd-fallback tier (engaged only when `pidfd_open` itself
+    fails) permanently blocks SIGCHLD earlier in `wait_house()`
+    specifically so its signalfd can see it -- and the escalation
+    branch's first version built its `ppoll` mask from EMPTY plus
+    SIGTERM/SIGINT, which unblocked SIGCHLD for the whole call in this
+    tier. SIGCHLD has no handler installed, so a child dying during
+    that exact window was delivered under its default (Ignore)
+    disposition and silently discarded rather than remaining pending
+    for signalfd to report -- deterministic, not a race, because the
+    replacement covers the entire blocking duration. The escalation
+    still recovered the correct exit status eventually (a plain
+    blocking `waitpid` follows regardless), but only after running the
+    FULL declared `grace_period`, even for a house that stopped
+    instantly on its own.
+
+    This is exactly what none of the other five grace-period tests can
+    catch: all five run on this machine's normal path, where
+    `pidfd_open` succeeds and this tier never engages at all. Fixed by
+    reading the CURRENT blocked set first
+    (`sigprocmask(SIG_BLOCK, NULL, &block_own_signals)`) and adding
+    SIGTERM/SIGINT to it, rather than starting from empty -- SIGCHLD
+    stays blocked throughout the call in this tier, exactly as it was
+    before the call, and the pidfd tier (whose ambient mask is empty)
+    is unaffected."""
+    os.makedirs("/nw/ctl", exist_ok=True)
+    block_src = os.path.join(ROOT, "tests", "fault_inject.so.c")
+    block_so = f"{WORK}/fault_inject_gpsigfd.so"
+    c = subprocess.run(
+        ["gcc", "-shared", "-fPIC", "-O2", "-o", block_so, block_src, "-ldl"],
+        capture_output=True, text=True)
+    expect(c.returncode == 0, f"fault_inject.so\n{c.stderr}")
+    env = os.environ.copy()
+    env["NW_KIND"] = "1"
+    env["NW_BUDGET"] = "0"
+    env["NW_LIDS"] = "0"
+    env["NW_STOP_SIGNAL"] = str(blob_const("NW_STOPSIG_TERM"))
+    declared = 3000  # deliberately long: the bug's signature is running
+    env["NW_GRACE_PERIOD"] = str(declared)
+    env["LD_PRELOAD"] = block_so
+    env["NW_FAULT_ENOSYS"] = "pidfd_open"  # ONLY pidfd_open fails --
+    # engages the signalfd tier specifically, not the tier-3 fallback
+    # (which has no ppoll call at all and is covered separately).
+    proc = subprocess.Popen(
+        [f"{BIN}/nw-sup", f"{BIN}/unit-anysig", "gpsigfdtier"],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
+    house_pid = None
+    for _ in range(25):
+        house_pid = _find_by_comm(proc.pid, "unit-anysig")
+        if house_pid is not None:
+            break
+        time.sleep(0.1)
+    expect(house_pid is not None, "unit-anysig never reached exec")
+    t0 = time.time()
+    expect(_ctl("gpsigfdtier", b"STOP\n") == "OK\n", "stop")
+
+    # unit-anysig exits within ~20ms of receiving the signal. A correct
+    # signalfd tier notices well within a second; the pre-fix defect
+    # notices only after the full 3000ms window (it still eventually
+    # recovers the right exit status via the trailing waitpid, so this
+    # has to be a TIMING assertion, not an exit-status one).
+    for _ in range(40):
+        if _find_by_comm(proc.pid, "unit-anysig") is None:
+            break
+        time.sleep(0.05)
+    elapsed = time.time() - t0
+    expect(_find_by_comm(proc.pid, "unit-anysig") is None,
+           "unit-anysig never exited on its own stop signal")
+    expect(elapsed < 1.0,
+           f"the signalfd-fallback tier took {elapsed:.2f}s to notice a "
+           f"house that exits in ~20ms, against a declared grace_period "
+           f"of {declared}ms -- SIGCHLD was swallowed rather than "
+           f"queued for signalfd during the escalation's own ppoll()")
+
+    proc.send_signal(9)
+    out, err = proc.communicate(timeout=3)
+    out = (out or "") + (err or "")
+    expect("got=15" in out,
+           f"unit-anysig did not report receiving TERM specifically\n{out}")
+    expect("restart gpsigfdtier" not in out,
+           f"a promptly-stopped house was treated as a crash\n{out}")
+    print("ok grace-period-signalfd-tier-notices-a-prompt-death "
+          f"(unit-anysig exited on its own; noticed in {elapsed:.2f}s, "
+          f"not the full {declared}ms declared window)")
+
+
+def test_grace_period_does_not_kill_a_house_that_stops_promptly():
+    """Paired negative control for the same mechanism: a house that
+    actually stops on its own stop signal (unit-anysig, which exits as
+    soon as it receives one) must be reaped by its OWN exit well before
+    the declared grace_period elapses, and must be reported as a clean
+    stop rather than a crash.
+
+    WHAT THIS TEST CANNOT SEE, found by `control` and stated rather
+    than left implicit: it does not distinguish "the escalation is
+    gated on `pr == 0`" from "the escalation fires unconditionally
+    after every `ppoll()` return regardless of why it returned."
+    `pidfd` is defined to become poll-readable only on the child's
+    ACTUAL termination, never earlier, so by the time an unconditional
+    `kill(p, SIGKILL)` would run after a non-timeout return, `p` is
+    already a zombie and the call is inert -- no signal is delivered to
+    deliver, the exit status was already latched at the real exit, and
+    every assertion this test makes (timing, `got=15`, no restart line)
+    reads identically either way. Reproduced directly: dropping the
+    `pr == 0` guard in a scratch copy left this test, and the whole
+    suite, green. The `pr == 0` guard is pinned by reading `nwsup.c`
+    itself, not by this test -- inventing an assertion that appeared to
+    separate the two cases would be exactly the shape `CLAUDE.md`'s
+    characteristic-failure section warns against; the honest text is
+    what stands in its place. What this test DOES pin: the escalation
+    does not fire on a fixed schedule regardless of what the house
+    does -- a house that exits well inside its window is reaped by its
+    own exit, not force-killed."""
+    os.makedirs("/nw/ctl", exist_ok=True)
+    env = os.environ.copy()
+    env["NW_KIND"] = "1"
+    env["NW_BUDGET"] = "0"
+    env["NW_LIDS"] = "0"
+    env["NW_STOP_SIGNAL"] = str(blob_const("NW_STOPSIG_TERM"))
+    env["NW_GRACE_PERIOD"] = "900"
+    proc = subprocess.Popen(
+        [f"{BIN}/nw-sup", f"{BIN}/unit-anysig", "gpprompt"],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
+    house_pid = None
+    for _ in range(25):
+        house_pid = _find_by_comm(proc.pid, "unit-anysig")
+        if house_pid is not None:
+            break
+        time.sleep(0.1)
+    expect(house_pid is not None, "unit-anysig never reached exec")
+    t0 = time.time()
+    expect(_ctl("gpprompt", b"STOP\n") == "OK\n", "stop")
+
+    # unit-anysig exits within ~20ms of receiving the signal -- give it
+    # generous slack, but well short of the 900ms grace_period, so a
+    # pass here cannot be explained by the escalation instead.
+    for _ in range(40):
+        if _find_by_comm(proc.pid, "unit-anysig") is None:
+            break
+        time.sleep(0.02)
+    elapsed = time.time() - t0
+    expect(_find_by_comm(proc.pid, "unit-anysig") is None,
+           "unit-anysig never exited on its own stop signal")
+    expect(elapsed < 0.9,
+           f"unit-anysig took {elapsed:.2f}s to exit -- too close to the "
+           f"900ms grace_period to prove this wasn't the escalation")
+
+    proc.send_signal(9)
+    out, err = proc.communicate(timeout=3)
+    out = (out or "") + (err or "")
+    expect("got=15" in out,  # SIGTERM == 15
+           f"unit-anysig did not report receiving TERM specifically\n{out}")
+    expect("restart gpprompt" not in out,
+           f"a promptly-stopped house was treated as a crash\n{out}")
+    print("ok grace-period-does-not-kill-a-house-that-stops-promptly "
+          f"(unit-anysig exited on its own in {elapsed:.2f}s, well "
+          f"inside the 900ms window -- the escalation never fired)")
+
+
+def test_grace_period_zero_is_the_unbounded_wait():
+    """`grace_period=0` (unset) must reproduce exactly today's
+    behavior: nw-sup waits for a stopped house with no bound at all.
+    Paired against the two tests above -- without this one, a reader
+    cannot tell "the mechanism is bounded" from "the mechanism is
+    always this aggressive", since neither of those tests declares an
+    unset grace_period. Bounded by the test's own patience (a few
+    seconds), not a claim about forever, matching this file's own rule
+    for any claim about an unbounded wait."""
+    os.makedirs("/nw/ctl", exist_ok=True)
+    env = os.environ.copy()
+    env["NW_KIND"] = "1"
+    env["NW_BUDGET"] = "0"
+    env["NW_LIDS"] = "0"
+    env["NW_STOP_SIGNAL"] = str(blob_const("NW_STOPSIG_TERM"))
+    # NW_GRACE_PERIOD deliberately unset.
+    proc = subprocess.Popen(
+        [f"{BIN}/nw-sup", f"{BIN}/unit-ignoreterm", "gpzero"],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
+    house_pid = None
+    for _ in range(25):
+        house_pid = _find_by_comm(proc.pid, "unit-ignoreterm")
+        if house_pid is not None:
+            break
+        time.sleep(0.1)
+    expect(house_pid is not None, "unit-ignoreterm never reached exec")
+    expect(_ctl("gpzero", b"STOP\n") == "OK\n", "stop")
+
+    time.sleep(2.0)
+    expect(_find_by_comm(proc.pid, "unit-ignoreterm") is not None,
+           "grace_period=0 (unset) escalated anyway -- today's unbounded "
+           "wait regressed")
+
+    # The house is genuinely still alive (that's the point of this
+    # test) and holds the same log-pipe fd nw-sup's own stdout/stderr
+    # dup onto, so killing only nw-sup leaves the pipe's write end open
+    # and communicate() blocks waiting for an EOF that never comes --
+    # kill the house first, THEN the supervisor.
+    house_pid = _find_by_comm(proc.pid, "unit-ignoreterm")
+    if house_pid is not None:
+        try:
+            os.kill(house_pid, 9)
+        except ProcessLookupError:
+            pass
+    proc.send_signal(9)
+    proc.communicate(timeout=3)
+    # Bypassing the supervisor from outside, mid-wait, means it never
+    # reaches its own cg_kill_sweep()+rmdir for this generation (that
+    # code only runs after wait_house() returns normally) -- clean up
+    # the leftover directory ourselves so it cannot collide with a
+    # later run reusing this same house name, the same class of
+    # cleanup _ensure_ambient_cgroup2() already does at suite startup.
+    try:
+        os.rmdir("/sys/fs/cgroup/nw/gpzero.0")
+    except OSError:
+        pass
+    print("ok grace-period-zero-is-the-unbounded-wait "
+          "(unset: still alive 2s after STOP, matching today's behavior)")
 
 
 def test_supervisor_death_policy_declared_refuses_at_the_supervisor():
@@ -7365,6 +7974,15 @@ def test_baker_constants_match_the_header():
         # Asked for through the baker's own reader, not through
         # blob_const, so the comparison is still parse-against-compiler.
         "NW_SCHED_MAX": cc._const("NW_SCHED_MAX"),
+        # docs/options/32. Not merely a bound to check -- it is the
+        # poll(2) `int` timeout width itself, so a divergence here is
+        # the fd-pair's exact shape: the baker would accept a
+        # grace-period the running nw-sup then truncates or reads as
+        # negative, silently defeating the field rather than refusing
+        # it. Bake-time coverage for the range itself is
+        # `test_baker_refuses_bad_resources`'s grace-period cases;
+        # this is the baker-vs-compiler half those cases cannot see.
+        "NW_GRACE_MAX_MS": cc.GRACE_MAX_MS,
     }
     for name, got in sorted(pairs.items()):
         want = blob_const(name)
@@ -7383,7 +8001,7 @@ def test_baker_constants_match_the_header():
     for must in ("NW_SCHED_BATCH", "NW_SCHED_IDLE", "NW_NICE_MIN",
                  "NW_CPU_WEIGHT_MAX", "NW_LID_NEWNS", "NW_MAX_UNITS",
                  "NW_FD_RESERVED", "NW_MAX_FDS", "NW_KIND_LONGRUN",
-                 "NW_SCHED_MAX"):
+                 "NW_SCHED_MAX", "NW_GRACE_MAX_MS"):
         expect(must in pairs,
                f"{must} is no longer compared against the header here. "
                f"Either the baker stopped reading it -- in which case it "
@@ -7434,6 +8052,7 @@ def test_baker_refuses_bad_resources():
     N_MIN, N_MAX = (blob_const(x) for x in ("NW_NICE_MIN", "NW_NICE_MAX"))
     OOM_MIN, OOM_MAX = (blob_const(x) for x in
                         ("NW_OOM_ADJ_MIN", "NW_OOM_ADJ_MAX"))
+    GRACE_MAX_MS = blob_const("NW_GRACE_MAX_MS")
     city = f"{WORK}/badres.city"
     bare = "house a /bin/true kind=oneshot lids=none"
     bricked = (f"house a /bin/brick kind=oneshot lids=newns "
@@ -7557,6 +8176,18 @@ def test_baker_refuses_bad_resources():
          "nice=0 under the policy that honours it"),
         (f"{bare} layer-bytes=1G", "without layer=",
          "a layer capacity on a house with no layer"),
+        # docs/options/32. Unlike the sizes and cpu-weight/nice/oom
+        # cases above, grace-period=0 is NOT refused here -- 0 is the
+        # field's genuine "unset" meaning (nw-sup's own unbounded wait,
+        # today's behavior), not a collision with an unrepresentable
+        # declared value. See the `ok` list below for that acceptance.
+        (f"{bare} grace-period={GRACE_MAX_MS + 1}",
+         "millisecond count from 0 to",
+         "a grace-period above NW_GRACE_MAX_MS"),
+        (f"{bare} grace-period=-1", "millisecond count from 0 to",
+         "a negative grace-period"),
+        (f"{bare} grace-period=slow", "millisecond count from 0 to",
+         "a grace-period that is not a number"),
     ]
     out = f"{WORK}/br.blob"
     for line, reason, what in cases:
@@ -7625,9 +8256,12 @@ def test_baker_refuses_bad_resources():
         f"{bare} cpus=0,2-3",
         f"{bare} cpus=63",
         f"{bricked} layer-bytes=1G",
+        f"{bare} grace-period=0",
+        f"{bare} grace-period=900",
+        f"{bare} grace-period={GRACE_MAX_MS}",
         f"{bricked} cpus=0-63 cpu-weight=500 mem-high=1G mem-max=2G "
         f"layer-bytes=4G sched=other nice=-1 task-cap=200 "
-        f"oom-score-adj=-100",
+        f"oom-score-adj=-100 grace-period=5000",
     ]
     for line in ok:
         open(city, "w").write(line + "\n")
@@ -8958,6 +9592,15 @@ def test_checker_rejects_crafted_fields():
     BRICK_OFF = HDR + VICTIM * USZ + unit_layout()["brick"]
     LAYER_OFF = HDR + VICTIM * USZ + unit_layout()["layer"]
     LAYERW = int(blob_h("NW_NAME_LEN"))
+    GRACE_OFF = HDR + VICTIM * USZ + unit_layout()["grace_period"]
+    GRACE_MAX_MS = blob_const("NW_GRACE_MAX_MS")
+
+    def grace_edits(v):
+        # grace_period is a 4-byte uint32_t, not a single trailer byte
+        # like kind/lids/lock -- little-endian, matching every other
+        # multi-byte field this test writes via NW_AT's own offset.
+        return [(GRACE_OFF + i, b) for i, b in
+                enumerate(struct.pack("<I", v & 0xFFFFFFFF))]
     cases = ([
         # THE TWO "dirty blank" CASES ARE GONE, and this is what replaced
         # them. They asserted that a blank brick is zero to the field
@@ -9068,6 +9711,23 @@ def test_checker_rejects_crafted_fields():
          [(BRICK_OFF + k, 0) for k in range(BRICK)]
          + [(LIDS_OFF, 1 | 2)], "landlock without brick",
          "landlock on a house with no brick"),
+        # docs/options/32. NW_E_GRACERANGE had no crafted-blob case at
+        # all -- `control` found it: the baker refuses an out-of-range
+        # grace-period at bake time (test_baker_refuses_bad_resources),
+        # and nw-sup re-validates its own copy read from the environment
+        # (test_grace_period_bounds_refuse_an_overflowing_value), but
+        # nothing exercised nwcheck.c's INDEPENDENT copy of the same
+        # bound through an actual blob -- exactly the arrangement
+        # plan.md forbids relying on, for a check this test's own file
+        # was built to close for NW_E_KIND, NW_E_LLBRICK and NW_E_LIDS
+        # (this function's own docstring). `drift` had
+        # already confirmed the value itself cannot silently diverge
+        # (blob.h/baker/specs all read one source); what was missing is
+        # a crafted blob showing nw-check's copy of the RANGE rule
+        # actually fires.
+        ("grace-period-over-max", grace_edits(GRACE_MAX_MS + 1),
+         "grace-period exceeds what poll(2)'s timeout can hold",
+         "a grace_period one past NW_GRACE_MAX_MS"),
     ])
     for why, edits, reason, what in cases:
         path = craft(why, edits)
@@ -9093,6 +9753,9 @@ def test_checker_rejects_crafted_fields():
     ok_cases += [("lids=all-legal", [(LIDS_OFF, LEGAL_LIDS)])]
     ok_cases += [(f"lock={v}", [(LOCK_OFF, v)])
                  for v in range(LOCK_MAX + 1)]
+    ok_cases += [("grace-period=0", grace_edits(0)),
+                 ("grace-period=900", grace_edits(900)),
+                 ("grace-period=NW_GRACE_MAX_MS", grace_edits(GRACE_MAX_MS))]
     for why, edits in ok_cases:
         path = craft("ok-" + why.replace("=", ""), edits) if edits else good
         r = run([f"{BIN}/nw-check", path])
@@ -9101,7 +9764,8 @@ def test_checker_rejects_crafted_fields():
                f"the TCB is narrower than the one the baker emits"
                f"\n{r.out}{r.err}")
     print(f"ok checker-rejects-crafted (every illegal kind, lid bit and "
-          f"lock value refused on unit {VICTIM} of {NUNITS}, every "
+          f"lock value refused on unit {VICTIM} of {NUNITS}, an "
+          f"out-of-range grace_period refused by name too, every "
           f"legal one accepted)")
 
 
@@ -12501,7 +13165,15 @@ def main():
         test_oom_score_adj_readback,
         test_nofile_readback,
         test_tight_nofile_does_not_starve_the_brick_pivot,
-        test_grace_period_declared_refuses_at_the_supervisor,
+        test_grace_period_bounds_refuse_at_the_supervisor,
+        test_grace_period_bounds_refuse_an_overflowing_value,
+        test_grace_period_survives_a_repeated_signal_to_the_supervisor,
+        test_grace_period_kills_a_house_that_ignores_its_stop_signal,
+        test_grace_period_signalfd_tier_notices_a_prompt_death,
+        test_grace_period_tier3_survives_a_repeated_signal_to_the_supervisor,
+        test_grace_period_tier3_survives_a_control_socket_flood,
+        test_grace_period_does_not_kill_a_house_that_stops_promptly,
+        test_grace_period_zero_is_the_unbounded_wait,
         test_supervisor_death_policy_declared_refuses_at_the_supervisor,
         test_ctl_malformed_refused, test_ctl_socket_and_death_together,
         test_ctl_pidfd_fallback_with_socket,

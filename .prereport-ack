@@ -1232,7 +1232,6 @@ prose-count	blob.h	* see docs/options/31 Section 10 item
 prose-count	docs/ENVIRONMENT.md	specifically to confirm it (docs/options/31 Section 10 item 3,
 prose-count	nwsup.c	* inherited default (docs/options/31 Section 10 item 2) -- so this
 prose-count	nwsup.c	* injection (Section 10 item 3) that a negative value below
-prose-count	tests/run.py	"""docs/options/31 Section 5, Section 10 item 1. No applier exists
 
 # "capget/capset are two syscalls" names the two syscalls in the same
 # clause (capget, capset), a fixed pair this mechanism is built from
@@ -1319,3 +1318,72 @@ prose-count	docs/QUEUE.md	retired `io_rbps`/`io_wbps` worked example in the two 
 # same "Section 10 item N" citation pattern already acked several times
 # above, citing docs/options/31's own decided-fault-injection item.
 prose-count	docs/options/32-stop-grace-escalation.md	assumption (`docs/options/31` Section 10 item 3's fault-injection
+
+# docs/options/32 (grace_period escalation). "Phase 4" here is a fixed
+# reference to the already-landed bump this field's re-validation
+# convention comes from, not a count of anything -- same pattern as
+# "the same shape apply_capabilities()'s neighbour sched_ext" acked
+# elsewhere. One ack per site since prereport keys on the line's text.
+prose-count	nwsup.c	* every other Phase 4 field re-checks. Read only by wait_house(),
+prose-count	nwsup.c	* other Phase 4 field is: nw-sup reads its unit from the
+# "0 means the field was never declared" describes the sentinel value
+# of an already-existing field, not a count of anything that can grow.
+prose-count	nwsup.c	* alongside `stopping`/`stop_requested` above: 0 means the field was
+
+# PAIRED, just not with the identical string -- the same shape the
+# sched-ext/lock-signal acks above already establish: each of these
+# four asserts an outcome absent, alongside a positive elsewhere in the
+# same test proving the mechanism that would produce it actually ran.
+# - grace-period-bounds-refuse-at-the-supervisor: "grace-period
+#   exceeds" absent for the LEGAL value is paired by `r.returncode==0`
+#   immediately below it (the boot genuinely succeeded) and by the
+#   SAME string asserted PRESENT for the illegal value two lines later
+#   in the same test -- the positive and negative cases of one check.
+# - grace-period-kills-a-house-that-ignores-its-stop-signal: the house
+#   absent AFTER the grace window is paired by the house asserted
+#   PRESENT a few lines above (still alive inside the window) and by
+#   "[ignoreterm-house] handler ran" asserted present afterward --
+#   proving the stop signal was actually delivered and received, so
+#   the later absence is a claim about the escalation timing
+#   specifically, not about the house never existing.
+# - grace-period-does-not-kill-a-house-that-stops-promptly: the house
+#   absent is paired by `house_pid is not None` above (it was alive to
+#   begin with) and by "got=15" and the elapsed-time bound asserted
+#   after it -- proving it exited by receiving TERM itself, quickly,
+#   not by some other mechanism.
+# - the same test's "restart gpprompt" absence is paired by "got=15"
+#   immediately above it, which proves the house's own exit (not a
+#   non-event) is what happened -- an absent restart line on a house
+#   that never ran would mean nothing.
+unpaired-absence	tests/run.py	expect("grace-period exceeds" not in out,
+unpaired-absence	tests/run.py	expect(_find_by_comm(proc.pid, "unit-ignoreterm") is None,
+unpaired-absence	tests/run.py	expect(_find_by_comm(proc.pid, "unit-anysig") is None,
+unpaired-absence	tests/run.py	expect("restart gpprompt" not in out,
+# - grace-period's overflow docstring: "which `atoi` happens to turn
+#   into `INT_MIN`" is a false positive on the tool-presence shape.
+#   `atoi` is the C standard library function this code replaced (with
+#   `strtoul`), not an installed tool or an inferred host capability --
+#   the sentence describes what `atoi`'s cast does to a specific input,
+#   not whether some environment feature is present.
+tool-presence	tests/run.py	which `atoi` happens to turn into `INT_MIN` and which therefore did
+# - runtime.md's "Phase 4 field re-checks": "4 field" is a false
+#   positive on the prose-count shape. "Phase 4" is this project's own
+#   name for a numbered development phase (Phase 2, Phase 3, Phase 4
+#   appear throughout CLAUDE.md and the rules files), not a count of
+#   fields -- the sentence names which OTHER fields re-check for the
+#   same reason, it does not count them.
+prose-count	.claude/rules/runtime.md	Phase 4 field re-checks), via `strtoul` with explicit `errno==ERANGE`
+# - grace-period-signalfd-tier-notices-a-prompt-death: the same pairing
+#   as grace-period-does-not-kill-a-house-that-stops-promptly's
+#   identical assertion above -- "restart gpsigfdtier" absence is
+#   paired by "got=15" immediately above it, which proves the house's
+#   own exit (not a non-event) is what happened.
+unpaired-absence	tests/run.py	expect("restart gpsigfdtier" not in out,
+# - runtime.md's "stale... in more than one place": a false positive on
+#   the prose-count shape. "More than one" is an ordinary English
+#   qualifier, not a count assertion that will age -- the two places
+#   are named individually in the very next sentences (the macro's own
+#   comment, and the NW_E_GRACERANGE enum comment), so nothing here
+#   depends on the phrase itself staying accurate if a third copy is
+#   ever added.
+prose-count	.claude/rules/runtime.md	stale within the same diff that wrote it, in more than one place, and

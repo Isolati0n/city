@@ -483,6 +483,42 @@ _Static_assert((NW_DUP_SLOTS & (NW_DUP_SLOTS - 1)) == 0,
 #define NW_OOM_ADJ_MIN   (-1000)
 #define NW_OOM_ADJ_MAX   1000
 
+/* grace_period's ceiling, docs/options/32. Derived from the actual
+ * mechanism rather than chosen, and exactly INT_MAX for two reasons
+ * that are both true today, not one -- this said "no conversion in
+ * between" for one round, which the primary tier's own `struct
+ * timespec` conversion (division and modulo, ppoll(2)'s own argument
+ * shape) had already made false in the same diff; `tcb-review` found
+ * it. First: bounding it below the point where `nw_grace_period /
+ * 1000` and `(nw_grace_period % 1000) * 1000000L` could produce a
+ * `struct timespec` a real `time_t`/`long` cannot hold is what a
+ * derivation from the mechanism actually means here, and `INT_MAX` ms
+ * is nowhere near that ceiling on any platform this tree targets --
+ * the bound is generous rather than tight against this reason. Second:
+ * the double-failure fallback tier (nwsup.c, "read, not run") has no
+ * `ppoll` timeout to convert at all -- it counts fixed 50ms cycles
+ * into an `unsigned armed_cycles` and compares
+ * `armed_cycles * 50 >= nw_grace_period`, and `INT_MAX` keeps that
+ * multiplication from overflowing `unsigned` before the comparison can
+ * fire. Also generous rather than tight -- the loop returns as soon as
+ * the comparison holds, so the multiplication never exceeds
+ * `nw_grace_period + 49`, nowhere near the ~4.29 billion an `unsigned`
+ * overflow would need; a third review round claimed this one WAS tight
+ * and was wrong the same way the first version of this comment was
+ * wrong about "no conversion" -- `tcb-review` found both. A value that
+ * doesn't fit `INT_MAX` truncates on
+ * a cast to `int` wherever one still exists, and reads as "block
+ * forever" or negative -- silently defeating the field rather than
+ * refusing it, which is exactly the class invariant 3 exists to name:
+ * the bound belongs to the mechanism, so it is stated once and both
+ * the baker and nwcheck.c read the same expression. Spelled in
+ * decimal, not hex, because the baker's own constant reader
+ * (bakery/nw-cc.py's `_const()`) is a deliberately narrow parser for
+ * "an integer, an optional suffix, a parenthesised negative and an
+ * alias chain, and nothing else" -- widening it for one hex literal
+ * is a cost this value does not need to spend. */
+#define NW_GRACE_MAX_MS  2147483647u
+
 /* THE RESOURCE BLOCK. One per house, flat, and every field UNSET by
  * default -- 0 means "no limit declared", never a limit of zero. A
  * default here would be a number nobody chose, failing in the direction
@@ -600,12 +636,29 @@ struct nw_unit {
      * existing NW_AT offset up to and including `res` is unchanged, and
      * only the fields that did not exist before have new ones to pin. */
     uint8_t  stop_signal;         /* NW_STOPSIG_*; UNSET behaves as TERM */
-    uint32_t grace_period;        /* ms; 0 = unset. Declaring nonzero is
-                                    * refused at nw-sup startup until the
-                                    * escalation applier lands -- the
-                                    * plan-format bump adds the byte, not
-                                    * the mechanism (docs/options/31
-                                    * Section 5). */
+    uint32_t grace_period;        /* ms; 0 = unset, meaning today's
+                                    * unbounded wait for a stopped house
+                                    * (docs/options/32). Nonzero: nw-sup
+                                    * waits this long after sending
+                                    * stop_signal, then SIGKILLs the
+                                    * house if it has not exited.
+                                    * Bounded by NW_GRACE_MAX_MS below.
+                                    *
+                                    * OPERATOR-VISIBLE LIMIT: a house's
+                                    * declared grace_period is fully
+                                    * honored for an individual STOP
+                                    * (over the control socket), but is
+                                    * capped at PID 1's fixed ~400ms
+                                    * drain bound (NW_GRACE_MS, pid1.c)
+                                    * during a full city shutdown or
+                                    * reboot -- PID 1 does not know or
+                                    * wait for any house's own declared
+                                    * value. A house whose grace_period
+                                    * exists to protect a save-on-exit
+                                    * cannot rely on more than ~400ms of
+                                    * it during a real shutdown; declare
+                                    * it for what an explicit STOP can
+                                    * actually give it. */
     uint32_t nofile;               /* RLIMIT_NOFILE soft target; 0 = unset,
                                     * meaning the city-wide default PID 1
                                     * already computes (pid1.c,
@@ -953,6 +1006,14 @@ enum {
                            * value but the reserved 0 is a corrupt or
                            * forward-baked blob */
     NW_E_OOMRANGE = 31,   /* oom_score_adj outside the kernel's -1000..1000 */
+    NW_E_GRACERANGE = 32, /* grace_period past NW_GRACE_MAX_MS
+                           * (docs/options/32) -- see that macro's own
+                           * comment above for why the bound is what it
+                           * is. Not restated here: the restatement is
+                           * exactly how this went stale once already
+                           * (`tcb-review`, second round) when the
+                           * mechanism changed and only one of the two
+                           * copies was corrected. */
     /* Terminator, not a code. nw_errstr's bound and the length of errs[] in
      * nwcheck.c are both derived from it, so the three things that must
      * agree -- last code, array length, bound -- become one number.

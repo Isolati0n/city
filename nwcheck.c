@@ -39,7 +39,9 @@ static const char *errs[] = {
     "an unlocked unit is named by a declared edge",
     "stop-signal outside the closed set",
     "supervisor-death policy is reserved and must be 0",
-    "oom-score-adj out of range"
+    "oom-score-adj out of range",
+    /* docs/options/32-stop-grace-escalation.md. */
+    "grace-period exceeds what poll(2)'s timeout can hold"
 };
 
 _Static_assert(sizeof errs / sizeof errs[0] == NW_E__COUNT,
@@ -394,6 +396,10 @@ int nw_check(const void *blob, uint32_t len)
          * before this meaning existed. */
         if (u[i].lock > NW_LOCK_MAX) return NW_E_LOCK;
         if (u[i].stop_signal > NW_STOPSIG_MAX) return NW_E_STOPSIG;
+        /* docs/options/32. The bound is poll(2)'s own `int` timeout
+         * parameter width, not a policy choice -- see NW_GRACE_MAX_MS's
+         * own comment in blob.h. */
+        if (u[i].grace_period > NW_GRACE_MAX_MS) return NW_E_GRACERANGE;
         /* RESERVED: no plan syntax exists for this byte yet (docs/
          * options/31 Section 6). Unlike every other closed-set field
          * above, there is no non-zero value to accept -- this is the

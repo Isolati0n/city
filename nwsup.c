@@ -1176,6 +1176,16 @@ static void on_term(int sig)
  */
 static int stop_requested;
 
+/* docs/options/32. Set once in main() from NW_GRACE_PERIOD, range-
+ * checked against NW_GRACE_MAX_MS there (poll(2)'s own `int` timeout
+ * width) rather than trusted -- nw-sup re-validates because it reads
+ * its unit from the environment, not the sealed blob, the same reason
+ * every other Phase 4 field re-checks. Read only by wait_house(),
+ * alongside `stopping`/`stop_requested` above: 0 means the field was
+ * never declared, and wait_house() must behave exactly as it did
+ * before this field existed in that case. */
+static unsigned nw_grace_period;
+
 /* Phase 2 (docs/OPERATOR-BRIEF.md Section 3): file-scope, alongside
  * `child`/`stopping`/`stop_requested` above, for the same reason those
  * are -- handle_ctl_live() needs them to call nw_decide() the same way
@@ -1286,18 +1296,85 @@ static int wait_house(pid_t p, int extra_fd)
         pf.fd = extra_fd;
         pf.events = POLLIN;
         pf.revents = 0;
+        /* docs/options/32: grace_period in this fallback tier, since
+         * there is no pidfd/signalfd to poll with a timeout directly.
+         * Once armed, count 50ms cycles (the same fixed poll bound
+         * this tier already uses, not a new clock read) rather than
+         * servicing the ctl socket further -- an approximation of the
+         * primary tier's exact bound, not equal to it, and said that
+         * way because this whole tier is read, not run: both
+         * pidfd_open and signalfd would have to fail on the same
+         * kernel for it to matter. */
+        unsigned armed_cycles = 0;
         for (;;) {
-            int pr = poll(&pf, 1, 50);
+            int armed = nw_grace_period && (stopping || stop_requested);
+            if (armed) {
+                if (armed_cycles * 50 >= nw_grace_period) {
+                    kill(p, SIGKILL);
+                    int st = 0;
+                    if (waitpid(p, &st, 0) < 0) die("wait house");
+                    return st;
+                }
+            } else {
+                armed_cycles = 0;
+            }
+            /* Once armed, STOP servicing the ctl socket for this
+             * bounded wait -- tcb-review's second-round finding, and
+             * the identical exclusion the primary/signalfd tiers
+             * already apply to extra_fd, for the identical reason.
+             * This tier has no pidfd/signalfd to fall back to, so its
+             * only OTHER readiness source is the ctl socket itself;
+             * counting a cycle only on pr==0 (fd-auditor's first fix,
+             * above) closed the signal-flood route but left this one
+             * open -- any ctl traffic (an ordinary START, not even a
+             * malicious STOP) keeps poll() returning >0 on `pf`, so
+             * armed_cycles never advances and the escalation could be
+             * extended indefinitely by ordinary control traffic, the
+             * same "outside the plan" failure by a different channel.
+             * Empty-fd-set poll has no fd to become ready at all, so a
+             * non-EINTR return is unconditionally a genuine, elapsed
+             * ~50ms cycle regardless of what else is happening on the
+             * ctl socket -- immune by construction, not by counting. A
+             * connection attempted during the armed wait queues in the
+             * kernel's own accept backlog and is serviced by the next
+             * unarmed cycle, if there is one -- the same backlog
+             * precedent the other tiers already rely on.
+             *
+             * ppoll(2), not poll(2), for the SAME reason the primary
+             * tier uses it, and a THIRD round on this same feature was
+             * needed to add it here: an empty-fd-set poll() is still
+             * interrupted by EINTR on any caught signal, and SIGTERM/
+             * SIGINT are caught (on_term(), unblocked in this process).
+             * A flood of either against the supervisor's own pid,
+             * spaced faster than 50ms, makes every single cycle here
+             * return -1/EINTR instead of 0, so armed_cycles never
+             * advances -- the exact HIGH bug the primary tier's ppoll
+             * fix closed, left open in the one tier that was never
+             * given the same treatment (tcb-review, third round).
+             * Blocking SIGTERM/SIGINT for this one call, added to
+             * whatever is already blocked rather than replacing it
+             * (the signalfd tier's own lesson two rounds ago), closes
+             * it here identically. */
+            struct timespec cycle_ts = {0, 50000000L};
+            sigset_t block_own_signals3;
+            sigprocmask(SIG_BLOCK, NULL, &block_own_signals3);
+            sigaddset(&block_own_signals3, SIGTERM);
+            sigaddset(&block_own_signals3, SIGINT);
+            int pr = armed
+                ? ppoll(NULL, 0, &cycle_ts, &block_own_signals3)
+                : poll(&pf, 1, 50);
             if (pr < 0) {
                 if (errno == EINTR)
                     continue;
                 die("poll house");
             }
+            if (armed && pr == 0)
+                armed_cycles++;
             int st = 0;
             pid_t r = waitpid(p, &st, WNOHANG);
             if (r == p)
                 return st;
-            if (pf.revents & (POLLIN | POLLHUP | POLLERR)) {
+            if (!armed && (pf.revents & (POLLIN | POLLHUP | POLLERR))) {
                 handle_ctl_live(extra_fd, p);
                 pf.revents = 0;
             }
@@ -1329,6 +1406,103 @@ static int wait_house(pid_t p, int extra_fd)
     }
 
     for (;;) {
+        /* docs/options/32. Once a stop signal has been sent (STOP over
+         * the control socket sets stop_requested; on_term()'s async
+         * handler sets stopping, and a signal always interrupts a
+         * blocking poll(2) with EINTR regardless of SA_RESTART -- see
+         * the design note's own reasoning -- so this point is reached
+         * again immediately either way) and the plan declares a
+         * grace_period, wait for pidfd/signalfd ALONE, isolated from
+         * the ctl socket for this one bounded call: including
+         * extra_fd here would let unrelated control traffic reset the
+         * declared bound on every wakeup, since there is no clock to
+         * compute time-remaining against instead (test_budget_is_hard_total
+         * greps this whole file for one). A queued connection during
+         * this wait sits in the accept backlog and is serviced by the
+         * next ordinary cycle, if there is one; STOP is already
+         * idempotent while one is pending. */
+        if (nw_grace_period && (stopping || stop_requested)) {
+            struct pollfd epf;
+            epf.fd = pfd >= 0 ? pfd : wake;
+            epf.events = POLLIN;
+            epf.revents = 0;
+            /* ppoll(2), not poll(2): a plain poll() here re-armed the
+             * FULL nw_grace_period on every EINTR (fd-auditor's repro --
+             * a second external SIGTERM/SIGINT to nw-sup itself, sent
+             * while this wait was already running, restarted the whole
+             * window and could extend it past its declared bound
+             * indefinitely under repeated signals). SIGTERM and SIGINT
+             * are the only two signals this process installs a handler
+             * for (on_term, above); by the time this branch runs,
+             * stopping/stop_requested are already known true, so a
+             * repeat delivery of either carries no new information this
+             * one bounded wait needs to re-observe. Blocking them only
+             * for the duration of this call makes the bound exact by
+             * construction: ppoll swaps in the blocking mask atomically
+             * with entering the wait, so neither signal can generate an
+             * EINTR here at all, and restores the prior mask on return,
+             * so a signal that arrived meanwhile is simply delivered --
+             * on_term() runs, resending nw_stop_signal to an
+             * already-stopping child -- the instant this call exits,
+             * never before. Still no clock: the bound is still an
+             * integer handed to the kernel's own timeout.
+             *
+             * ADD to the current mask, never REPLACE it -- fd-auditor's
+             * second-round finding. ppoll's sigmask argument is a
+             * SIGSETMASK swap for the call's duration, not an
+             * augmentation, and this tier's OTHER poll member (`wake`,
+             * the SIGCHLD signalfd, armed only when pidfd_open failed
+             * above) depends on SIGCHLD staying blocked in the ambient
+             * mask the whole time -- SIGCHLD has no handler installed,
+             * so unblocking it even briefly means a child death during
+             * this exact call is delivered under its default (Ignore)
+             * disposition and silently discarded, never reaching
+             * signalfd, instead of remaining pending for it to report.
+             * The first version of this call started from an EMPTY
+             * mask, which is correct only for the pidfd tier (readiness
+             * there does not depend on any blocked signal) and, in the
+             * signalfd tier, unblocked SIGCHLD for the whole call --
+             * deterministic, not a race, because the replacement covers
+             * the entire blocking duration. Reproduced directly by
+             * fd-auditor: the signalfd fallback tier's escalation
+             * always ran its full declared window regardless of when
+             * the child actually died, silently, because the SIGCHLD
+             * that would have woken it early was discarded rather than
+             * queued. Reading the CURRENT mask first and adding to it
+             * closes this for both tiers: the pidfd tier's ambient mask
+             * is empty, so this is exactly the prior behavior there;
+             * the signalfd tier's ambient mask already has SIGCHLD in
+             * it, and that stays blocked throughout this call too. */
+            struct timespec grace_ts;
+            grace_ts.tv_sec = nw_grace_period / 1000;
+            grace_ts.tv_nsec = (long)(nw_grace_period % 1000) * 1000000L;
+            sigset_t block_own_signals;
+            sigprocmask(SIG_BLOCK, NULL, &block_own_signals);
+            sigaddset(&block_own_signals, SIGTERM);
+            sigaddset(&block_own_signals, SIGINT);
+            int pr = ppoll(&epf, 1, &grace_ts, &block_own_signals);
+            if (pr < 0) {
+                if (errno == EINTR)
+                    continue; /* not SIGTERM/SIGINT (both blocked for
+                                 * the call); re-checks this same arming
+                                 * on the next pass with a fresh, still-
+                                 * correct bound. */
+                if (pfd >= 0) close(pfd);
+                if (wake >= 0) close(wake);
+                die("poll house");
+            }
+            if (pr == 0) {
+                /* The child ignored its stop signal for the whole
+                 * declared window. kill(2) it directly -- the caller's
+                 * own unconditional cg_kill_sweep(), which already runs
+                 * after every death regardless of cause, cleans up
+                 * anything it forked, exactly as it does for a natural
+                 * death. Nothing else changes: fall through to the
+                 * ordinary reap below like any other return path. */
+                kill(p, SIGKILL);
+            }
+            break;
+        }
         int pr = poll(pf, n, -1);
         if (pr < 0) {
             if (errno == EINTR)
@@ -1375,7 +1549,7 @@ static int wait_house(pid_t p, int extra_fd)
  * ITERATION count, not a time bound, and that is not a style choice.
  * runtime.md's Liveness section requires nwsup.c to never regain a
  * timing primitive -- "a budget that can read a clock can reset on
- * one" -- and tests/run.py's test_budget_no_reset enforces it by
+ * one" -- and tests/run.py's test_budget_is_hard_total enforces it by
  * grepping this file for clock_gettime/now_ms/alarm/nanosleep/usleep
  * and their relatives. A first version of this wait used nanosleep()
  * between checks and that test caught it immediately (make test:
@@ -1592,17 +1766,42 @@ int main(int argc, char **argv)
                     : SIGTERM; /* NW_STOPSIG_UNSET, or anything else --
                                  * unreachable past the range check above,
                                  * but a closed switch needs a default. */
-    /* docs/options/31 Section 5, Section 6. Neither field has an
-     * applier yet (the escalation mechanism and the death-policy
-     * vocabulary are their own later design-note rounds) -- refused
-     * here, by name, at supervisor startup, the same shape
-     * apply_capabilities()'s neighbour sched_ext used to refuse a
-     * declared-but-unbuildable policy. A blob baked today starts
-     * working the day the applier lands, with no rebake. */
-    unsigned grace_period = 0;
-    if ((e = getenv("NW_GRACE_PERIOD"))) grace_period = (unsigned)atoi(e);
-    if (grace_period != 0)
-        die("grace-period: declared but not yet applied (docs/options/31 Section 5)");
+    /* docs/options/32: the escalation mechanism is real now. Bounded
+     * against NW_GRACE_MAX_MS -- poll(2)'s own `int` timeout width, not
+     * a policy choice -- and re-checked here for the same reason every
+     * other Phase 4 field is: nw-sup reads its unit from the
+     * environment, not the sealed blob, so nothing upstream stands
+     * behind this value. A value past the bound would truncate on a
+     * cast to poll(2)'s `int` parameter and read as "block forever" or
+     * negative -- silently defeating the field -- so it dies loudly
+     * here instead, `nwcheck.c`'s own independent NW_E_GRACERANGE check
+     * notwithstanding.
+     *
+     * strtoul, not atoi: tcb-review measured atoi's failure mode
+     * directly -- atoi is (int)strtol, and strtol("4294967296", ...)
+     * (2**32) does not overflow a 64-bit long, so the (int) cast alone
+     * truncated it to 0, and "4294968796" (2**32 + 1500) truncated to
+     * 1500 -- both silently ACCEPTED as legal, in-range values, past
+     * this same die() with no truncation warning ever reached. Every
+     * value the range check exists to refuse was reachable through
+     * this route once past 2**32, not merely a single boundary. strtoul
+     * plus its own ERANGE and its own end-pointer close that: a value
+     * that does not fit `unsigned long` is refused by errno, and
+     * trailing garbage or an empty string is refused by *end. */
+    if ((e = getenv("NW_GRACE_PERIOD"))) {
+        char *end = NULL;
+        errno = 0;
+        unsigned long v = strtoul(e, &end, 10);
+        if (*e == '\0' || *end != '\0' || errno == ERANGE ||
+            v > (unsigned long)NW_GRACE_MAX_MS)
+            die("grace-period exceeds what poll(2)'s timeout can hold");
+        nw_grace_period = (unsigned)v;
+    }
+    /* docs/options/31 Section 6. The death-policy vocabulary is its own
+     * later design-note round (docs/options/32 worked out why it needs
+     * pid1.c specifically) -- refused here, by name, at supervisor
+     * startup, the same shape apply_capabilities()'s neighbour
+     * sched_ext used to refuse a declared-but-unbuildable policy. */
     unsigned supervisor_death_policy = 0;
     if ((e = getenv("NW_SUPERVISOR_DEATH_POLICY")))
         supervisor_death_policy = (unsigned)atoi(e);

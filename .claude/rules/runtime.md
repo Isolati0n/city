@@ -661,6 +661,178 @@ direct kill is the supervisor, not the house or its orphans — which is
 the same "does not wait" property, one layer further down the chain
 than case A exercises.
 
+## Stop-grace escalation (`grace_period`) — real, since docs/options/32
+
+**A declared `grace_period` is a per-house, plan-declared millisecond
+bound on how long `nw-sup` waits after sending `stop_signal` before it
+SIGKILLs a house that has not exited.** `grace_period=0` (unset, the
+default) reproduces exactly the prior, unbounded behavior — nothing
+here changes what a plan that declares nothing does. The applier lives
+entirely in `wait_house()` (`nwsup.c`), gated on
+`nw_grace_period && (stopping || stop_requested)`, and it is the
+`nwsup.c` restart/wait loop this round's operator delegation (see
+`CLAUDE.md`'s "Who owns what, this week") authorized crossing into for.
+
+**No clock, by construction.** `nwsup.c` may not regain a timing
+primitive (`test_budget_is_hard_total` greps the whole file for one),
+so the bound is a plain integer handed straight to a kernel wait
+call's own timeout — never a decrement-and-track-remaining scheme.
+
+**Bounded by `NW_GRACE_MAX_MS` (`blob.h`, `INT_MAX`) in both places
+that matter**: the baker refuses an out-of-range `grace-period=` at
+parse time, before it ever becomes bytes; `nwcheck.c`'s independent
+`NW_E_GRACERANGE` refuses the same range structurally in ANY blob nw-check
+validates, regardless of what baked it — a blob can arrive from
+anywhere, per `.claude/rules/plan.md`'s own rule, and this had no
+crafted-blob case
+exercising it at all until `control` found the gap this round. `nw-sup`
+also re-validates its own copy at startup (it reads its
+unit from the environment, not the sealed blob, the reason every
+Phase 4 field re-checks), via `strtoul` with explicit `errno==ERANGE`
+and end-pointer checks — not `atoi`, whose `(int)` cast silently
+truncated a value like `2**32` to an in-range 0 or 1500, defeating the
+whole class rather than merely the one boundary nearest the limit.
+Found by `tcb-review`.
+
+**The escalation wait excludes the control socket, and blocks its own
+two signal handlers, for the exact same reason in both cases: no clock
+means no way to recompute "time remaining" after an unrelated
+wakeup.** A queued `STOP`/`START` during the window sits in the
+kernel's own accept backlog and is serviced on the next ordinary
+cycle — excluding `extra_fd` from this one bounded `poll()`/`ppoll()`
+call is what makes that true rather than merely asserted. The second
+source of the identical failure was less obvious and was found only by
+review, not by design: `nw-sup` installs its own handler for
+`SIGTERM`/`SIGINT` (`on_term()`) on its OWN pid, and a plain `poll()`
+returns `EINTR` on any signal being caught — so a second external
+`SIGTERM`/`SIGINT` delivered to the SUPERVISOR itself while the
+escalation was already running (an operator re-sending `kill -TERM`, a
+monitoring tool, anything with pid-namespace access, which invariant 5
+already grants uid 0) restarted the full window, indefinitely, under
+repeated signals — reproduced by `tcb-review` and `fd-auditor`
+independently. Fixed with `ppoll(2)`, blocking `SIGTERM`/`SIGINT` for
+the duration of that one call only: by the time this branch runs,
+`stopping`/`stop_requested` are already known true, so a repeat
+delivery of either carries no new information the wait needs to
+re-observe, and a signal that arrives during the blocked window is
+simply delivered — `on_term()` runs, resending `stop_signal` to an
+already-stopping child — the instant the call returns, never before.
+`test_grace_period_survives_a_repeated_signal_to_the_supervisor`
+(`tests/run.py`) pins this, with a hand-run control confirming it fails
+against a plain `poll()`.
+
+**The pidfd-open-failure fallback tier (read, not run: both
+`pidfd_open` and `signalfd` have to fail on the same kernel) had the
+identical root cause in the opposite direction.** Its cycle-counting
+approximation (`armed_cycles * 50 >= nw_grace_period`) incremented once
+per loop pass regardless of whether the preceding fixed-width
+`poll(&pf, 1, 50)` actually ran its full 50ms or returned early via
+`EINTR` — so the same signal flood that stalls the primary tier
+forever instead inflates this tier's cycle count faster than real
+time, escalating a house well before its declared window elapsed.
+Fixed by only counting a cycle when the preceding `poll()` returns `0`
+(a genuine, uninterrupted timeout).
+
+**The signalfd-fallback tier (only `pidfd_open` fails, `signalfd`
+succeeds — more reachable than the double-failure tier above) had a
+distinct bug in the same `ppoll()` fix: its sigmask argument
+REPLACES the process's blocked set for the call, it does not augment
+it.** This tier permanently blocks `SIGCHLD` earlier in `wait_house()`
+specifically so its `signalfd` can see it; the escalation's first
+`ppoll` mask (empty plus `SIGTERM`/`SIGINT`) unblocked `SIGCHLD` for
+the whole call in exactly this tier, and with no handler installed for
+it, a child dying during that window was discarded under its default
+disposition rather than queued for `signalfd` — deterministic under
+this tier, not a race, and invisible to every test that only exercises
+the pidfd-succeeds path (which is every test the first two fixes
+added). The escalation still eventually recovered the right exit
+status, but only after the FULL declared window regardless of how
+promptly the house actually stopped. Found by `fd-auditor` in a second
+review round on the same fix. Fixed by reading the CURRENT blocked set
+first and adding to it, rather than building the mask from empty.
+Pinned by `test_grace_period_signalfd_tier_notices_a_prompt_death`.
+
+**The double-failure fallback tier had the same class of bug TWICE
+one level down, both found by review, both against the same fix.**
+First: the signal-flood fix closed the route through repeated signals
+and left open an identical route through the unit's own control
+socket. That tier has no pidfd/signalfd to fall back to at all, so its
+only OTHER readiness source is the ctl socket — and once armed, any
+ctl traffic (an ordinary `START`, not even a repeated `STOP`) kept its
+`poll()` returning `>0` instead of the `0` the cycle count depends on,
+so `armed_cycles` never advanced. Fixed by excluding the ctl socket
+from the poll entirely once armed (`poll(NULL, 0, 50)`, which has no
+fd to become ready) — the same exclusion principle the other two
+tiers already apply to the control socket. Pinned by
+`test_grace_period_tier3_survives_a_control_socket_flood`. **Second,
+found one round later: `poll(NULL, 0, 50)` has no fd to become ready,
+but it is still a plain `poll()`, interruptible by `EINTR` on any
+caught signal — and `SIGTERM`/`SIGINT` are caught (`on_term()`) and
+unblocked in this tier, so the identical HIGH bug the primary tier's
+`ppoll` fix closed (a signal flood against the supervisor's own pid
+holding the escalation open indefinitely) was still open here,
+relocated to the one tier that had never been given the same
+treatment.** Reproduced directly: a house with a declared 900ms
+`grace_period` survived 3.92s under a SIGTERM flood, dying only once
+the flood stopped. Fixed identically to the other two tiers:
+`ppoll(NULL, 0, &cycle_ts, &block_own_signals3)`, reading the current
+mask first and adding `SIGTERM`/`SIGINT` to it.
+
+**`NW_GRACE_MAX_MS`'s own derivation comment in `blob.h` had gone
+stale within the same diff that wrote it, in more than one place, and
+the fix to one of them overclaimed precision it does not have.** The
+macro's
+own comment still claimed `nw-sup` "hands the value straight to
+`poll(2)`'s `int` timeout parameter with no conversion in between"
+after the primary tier's own `ppoll`/`struct timespec` conversion made
+that false — corrected to state the two real reasons (keeping that
+conversion sane, and keeping the double-failure tier's
+`armed_cycles * 50` accumulator from overflowing `unsigned`), **both
+generous, not tight** — an earlier version of this same correction
+called the second reason "tight," and it is not: the loop returns as
+soon as the comparison holds, so the multiplication never exceeds
+`nw_grace_period + 49`, nowhere near the overflow point. Separately,
+`blob.h`'s SECOND copy of the identical stale claim, in the
+`NW_E_GRACERANGE` enum comment written fresh in this same diff, was
+missed when the first copy was fixed — exactly the drift a
+restatement creates, found one round later. Now points at the macro's
+own comment instead of restating it. Textual only; no code changed for
+any of this.
+
+**`NW_GRACE_MS` (`pid1.c`, ~400ms, unrelated and unchanged) still
+governs a full city shutdown, and does not know about this field at
+all.** `houses[i].pid` in `pid1.c` is the SUPERVISOR's pid, not the
+house's; `shutdown_city()` sends one `SIGTERM` to each supervisor,
+waits up to `NW_GRACE_MS`, then unconditionally SIGKILLs any supervisor
+still alive, regardless of what that supervisor's own `nw_grace_period`
+escalation was told to wait for — the supervisor dying takes the house
+with it (pid-namespace teardown), pre-empting the house's own
+longer-declared grace period entirely. Stated plainly because it is
+operator-visible, not merely an internal detail: **a house's declared
+`grace_period` is fully honored for an individual `STOP` (over the
+control socket), but is capped at PID 1's fixed ~400ms drain bound
+during a full city shutdown or reboot — PID 1 does not know or wait
+for any house's own declared value.** A house whose `grace_period`
+exists to protect a save-on-exit cannot rely on more than ~400ms of it
+during a real shutdown; declare it for what an explicit `STOP` can
+actually give it. Left as designed (`docs/options/32` Section 3,
+recommendation (a)) rather than raised: reopening `NW_GRACE_MS` itself
+is a `pid1.c` change, Grok's untouched territory this round.
+
+**`supervisor_death_policy` is the sibling byte this same round left
+refused rather than "next".** `nw-sup` continues to `die()` at startup
+on any nonzero declared value, by name — no plan syntax exists for it
+yet. It cannot be built here structurally, not merely by choice: only
+`pid1.c`, via its own `waitpid` loop over every house pid it spawned,
+ever observes a supervisor's UNEXPECTED death (crash, OOM-kill, an
+uncatchable signal) — `nw-sup` cannot run cleanup code for its own
+uncatchable death. That is `pid1.c`, Grok's untouched territory this
+round, and it is waiting on its own `pid1.c`-scoped round with its own
+authorization, per `docs/options/32` Section 6, which also names the
+landmine any future policy vocabulary here has to avoid: a value
+meaning "PID 1 restarts a dead supervisor with a fresh budget" would
+reintroduce bug 3 (nested budgets), which invariant 4 already forbids.
+
 ## File descriptors — hard limit, named shortfall
 
 `getrlimit(RLIMIT_NOFILE)` before the first fork. Need is

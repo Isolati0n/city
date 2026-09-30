@@ -128,6 +128,10 @@ STOPSIG_NAMES = {"term": STOPSIG_TERM, "int": STOPSIG_INT,
 # range for oom_score_adj, 0 sitting inside it rather than at a boundary.
 OOM_ADJ_MIN = _const("NW_OOM_ADJ_MIN")
 OOM_ADJ_MAX = _const("NW_OOM_ADJ_MAX")
+# docs/options/32. Derived from poll(2)'s own `int` timeout parameter,
+# not a policy choice -- blob.h's own comment beside NW_GRACE_MAX_MS has
+# the reasoning. Read from there rather than spelling 0x7FFFFFFF again.
+GRACE_MAX_MS = _const("NW_GRACE_MAX_MS")
 # docs/options/31 Section 7, amendment item A.1. Read from blob.h's own
 # NW_CAP_* table (the kernel's own bit numbering) rather than hand-typed
 # a second time -- invariant 3's drift class, one level down, the same
@@ -726,21 +730,24 @@ def load_city(path: str, lab: bool = False):
                             f"behavior.")
                     stop_signal = STOPSIG_NAMES[tok]
                 elif k == "grace-period":
-                    # No mechanism exists yet -- nw-sup refuses any
-                    # nonzero value at startup until the escalation
-                    # applier lands (docs/options/31 Section 5). The
-                    # baker only validates the byte fits; unlike
-                    # cpu-weight= or nice=, a declared 0 is not refused
-                    # here, because 0 genuinely means "no grace period
-                    # declared" with no other meaning to collide with.
+                    # docs/options/32: the escalation applier is real
+                    # now. Unlike cpu-weight= or nice=, a declared 0 is
+                    # not refused here, because 0 genuinely means "no
+                    # grace period declared" with no other meaning to
+                    # collide with -- it is nw-sup's own unbounded wait,
+                    # today's behavior. The ceiling is GRACE_MAX_MS
+                    # (poll(2)'s own `int` timeout width, not a policy
+                    # choice -- blob.h's NW_GRACE_MAX_MS comment has the
+                    # reasoning), narrower than the uint32 field width.
                     try:
                         n = int(v)
                     except ValueError:
                         n = -1
-                    if not 0 <= n <= 0xFFFFFFFF:
+                    if not 0 <= n <= GRACE_MAX_MS:
                         raise SystemExit(
                             f"house {name}: grace-period={v} must be a "
-                            f"millisecond count that fits a uint32")
+                            f"millisecond count from 0 to {GRACE_MAX_MS} "
+                            f"(poll(2)'s own timeout width)")
                     grace_period = n
                 elif k == "nofile":
                     try:
